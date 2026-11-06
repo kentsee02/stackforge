@@ -134,7 +134,7 @@ test('a remote publication failure preserves the complete local project', async 
 
 test('HTTP checks protect writes, block generation on errors and retry publication against the saved job path', async t => {
   let canCreate = false, generated = 0, pushedPath;
-  const server = createApp({ check: async () => ({ canCreate, checks: [] }), generate: async () => { generated++; return { path: 'trusted/job/path', commands: [], remote: { status: 'failed', error: 'offline' } }; }, publish: async path => { pushedPath = path; return { status: 'published', url: 'https://github.com/test-owner/test-project' }; } });
+  const server = createApp({ stateDir: false, check: async () => ({ canCreate, checks: [] }), generate: async () => { generated++; return { path: 'trusted/job/path', commands: [], remote: { status: 'failed', error: 'offline' } }; }, publish: async path => { pushedPath = path; return { status: 'published', url: 'https://github.com/test-owner/test-project' }; } });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -142,7 +142,11 @@ test('HTTP checks protect writes, block generation on errors and retry publicati
   const headers = { 'Content-Type': 'application/json', 'X-StackForge-Token': state.token };
   const post = (path, input, h = headers) => fetch(origin + path, { method: 'POST', headers: h, body: JSON.stringify(input) });
   assert.equal((await post('/api/checks', base, { ...headers, 'X-StackForge-Token': 'wrong' })).status, 403);
-  assert.equal((await post('/api/projects', base)).status, 422);
+  const blocked = await post('/api/projects', base);
+  assert.equal(blocked.status, 202);
+  const blockedId = (await blocked.json()).id;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await (await fetch(origin + '/api/jobs/' + blockedId)).json()).status, 'failed');
   assert.equal(generated, 0);
   canCreate = true;
   const accepted = await post('/api/projects', { ...base, commit: true, publish: true });

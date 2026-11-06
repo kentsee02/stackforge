@@ -13,7 +13,7 @@
 <body>
   <aside class="sidebar">
     <a class="brand" href="/" aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
-    <div class="workspace">本地工作空间 <span>v0.2</span></div>
+    <div class="workspace">本地工作空间 <span>v0.3</span></div>
     <div class="side-active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>创建项目</div>
     <section class="presets" aria-labelledby="preset-title"><h2 id="preset-title">从常用组合开始</h2>
       <button type="button" data-preset="java"><span>Java 全栈</span><small>Vue + Spring Boot + MySQL</small></button>
@@ -55,7 +55,16 @@
           <section class="environment" aria-labelledby="environment-title"><div class="panel-title"><h2 id="environment-title">创建前检查</h2><button type="button" id="check-environment" class="text-button">重新检测</button></div><p id="environment-summary" role="status" aria-live="polite">正在检测当前配置所需的环境…</p><ul id="critical-checks" class="check-list"></ul><details id="all-checks"><summary>查看已通过的检测项</summary><ul id="passed-checks" class="check-list"></ul></details><p class="hint">标红的问题会阻止创建。启动提示可在生成项目后处理。</p></section>
           <section class="preview" aria-labelledby="preview-title"><div class="panel-title"><h2 id="preview-title">目录预览</h2><span id="stack-label">Vue / Spring Boot / MySQL</span></div><div class="tree-root"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v11H3zM3 7V4h7l2 3"/></svg><strong id="tree-name">my-awesome-app</strong><span>/</span></div><pre id="file-tree" aria-label="将生成的文件结构"></pre><div class="preview-note">独立目录 · 可直接开发 · 配置随项目保存</div></section>
           <section class="launch" aria-labelledby="launch-title"><h2 id="launch-title">创建后，一条命令启动</h2><pre><code id="start-command">npm run dev</code></pre><p id="launch-description">同时启动前端、后端与数据库。前端 API 代理已配置。</p></section>
-          <section id="activity" class="activity" aria-labelledby="activity-title"><div class="panel-title"><h2 id="activity-title">创建状态</h2><span id="job-state">准备就绪</span></div><p id="job-message" role="status" aria-live="polite">项目会在新文件夹中创建。</p><progress id="progress" value="0" max="100" hidden aria-label="项目创建进度"></progress><div id="result" hidden><p>项目路径</p><code id="result-path"></code><button id="copy-path" type="button" class="secondary">复制路径</button><p>进入项目目录后执行</p><pre><code id="result-commands"></code></pre><p id="remote-result"></p><a id="remote-link" target="_blank" rel="noreferrer" hidden>打开 GitHub 仓库</a><button id="retry-publish" type="button" class="secondary" hidden>重试 GitHub 发布</button></div><details id="logs-panel" hidden><summary>查看执行日志</summary><pre id="logs" tabindex="0"></pre></details></section>
+          <section id="activity" class="activity" aria-labelledby="activity-title">
+            <div class="panel-title"><h2 id="activity-title">创建状态</h2><span id="job-state">准备就绪</span></div>
+            <label id="history-field" class="history-field" for="job-history" hidden>任务记录<select id="job-history" aria-label="任务记录"><option value="">选择任务</option></select></label>
+            <p id="job-message" role="status" aria-live="polite">项目会在新文件夹中创建。</p>
+            <progress id="progress" value="0" max="100" hidden aria-label="项目创建进度"></progress>
+            <div class="task-actions"><button id="cancel-job" type="button" class="secondary" hidden>取消任务</button><button id="resume-job" type="button" class="secondary" hidden>继续未完成的步骤</button></div>
+            <div id="recovery" hidden><p id="checkpoint-summary" class="hint"></p><code id="retained-path"></code><p class="hint">继续时使用此任务的原配置，保留已完成步骤。修改选项请创建新任务。</p></div>
+            <div id="result" hidden><p>项目路径</p><code id="result-path"></code><button id="copy-path" type="button" class="secondary">复制路径</button><p>进入项目目录后执行</p><pre><code id="result-commands"></code></pre><p id="remote-result"></p><a id="remote-link" target="_blank" rel="noreferrer" hidden>打开 GitHub 仓库</a><button id="retry-publish" type="button" class="secondary" hidden>重试 GitHub 发布</button></div>
+            <details id="logs-panel" hidden><summary>查看执行日志</summary><pre id="logs" tabindex="0"></pre></details>
+          </section>
         </div>
       </div>
       <footer class="sheet-footer"><span>文件和创建操作都在你的电脑上完成。</span><span>StackForge / 从想法到代码</span></footer>

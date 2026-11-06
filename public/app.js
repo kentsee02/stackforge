@@ -13,6 +13,7 @@ let checkTimer;
 let checkSerial = 0;
 let repoNameEdited = false;
 let templates = [];
+const statusNames = { running: '执行中', cancelling: '停止中', cancelled: '已取消', failed: '未完成', complete: '已完成' };
 
 function readOptions() {
   const values = new FormData(form);
@@ -153,10 +154,32 @@ function lockForm(value) {
   clearTimeout(checkTimer);
   ++checkSerial;
   for (const input of form.querySelectorAll('input, select, button')) input.disabled = value;
-  for (const button of document.querySelectorAll('[data-preset], #check-environment, #retry-publish')) button.disabled = value;
+  for (const button of document.querySelectorAll('[data-preset], #check-environment, #retry-publish, #resume-job, #job-history')) button.disabled = value;
   createButton.disabled = value;
   createButton.querySelector('span').textContent = value ? '正在创建…' : '创建项目';
   if (!value) { updatePreview(); refreshTemplates($('#saved-template').value); }
+}
+
+function restoreOptions(options) {
+  for (const key of ['frontend', 'backend', 'database', 'name', 'parentDir', 'groupId']) if (options[key]) form.elements[key].value = options[key];
+  for (const key of ['install', 'git', 'commit', 'publish']) $(`#${key}`).checked = Boolean(options[key]);
+  for (const [id, key] of [['author-name', 'authorName'], ['author-email', 'authorEmail'], ['repo-name', 'repoName'], ['visibility', 'visibility']]) $(`#${id}`).value = options[key] || (key === 'visibility' ? 'private' : '');
+  updatePreview();
+}
+
+function renderHistory(jobs) {
+  $('#history-field').hidden = !jobs.length;
+  const empty = document.createElement('option'); empty.value = ''; empty.textContent = '选择已保存的任务';
+  $('#job-history').replaceChildren(empty, ...jobs.map(job => {
+    const option = document.createElement('option'); option.value = job.id;
+    option.textContent = `${job.name} · ${statusNames[job.status] || job.status}`;
+    return option;
+  }));
+  if (jobs.some(job => job.id === currentJob)) $('#job-history').value = currentJob;
+}
+
+async function refreshHistory() {
+  try { const response = await fetch('/api/jobs'); if (response.ok) renderHistory(await response.json()); } catch {}
 }
 
 function showError(message) {
@@ -180,26 +203,40 @@ async function pollJob() {
       throw new Error(job.error);
     }
     activity.dataset.status = job.status;
-    $('#job-state').textContent = job.status === 'running' ? `${job.progress}%` : job.status === 'complete' ? '创建成功' : '创建失败';
+    $('#job-state').textContent = job.status === 'running' ? `${job.progress}%` : job.status === 'complete' ? '创建成功' : statusNames[job.status] || '创建失败';
     $('#job-message').textContent = job.status === 'failed' ? job.error : job.step;
     $('#progress').value = job.progress;
     $('#logs').textContent = job.logs.join('\n');
-    if (job.status === 'running') { pollTimer = setTimeout(pollJob, 900); return; }
+    const active = ['running', 'cancelling'].includes(job.status);
+    $('#cancel-job').hidden = !active;
+    $('#cancel-job').disabled = job.status === 'cancelling';
+    $('#cancel-job').textContent = job.status === 'cancelling' ? '正在停止…' : '取消任务';
+    $('#resume-job').hidden = !job.canResume;
+    $('#recovery').hidden = !job.canResume;
+    if (job.canResume) {
+      $('#checkpoint-summary').textContent = job.retainedPath ? `已保留 ${job.completed.length} 个完成步骤与项目文件。` : '环境检查尚未通过，可以修复环境后重试。';
+      $('#retained-path').textContent = job.retainedPath || '';
+    }
+    if (job.environment) renderEnvironment(job.environment);
+    if (active) { if (!running) lockForm(true); pollTimer = setTimeout(pollJob, 900); return; }
     $('#progress').hidden = true;
     lockForm(false);
     try { sessionStorage.removeItem('stackforge.job'); } catch {}
-    if (job.status === 'complete') {
+    $('#result').hidden = !job.result;
+    if (job.result) {
       $('#result').hidden = false;
       $('#result-path').textContent = job.result.path;
       $('#result-commands').textContent = job.result.commands.join('\n');
-      $('#job-message').textContent = '文件已生成。进入项目目录，即可开始开发。';
+      if (job.status === 'complete') $('#job-message').textContent = '文件已生成。进入项目目录，即可开始开发。';
       const remote = job.result.remote;
       $('#remote-link').hidden = remote?.status !== 'published';
       $('#retry-publish').hidden = remote?.status !== 'failed';
       $('#remote-result').textContent = remote?.status === 'published' ? `已发布到 GitHub · ${remote.visibility === 'public' ? '公开仓库' : '私有仓库'}` : remote?.status === 'failed' ? `本地项目已保留。GitHub 发布未完成：${remote.error}` : '';
       if (remote?.status === 'published') $('#remote-link').href = remote.url;
       if (remote?.status === 'failed') { $('#job-state').textContent = '本地已创建'; $('#logs-panel').open = true; }
-    } else $('#logs-panel').open = true;
+    }
+    if (job.status !== 'complete') $('#logs-panel').open = true;
+    refreshHistory();
   } catch (error) {
     $('#job-state').textContent = '连接已断开';
     $('#job-message').textContent = '无法读取创建状态，请检查本地服务。连接恢复后将继续显示进度。';
@@ -224,6 +261,8 @@ form.addEventListener('submit', async event => {
   currentOptions = options;
   if (options.frontend === 'none' && options.backend === 'none') { showError('至少选择一个前端或后端。'); return; }
   $('#result').hidden = true;
+  $('#recovery').hidden = true;
+  $('#resume-job').hidden = true;
   $('#logs').textContent = '';
   $('#logs-panel').hidden = false;
   $('#logs-panel').open = false;
@@ -238,6 +277,7 @@ form.addEventListener('submit', async event => {
     const data = await response.json();
     if (!response.ok) { if (data.environment) renderEnvironment(data.environment); throw new Error(data.error); }
     currentJob = data.id;
+    $('#cancel-job').hidden = false; $('#cancel-job').disabled = false;
     try { sessionStorage.setItem('stackforge.job', JSON.stringify({ id: currentJob, options })); } catch {}
     clearTimeout(pollTimer);
     pollJob();
@@ -300,6 +340,32 @@ $('#retry-publish').addEventListener('click', async () => {
     clearTimeout(pollTimer); pollJob();
   } catch (error) { showError(error.message); }
 });
+$('#cancel-job').addEventListener('click', async () => {
+  $('#cancel-job').disabled = true;
+  try {
+    const response = await fetch(`/api/jobs/${currentJob}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': state.token }, body: '{}' });
+    const data = await response.json(); if (!response.ok) throw new Error(data.error);
+    clearTimeout(pollTimer); pollJob();
+  } catch (error) { $('#job-message').textContent = error.message; $('#cancel-job').disabled = false; }
+});
+$('#resume-job').addEventListener('click', async () => {
+  restoreOptions(currentOptions); lockForm(true);
+  $('#resume-job').hidden = true; $('#progress').hidden = false;
+  try {
+    const response = await fetch(`/api/jobs/${currentJob}/retry`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': state.token }, body: '{}' });
+    const data = await response.json(); if (!response.ok) throw new Error(data.error);
+    try { sessionStorage.setItem('stackforge.job', JSON.stringify({ id: currentJob, options: currentOptions })); } catch {}
+    clearTimeout(pollTimer); pollJob();
+  } catch (error) { showError(error.message); $('#resume-job').hidden = false; }
+});
+$('#job-history').addEventListener('change', async () => {
+  if (running || !$('#job-history').value) return;
+  const response = await fetch('/api/jobs/' + $('#job-history').value);
+  if (!response.ok) return;
+  const job = await response.json(); currentJob = job.id; currentOptions = job.options;
+  restoreOptions(job.options); clearTimeout(pollTimer);
+  $('#logs-panel').hidden = false; pollJob();
+});
 $('#copy-path').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('#result-path').textContent); $('#copy-path').textContent = '已复制'; setTimeout(() => { $('#copy-path').textContent = '复制路径'; }, 1600); }
   catch { $('#copy-path').textContent = '请手动选择上方路径复制'; }
@@ -310,6 +376,7 @@ async function init() {
     const response = await fetch('/api/state');
     if (!response.ok) throw new Error('无法连接本地服务，请刷新页面。');
     state = await response.json();
+    renderHistory(state.jobs || []);
     ['frontend', 'backend', 'database'].forEach(choices);
     $('#parent-dir').value = state.defaultDir;
     $('#node-version').textContent = `Node.js ${state.node} · 已连接`;
@@ -331,10 +398,7 @@ async function init() {
     try { saved = JSON.parse(sessionStorage.getItem('stackforge.job') || 'null'); } catch {}
     if (saved?.id && saved.options) {
       // Restore the generating configuration too; disabled fields must match the job.
-      for (const key of ['frontend', 'backend', 'database', 'name', 'parentDir', 'groupId']) if (saved.options[key]) form.elements[key].value = saved.options[key];
-      for (const key of ['install', 'git', 'commit', 'publish']) $(`#${key}`).checked = Boolean(saved.options[key]);
-      for (const [id, key] of [['author-name', 'authorName'], ['author-email', 'authorEmail'], ['repo-name', 'repoName'], ['visibility', 'visibility']]) if (saved.options[key]) $(`#${id}`).value = saved.options[key];
-      updatePreview(); currentJob = saved.id; currentOptions = saved.options;
+      restoreOptions(saved.options); currentJob = saved.id; currentOptions = saved.options;
       const check = await fetch(`/api/jobs/${currentJob}`);
       if (check.ok) { lockForm(true); $('#logs-panel').hidden = false; $('#progress').hidden = false; pollJob(); }
       else { try { sessionStorage.removeItem('stackforge.job'); } catch {} }

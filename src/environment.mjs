@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { validateOptions } from './catalog.mjs';
-import { run, npm as runNpm } from './process.mjs';
+import { run, npm as runNpm, throwIfCancelled } from './process.mjs';
 import { gitIdentity, githubAccount } from './git.mjs';
 
 const help = {
@@ -22,8 +22,10 @@ export async function portAvailable(port) {
 
 export async function checkEnvironment(input, services = {}) {
   const options = validateOptions(input);
-  const command = services.run ?? run;
-  const npm = services.npm ?? runNpm;
+  const signal = services.signal;
+  throwIfCancelled(signal);
+  const command = (name, args, config = {}) => (services.run ?? run)(name, args, { ...config, signal });
+  const npm = (args, config = {}) => (services.npm ?? runNpm)(args, { ...config, signal });
   const fetchImpl = services.fetchImpl ?? fetch;
   const probePort = services.portAvailable ?? portAvailable;
   const checks = [];
@@ -61,7 +63,7 @@ export async function checkEnvironment(input, services = {}) {
     ...(options.backend === 'spring' ? [['spring-network', 'Spring Initializr', 'https://start.spring.io/metadata/client'], ...(options.install ? [['maven-network', 'Maven Central', 'https://repo.maven.apache.org/maven2/org/springframework/boot/spring-boot-starter-parent/maven-metadata.xml']] : [])] : [])
   ];
   for (const [id, label, url] of urls) tasks.push((async () => {
-    try { const response = await fetchImpl(url, { signal: AbortSignal.timeout(8000) }); await response.body?.cancel(); if (!response.ok) throw new Error(); add(id, label, 'ok', '连接正常'); }
+    try { const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000) }); await response.body?.cancel(); if (!response.ok) throw new Error(); add(id, label, 'ok', '连接正常'); }
     catch { add(id, label, 'error', '无法连接下载源', '检查网络、代理与防火墙后点击重新检测。'); }
   })());
   for (const [port, label] of [...(options.frontend !== 'none' ? [[5173, '前端端口 5173']] : []), ...(options.backend !== 'none' ? [[8080, '后端端口 8080']] : []), ...(options.database !== 'none' ? [[options.database === 'mysql' ? 3306 : 5432, '数据库端口']] : [])]) tasks.push((async () => {
@@ -95,6 +97,7 @@ export async function checkEnvironment(input, services = {}) {
     } catch { add('github', 'GitHub 认证', 'error', 'GitHub CLI 未安装或尚未认证', '安装 gh，执行 gh auth login --hostname github.com，然后重新检测。', help.github); }
   })());
   await Promise.all(tasks);
+  throwIfCancelled(signal);
   const priority = { error: 0, warning: 1, ok: 2 };
   checks.sort((a, b) => priority[a.status] - priority[b.status] || a.id.localeCompare(b.id));
   return { canCreate: !checks.some(item => item.status === 'error'), checks, checkedAt: new Date().toISOString() };

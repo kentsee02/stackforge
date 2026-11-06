@@ -5,6 +5,7 @@ projects/
 !.env.example
 .taste-skill/
 .impeccable/
+.stackforge/
 coverage/
 *.log
 .DS_Store
