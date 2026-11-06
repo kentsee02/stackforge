@@ -1,5 +1,18 @@
 // [Chinese source, English translation]. {name} slots preserve runtime values.
 export const messages = [
+  ['正在检测…', 'Checking…'],
+  ['重复使用你的配置', 'Reuse your configuration'],
+  ['选择技术栈', 'Choose your stack'],
+  ['从页面到数据，让它们一起工作。', 'From interface to database, connected from the start.'],
+  ['首次提交与 GitHub 发布', 'First commit & GitHub publishing'],
+  ['复制命令', 'Copy command'],
+  ['项目预览', 'Project preview'],
+  ['文件', 'Files'],
+  ['启动命令', 'Start commands'],
+  ['项目保存位置', 'Project destination'],
+  ['在本机创建，接着专注开发。', 'Created locally. Yours to build.'],
+  ['跳到主要内容', 'Skip to content'],
+  ['请选择并复制下方命令', 'Select and copy the command below'],
   ['StackForge：在本机一键创建前端、后端和数据库项目。', 'Create frontend, backend, and database projects locally with StackForge.'],
   ['StackForge · 全栈项目生成器', 'StackForge · Full-stack project generator'],
   ['StackForge 首页', 'StackForge home'],

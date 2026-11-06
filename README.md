@@ -6,7 +6,9 @@ A local, open-source full-stack project generator. Choose a frontend, backend, a
 
 **Vue / React + Spring Boot / Express + MySQL / PostgreSQL**, with frontend-only and backend-only options. Includes dependency installation, environment checks, reusable templates, Git setup, optional GitHub publishing, and resumable tasks. The generator has **zero third-party runtime dependencies**.
 
-Version 0.4 adds English and Chinese (华文), with English as the default. Switch languages from the top bar; your choice is remembered in the current browser. Switching does not reload the page or interrupt a task. Generated project documentation and starter messages are in English.
+Version 0.5 makes the workspace easier to scan: compact presets, a persistent review column, collapsible templates and advanced Git options, file/command preview tabs, and a mobile action bar. Copy startup commands or use Ctrl/Cmd+Enter to create a project. Task status stays prominent during creation and recovery.
+
+English is the default, with Chinese (华文) available from the top bar. Your choice is remembered in this browser; switching does not reload the page or interrupt a task. Generated project documentation and starter messages are in English.
 
 ## Quick start
 

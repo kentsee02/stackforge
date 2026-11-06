@@ -16,6 +16,16 @@ let checkSerial = 0;
 let repoNameEdited = false;
 let templates = [];
 const statusNames = { running: '执行中', cancelling: '停止中', cancelled: '已取消', failed: '未完成', complete: '已完成' };
+const presets = { java: ['vue', 'spring', 'mysql'], node: ['react', 'express', 'postgres'], web: ['vue', 'none', 'none'] };
+const choiceIcons = {
+  vue: '<path d="M3 5h4l5 8 5-8h4L12 21zM7 5h3l2 3 2-3h3"/>',
+  react: '<circle cx="12" cy="12" r="2"/><ellipse cx="12" cy="12" rx="10" ry="4"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(120 12 12)"/>',
+  spring: '<path d="M20 3c2 10-3 18-10 17C3 19 2 12 7 8c4-3 8-1 13-5ZM5 21l12-12"/>',
+  express: '<path d="m8 7-5 5 5 5m8-10 5 5-5 5M14 4l-4 16"/>',
+  mysql: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/>',
+  postgres: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/>',
+  none: '<path d="M5 5l14 14M19 5 5 19"/>'
+};
 
 function readOptions() {
   const values = new FormData(form);
@@ -32,7 +42,10 @@ function choices(key) {
     const text = document.createElement('span');
     const title = document.createElement('strong'); setText(title, item.name);
     const detail = document.createElement('small'); setText(detail, item.detail);
-    text.append(title, detail); label.append(input, text); container.append(label);
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = choiceIcons[item.id]; // Authored, fixed SVG; never user input.
+    text.append(title, detail); label.append(icon, text, input); container.append(label);
   }
 }
 
@@ -48,6 +61,12 @@ function updatePreview() {
   for (const field of document.querySelectorAll('#identity-fields input')) field.disabled = !$('#commit').checked;
   for (const field of document.querySelectorAll('#publish-fields input, #publish-fields select')) field.disabled = !$('#publish').checked;
   const options = readOptions();
+  if (options.commit || options.publish) $('#git-details').open = true;
+  for (const button of document.querySelectorAll('[data-preset]')) {
+    button.setAttribute('aria-pressed', String(['frontend', 'backend', 'database'].every((key, index) => options[key] === presets[button.dataset.preset][index])));
+  }
+  const separator = options.parentDir.includes('\\') ? '\\' : '/';
+  $('#destination-preview').textContent = options.parentDir.replace(/[\\/]+$/, '') + separator + (options.name || 'my-project');
   if (!running) setText(createButton.querySelector('span'), options.publish ? '创建并发布到 GitHub' : '检查并创建项目');
   setText($('#publish-notice'), `将代码推送到当前 GitHub 账号下的新${options.visibility === 'public' ? '公开' : '私有'}仓库${options.visibility === 'public' ? '，源码和提交记录将对所有人可见。' : '。'}`);
   const labels = ['frontend', 'backend', 'database'].filter(key => options[key] !== 'none').map(key => state.catalog[key].find(item => item.id === options[key]).name);
@@ -120,6 +139,11 @@ async function runChecks() {
 function scheduleChecks() {
   clearTimeout(checkTimer);
   ++checkSerial; // ignore a response for an older configuration immediately
+  $('.environment').dataset.status = 'checking';
+  setText($('#environment-summary'), '正在检测当前配置所需的环境…');
+  $('#critical-checks').replaceChildren();
+  $('#passed-checks').replaceChildren();
+  setText($('#all-checks summary'), '正在检测…');
   checkTimer = setTimeout(runChecks, 650);
 }
 
@@ -144,6 +168,7 @@ function persistTemplates(next, selected = '') {
 }
 
 function applyTemplate(config) {
+  resetActivity();
   for (const key of ['frontend', 'backend', 'database']) form.elements[key].value = config[key];
   $('#group-id').value = config.groupId;
   for (const key of ['install', 'git', 'commit']) $(`#${key}`).checked = config[key];
@@ -153,6 +178,7 @@ function applyTemplate(config) {
 
 function lockForm(value) {
   running = value;
+  document.body.classList.toggle('is-running', value);
   clearTimeout(checkTimer);
   ++checkSerial;
   for (const input of form.querySelectorAll('input, select, button')) input.disabled = value;
@@ -200,10 +226,29 @@ function showError(message) {
   lockForm(false);
 }
 
+function resetActivity() {
+  if (running) return;
+  clearTimeout(pollTimer);
+  currentJob = undefined; currentOptions = undefined;
+  activity.dataset.status = 'idle';
+  document.body.classList.remove('has-task');
+  setText($('#job-state'), '准备就绪');
+  setText($('#job-message'), '项目会在新文件夹中创建。');
+  for (const id of ['result', 'recovery', 'resume-job', 'cancel-job', 'logs-panel', 'progress']) $(`#${id}`).hidden = true;
+  $('#job-history').value = '';
+}
+
+function revealTask() {
+  document.body.classList.add('has-task');
+  if (window.matchMedia('(max-width: 800px)').matches) activity.scrollIntoView({ block: 'start', behavior: 'instant' });
+}
+
 async function pollJob() {
+  const polledJob = currentJob;
   try {
-    const response = await fetch(`/api/jobs/${currentJob}`);
+    const response = await fetch(`/api/jobs/${polledJob}`);
     const job = await response.json();
+    if (currentJob !== polledJob) return;
     if (!response.ok) {
       if (response.status === 404) {
         try { sessionStorage.removeItem('stackforge.job'); } catch {}
@@ -213,6 +258,7 @@ async function pollJob() {
       throw new Error(job.error);
     }
     activity.dataset.status = job.status;
+    document.body.classList.add('has-task');
     setText($('#job-state'), job.status === 'running' ? `${job.progress}%` : job.status === 'complete' ? '创建成功' : statusNames[job.status] || '创建失败');
     setText($('#job-message'), job.status === 'failed' ? job.error : job.step);
     $('#progress').value = job.progress;
@@ -248,6 +294,7 @@ async function pollJob() {
     if (job.status !== 'complete') $('#logs-panel').open = true;
     refreshHistory();
   } catch (error) {
+    if (currentJob !== polledJob) return;
     setText($('#job-state'), '连接已断开');
     setText($('#job-message'), '无法读取创建状态，请检查本地服务。连接恢复后将继续显示进度。');
     pollTimer = setTimeout(pollJob, 3000);
@@ -256,12 +303,14 @@ async function pollJob() {
 
 form.addEventListener('input', event => {
   if (running || ['template-name', 'template-file'].includes(event.target.id)) return;
+  resetActivity();
   if (event.target.id === 'repo-name') repoNameEdited = true;
   if (event.target.id === 'project-name' && !repoNameEdited) $('#repo-name').value = event.target.value;
   syncGit(event.target.id); updatePreview(); scheduleChecks();
 });
 form.addEventListener('change', event => {
   if (running || ['saved-template', 'template-file'].includes(event.target.id)) return;
+  resetActivity();
   syncGit(event.target.id); updatePreview(); scheduleChecks();
 });
 form.addEventListener('submit', async event => {
@@ -287,6 +336,7 @@ form.addEventListener('submit', async event => {
     const data = await response.json();
     if (!response.ok) { if (data.environment) renderEnvironment(data.environment); throw new Error(data.error); }
     currentJob = data.id;
+    revealTask();
     $('#cancel-job').hidden = false; $('#cancel-job').disabled = false;
     try { sessionStorage.setItem('stackforge.job', JSON.stringify({ id: currentJob, options })); } catch {}
     clearTimeout(pollTimer);
@@ -297,7 +347,8 @@ form.addEventListener('submit', async event => {
 document.addEventListener('click', event => {
   const preset = event.target.closest('[data-preset]');
   if (!preset || running || !state) return;
-  const values = { java: ['vue', 'spring', 'mysql'], node: ['react', 'express', 'postgres'], web: ['vue', 'none', 'none'] }[preset.dataset.preset];
+  resetActivity();
+  const values = presets[preset.dataset.preset];
   ['frontend', 'backend', 'database'].forEach((key, i) => { form.elements[key].value = values[i]; });
   $('#publish').checked = false;
   updatePreview(); scheduleChecks();
@@ -374,11 +425,44 @@ $('#job-history').addEventListener('change', async () => {
   if (!response.ok) return;
   const job = await response.json(); currentJob = job.id; currentOptions = job.options;
   restoreOptions(job.options); clearTimeout(pollTimer);
-  $('#logs-panel').hidden = false; pollJob();
+  $('#logs-panel').hidden = false; revealTask(); pollJob();
 });
 $('#copy-path').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('#result-path').textContent); setText($('#copy-path'), '已复制'); setTimeout(() => { setText($('#copy-path'), '复制路径'); }, 1600); }
   catch { setText($('#copy-path'), '请手动选择上方路径复制'); }
+});
+
+function selectPreviewTab(id) {
+  for (const tab of document.querySelectorAll('[role=tab]')) {
+    const selected = tab.id === id;
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    document.getElementById(tab.getAttribute('aria-controls')).hidden = !selected;
+  }
+}
+for (const tab of document.querySelectorAll('[role=tab]')) {
+  tab.addEventListener('click', () => selectPreviewTab(tab.id));
+  tab.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const id = event.key === 'Home' ? 'files-tab' : event.key === 'End' ? 'start-tab' : tab.id === 'files-tab' ? 'start-tab' : 'files-tab';
+    selectPreviewTab(id); document.getElementById(id).focus();
+  });
+}
+$('#copy-command').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('#start-command').textContent);
+    setText($('#copy-command'), '已复制');
+    setTimeout(() => setText($('#copy-command'), '复制命令'), 1600);
+  } catch { setText($('#copy-command'), '请选择并复制下方命令'); }
+});
+form.addEventListener('invalid', event => {
+  const details = event.target.closest('details'); if (details) details.open = true;
+}, true);
+document.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !running && !createButton.disabled) {
+    event.preventDefault(); form.requestSubmit(createButton);
+  }
 });
 
 async function init() {
