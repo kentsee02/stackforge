@@ -1,0 +1,14 @@
+{
+  "name": "stackforge-local",
+  "version": "0.1.0",
+  "description": "A local, open-source full-stack project generator",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test",
+    "check": "node --check src/server.mjs && node --check src/generator.mjs && node --check public/app.js"
+  }
+}

@@ -1,0 +1,11 @@
+node_modules/
+projects/
+.env
+.env.*
+!.env.example
+.taste-skill/
+.impeccable/
+coverage/
+*.log
+.DS_Store
+Thumbs.db

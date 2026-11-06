@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f0f5f6">
+  <meta name="description" content="StackForge：在本机一键创建前端、后端和数据库项目。">
+  <title>StackForge · 全栈项目生成器</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M16 7H7v26h9m8-26h9v26h-9M16 27l8-14' fill='none' stroke='%231b6c80' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
+    <div class="workspace">本地工作空间 <span>v0.1</span></div>
+    <div class="side-active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>创建项目</div>
+    <section class="presets" aria-labelledby="preset-title"><h2 id="preset-title">从常用组合开始</h2>
+      <button type="button" data-preset="java"><span>Java 全栈</span><small>Vue + Spring Boot + MySQL</small></button>
+      <button type="button" data-preset="node"><span>JavaScript 全栈</span><small>React + Express + PostgreSQL</small></button>
+      <button type="button" data-preset="web"><span>纯前端</span><small>Vue + Vite + TypeScript</small></button>
+    </section>
+    <section class="requirements" aria-labelledby="requirements-title"><h2 id="requirements-title">运行环境</h2><p id="node-version">正在检查 Node.js…</p><ul id="requirements"></ul><p class="small">生成器会下载项目依赖。Java、Docker 等系统环境需预先安装。</p></section>
+    <div class="side-footer"><span>MIT 开源</span><a href="https://github.com/kentsee02/stackforge" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a></div>
+  </aside>
+  <div class="body-shell">
+    <header class="topbar"><span>工作空间 <span class="slash">/</span> 项目生成器</span><span class="local-indicator">本机运行</span></header>
+    <main class="sheet">
+      <div class="title-row"><div><h1>创建全栈项目</h1><p>选好技术栈，把重复的准备工作交给 StackForge。</p></div><button id="create" class="primary" type="submit" form="project-form" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>创建项目</span></button></div>
+      <div class="editor">
+        <form id="project-form" class="configuration">
+          <section aria-labelledby="project-title"><h2 id="project-title">项目信息</h2><div class="project-fields">
+            <label for="project-name">项目名称<input id="project-name" name="name" value="my-awesome-app" pattern="[a-z][a-z0-9\-]{1,47}" minlength="2" maxlength="48" required autocomplete="off" spellcheck="false" aria-describedby="name-hint"></label><p id="name-hint" class="hint">小写字母、数字或短横线，以字母开头。</p>
+            <label for="parent-dir">保存到<input id="parent-dir" name="parentDir" required autocomplete="off" spellcheck="false" placeholder="正在读取默认目录…"></label>
+          </div></section>
+          <fieldset><legend>前端框架</legend><div id="frontend-options" class="choices"></div></fieldset>
+          <fieldset><legend>后端框架</legend><div id="backend-options" class="choices"></div><label id="group-field" class="inline-field" for="group-id">Group ID<input id="group-id" name="groupId" value="com.example" required pattern="[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+" spellcheck="false"></label></fieldset>
+          <fieldset><legend>数据库</legend><div id="database-options" class="choices"></div><p id="database-hint" class="hint">生成 Compose 配置与连接驱动，开发启动时自动启动数据库。</p></fieldset>
+          <fieldset class="final-options"><legend>初始化选项</legend><label><input type="checkbox" id="install" name="install" checked><span>自动安装项目依赖<small>npm 依赖及 Maven 依赖，首次可能需要几分钟</small></span></label><label><input type="checkbox" id="git" name="git" checked><span>初始化 Git 仓库<small>创建 main 分支，自动忽略本地密钥与构建产物</small></span></label></fieldset>
+        </form>
+        <div class="right-column">
+          <section class="preview" aria-labelledby="preview-title"><div class="panel-title"><h2 id="preview-title">目录预览</h2><span id="stack-label">Vue / Spring Boot / MySQL</span></div><div class="tree-root"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v11H3zM3 7V4h7l2 3"/></svg><strong id="tree-name">my-awesome-app</strong><span>/</span></div><pre id="file-tree" aria-label="将生成的文件结构"></pre><div class="preview-note">独立目录 · 可直接开发 · 配置随项目保存</div></section>
+          <section class="launch" aria-labelledby="launch-title"><h2 id="launch-title">创建后，一条命令启动</h2><pre><code id="start-command">npm run dev</code></pre><p id="launch-description">同时启动前端、后端与数据库。前端 API 代理已配置。</p></section>
+          <section id="activity" class="activity" aria-labelledby="activity-title"><div class="panel-title"><h2 id="activity-title">创建状态</h2><span id="job-state">准备就绪</span></div><p id="job-message" role="status" aria-live="polite">项目会在新文件夹中创建。</p><progress id="progress" value="0" max="100" hidden aria-label="项目创建进度"></progress><div id="result" hidden><p>项目路径</p><code id="result-path"></code><button id="copy-path" type="button" class="secondary">复制路径</button><p>进入项目目录后执行</p><pre><code id="result-commands"></code></pre></div><details id="logs-panel" hidden><summary>查看执行日志</summary><pre id="logs" tabindex="0"></pre></details></section>
+        </div>
+      </div>
+      <footer class="sheet-footer"><span>文件和创建操作都在你的电脑上完成。</span><span>StackForge / 从想法到代码</span></footer>
+    </main>
+  </div>
+  <noscript>请启用 JavaScript 以选择技术栈并创建项目。</noscript>
+</body>
+</html>
