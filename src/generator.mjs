@@ -4,10 +4,11 @@ import { randomBytes } from 'node:crypto';
 import { validateOptions } from './catalog.mjs';
 import { extractZip } from './zip.mjs';
 import { npm, run } from './process.mjs';
+import { initializeGit, publishProject } from './git.mjs';
 import { json, frontendFiles, expressFiles, databaseFiles, devScript, generatedReadme } from './templates.mjs';
 
 export async function download(url, { fetchImpl = fetch, binary = false } = {}) {
-  const response = await fetchImpl(url, { signal: AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.1.0' } });
+  const response = await fetchImpl(url, { signal: AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.2.0' } });
   if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）：${new URL(url).hostname}`);
   if (binary) {
     const reader = response.body.getReader();
@@ -102,7 +103,7 @@ export async function generateProject(input, report = () => {}, services = {}) {
       '.gitignore': 'node_modules/\ndist/\ntarget/\n.env\n.env.*\n!.env.example\n*.log\n.idea/\n.vscode/\n.DS_Store\n',
       'scripts/dev.mjs': devScript(options),
       'README.md': generatedReadme(options),
-      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.1.0', createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
+      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.2.0', createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
     });
     if (options.install) {
       if (workspaces.length) { step('安装 npm 依赖（首次运行可能需要几分钟）', 64); await install(['install', '--no-audit', '--no-fund'], { cwd: staging, log }); }
@@ -113,8 +114,8 @@ export async function generateProject(input, report = () => {}, services = {}) {
       }
     }
     if (options.git) {
-      step('初始化 Git（.env 将保持忽略）', 94);
-      await command('git', ['init', '-b', 'main'], { cwd: staging, log });
+      step(options.commit ? '初始化 Git 并创建首次提交' : '初始化 Git（本地操作，无需登录）', 94);
+      await initializeGit(staging, options, command, log);
     }
     // rename into place only after success; never merge into an existing folder.
     const lockPath = join(options.parentDir, `.${options.name}.stackforge.lock`);
@@ -124,8 +125,13 @@ export async function generateProject(input, report = () => {}, services = {}) {
       catch (error) { if (error.code !== 'ENOENT') throw error; }
       await rename(staging, target);
     } finally { await lock.close(); await rm(lockPath, { force: true }); }
-    step('项目已创建', 100);
-    return { path: target, name: options.name, versions, installed: options.install, git: options.git, commands: [...(!options.install ? ['npm install'] : []), 'npm run dev'] };
+    const result = { path: target, name: options.name, versions, installed: options.install, git: options.git, committed: options.commit, commands: [...(!options.install ? ['npm install'] : []), 'npm run dev'] };
+    if (options.publish) {
+      try { result.remote = await publishProject(target, options, report, command); }
+      catch (error) { result.remote = { status: 'failed', error: error.message }; log('GitHub 发布未完成，本地项目已保留。\n' + error.message); }
+    }
+    step(result.remote?.status === 'failed' ? '本地项目已创建，GitHub 发布未完成' : '项目已创建', 100);
+    return result;
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
     throw error;

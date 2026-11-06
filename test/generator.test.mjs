@@ -87,7 +87,7 @@ test('ZIP extraction rejects traversal, symlink-like drives, duplicate paths and
 test('HTTP API restricts hosts and cross-origin writes, serializes generation and exposes completion', async t => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
-  const server = createApp({ generate: async (input, report) => { report({ type: 'step', message: 'working', progress: 50 }); await gate; return { path: 'project', commands: ['npm run dev'] }; } });
+  const server = createApp({ check: async () => ({ canCreate: true, checks: [] }), generate: async (input, report) => { report({ type: 'step', message: 'working', progress: 50 }); await gate; return { path: 'project', commands: ['npm run dev'] }; } });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const origin = `http://127.0.0.1:${server.address().port}`;
