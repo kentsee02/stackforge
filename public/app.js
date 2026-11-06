@@ -161,6 +161,14 @@ function lockForm(value) {
 }
 
 function restoreOptions(options) {
+  clearTimeout(checkTimer);
+  ++checkSerial;
+  $('.environment').dataset.status = 'idle';
+  $('#environment-summary').textContent = '已恢复任务配置；新建项目时会重新检查环境。';
+  $('#critical-checks').replaceChildren();
+  $('#passed-checks').replaceChildren();
+  $('#all-checks summary').textContent = '尚未重新检测';
+  $('#check-environment').disabled = running;
   for (const key of ['frontend', 'backend', 'database', 'name', 'parentDir', 'groupId']) if (options[key]) form.elements[key].value = options[key];
   for (const key of ['install', 'git', 'commit', 'publish']) $(`#${key}`).checked = Boolean(options[key]);
   for (const [id, key] of [['author-name', 'authorName'], ['author-email', 'authorEmail'], ['repo-name', 'repoName'], ['visibility', 'visibility']]) $(`#${id}`).value = options[key] || (key === 'visibility' ? 'private' : '');
