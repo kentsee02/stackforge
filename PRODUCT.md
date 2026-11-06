@@ -6,6 +6,8 @@ Supports Vue / React / no frontend, Spring Boot / Express / no backend, and MySQ
 
 The server listens only on loopback. Users install Node.js, Java, and Docker themselves. Database images are pulled when the generated development launcher first starts them. Existing project directories cannot be overwritten.
 
+New projects default to a Projects folder in the user home directory, independent of the StackForge installation. Users can enter another parent directory or configure an absolute STACKFORGE_PROJECTS_DIR before launching. Merely opening the tool does not create this folder; original task paths remain authoritative for recovery.
+
 Preflight checks cover runtime tools, download sources, destinations, and ports, separating creation blockers from startup warnings. Personal templates use browser storage, support JSON import/export, and exclude paths, identities, and publishing permission.
 
 Git operations are separate: local initialization, first commit, and GitHub publishing. Only publishing requires authentication. Publishing is off by default, private by default, and never overwrites an unrelated remote repository. Author identity is applied only to the generated project; credentials and global Git configuration remain under the user’s control.

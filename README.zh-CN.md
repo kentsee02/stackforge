@@ -29,6 +29,10 @@ npm start
 3. 查看「创建前检查」结果，按需选择安装依赖和 Git 操作，然后点击「检查并创建项目」。
 4. 成功后进入生成目录，执行 `npm run dev`。
 
+默认保存父目录是**用户主目录下的 Projects**：Windows 例如 `C:\Users\你的用户名\Projects`，macOS 为 `/Users/你的用户名/Projects`，Linux 为 `/home/你的用户名/Projects`。项目 `my-app` 会保存在其下的 `my-app` 子目录中，独立于 StackForge 安装位置。只有实际创建项目时才会创建目录，仍会检查写入权限与目标目录冲突。
+
+可以在「保存到」中填写其他绝对路径。若需更换启动默认值，可在 PowerShell 中运行 `$env:STACKFORGE_PROJECTS_DIR='D:\Projects'; npm run launch`。不接受相对路径；已有项目和任务恢复仍使用原来的位置。
+
 端口冲突时可用环境变量 `PORT` 修改监听端口。
 
 Windows PowerShell：`$env:PORT=4311; npm start`。

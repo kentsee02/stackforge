@@ -29,6 +29,10 @@ Alternatively, run `npm start` and open [http://127.0.0.1:4310](http://127.0.0.1
 3. Review preflight checks and select dependency installation and Git operations.
 4. Create the project, enter its directory, and run `npm run dev`.
 
+The default parent folder is **Projects in your user home directory**, such as `C:\Users\your-name\Projects` on Windows, `/Users/your-name/Projects` on macOS, or `/home/your-name/Projects` on Linux. A project named `my-app` is created in `Projects/my-app`. This location is independent of the StackForge installation. The directory is created only when you create a project, and the existing destination checks still apply.
+
+Enter another absolute parent path in **Save to** whenever needed. To configure a different startup default, set `STACKFORGE_PROJECTS_DIR` before launching, for example `$env:STACKFORGE_PROJECTS_DIR='D:\Projects'; npm run launch` in PowerShell. Relative defaults are rejected. Earlier projects and task recovery continue using their original paths.
+
 ## Generated projects
 
 - Vue 3 or React with Vite and TypeScript. Frontend `/api` requests proxy to the backend on port 8080.
