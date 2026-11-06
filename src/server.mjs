@@ -11,8 +11,8 @@ import { run } from './process.mjs';
 import { Jobs } from './jobs.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const identity = { application: 'stackforge-local', version: '0.3.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
-const staticFiles = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/template-store.js': ['template-store.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'], '/plex-latin.woff2': ['plex-latin.woff2', 'font/woff2'] };
+export const identity = { application: 'stackforge-local', version: '0.4.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
+const staticFiles = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/messages.js': ['messages.js', 'text/javascript; charset=utf-8'], '/template-store.js': ['template-store.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'], '/plex-latin.woff2': ['plex-latin.woff2', 'font/woff2'] };
 
 export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), defaultDir = resolve(root, 'projects'), stateDir = resolve(root, '.stackforge/jobs') } = {}) {
   const token = randomBytes(32).toString('hex');
@@ -76,9 +76,9 @@ export function createApp({ generate = generateProject, check = checkEnvironment
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const port = Number(process.env.PORT || 4310);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT 必须为 1–65535 之间的整数。');
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer between 1 and 65535.');
   const server = createApp();
-  server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? `端口 ${port} 已被占用，请设置 PORT 后重试。` : error.message); process.exitCode = 1; });
-  server.listen(port, '127.0.0.1', () => console.log(`\n  StackForge ${identity.version}\n  打开 http://127.0.0.1:${port}\n  Ctrl+C 停止服务\n`));
+  server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? `Port ${port} is occupied. Set PORT and try again.` : error.message); process.exitCode = 1; });
+  server.listen(port, '127.0.0.1', () => console.log(`\n  StackForge ${identity.version}\n  Open http://127.0.0.1:${port}\n  Ctrl+C to stop\n`));
   for (const event of ['SIGINT', 'SIGTERM']) process.on(event, async () => { await server.shutdownTasks(); server.close(() => process.exit(0)); });
 }

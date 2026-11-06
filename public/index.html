@@ -1,75 +1,75 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f0f5f6">
-  <meta name="description" content="StackForge：在本机一键创建前端、后端和数据库项目。">
-  <title>StackForge · 全栈项目生成器</title>
+  <meta name="description" content="Create frontend, backend, and database projects locally with StackForge." data-i18n-content="StackForge：在本机一键创建前端、后端和数据库项目。">
+  <title data-i18n="StackForge · 全栈项目生成器">StackForge · Full-stack project generator</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M16 7H7v26h9m8-26h9v26h-9M16 27l8-14' fill='none' stroke='%231b6c80' stroke-width='3'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
   <aside class="sidebar">
-    <a class="brand" href="/" aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
-    <div class="workspace">本地工作空间 <span>v0.3</span></div>
-    <div class="side-active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>创建项目</div>
-    <section class="presets" aria-labelledby="preset-title"><h2 id="preset-title">从常用组合开始</h2>
-      <button type="button" data-preset="java"><span>Java 全栈</span><small>Vue + Spring Boot + MySQL</small></button>
-      <button type="button" data-preset="node"><span>JavaScript 全栈</span><small>React + Express + PostgreSQL</small></button>
-      <button type="button" data-preset="web"><span>纯前端</span><small>Vue + Vite + TypeScript</small></button>
+    <a class="brand" href="/" aria-label="StackForge home" data-i18n-aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
+    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.4</span></div>
+    <div class="side-active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></div>
+    <section class="presets" aria-labelledby="preset-title"><h2 id="preset-title"><span data-i18n="从常用组合开始">Start with a preset</span></h2>
+      <button type="button" data-preset="java"><span><span data-i18n="Java 全栈">Java full stack</span></span><small>Vue + Spring Boot + MySQL</small></button>
+      <button type="button" data-preset="node"><span><span data-i18n="JavaScript 全栈">JavaScript full stack</span></span><small>React + Express + PostgreSQL</small></button>
+      <button type="button" data-preset="web"><span><span data-i18n="纯前端">Frontend only</span></span><small>Vue + Vite + TypeScript</small></button>
     </section>
-    <section class="requirements" aria-labelledby="requirements-title"><h2 id="requirements-title">运行环境</h2><p id="node-version">正在检查 Node.js…</p><ul id="requirements"></ul><p class="small">生成器会下载项目依赖。Java、Docker 等系统环境需预先安装。</p></section>
-    <div class="side-footer"><span>MIT 开源</span><a href="https://github.com/kentsee02/stackforge" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a></div>
+    <section class="requirements" aria-labelledby="requirements-title"><h2 id="requirements-title"><span data-i18n="运行环境">Requirements</span></h2><p id="node-version"><span data-i18n="正在检查 Node.js…">Checking Node.js…</span></p><ul id="requirements"></ul><p class="small"><span data-i18n="生成器会下载项目依赖。Java、Docker 等系统环境需预先安装。">Project dependencies are downloaded automatically. Install system tools such as Java and Docker first.</span></p></section>
+    <div class="side-footer"><span><span data-i18n="MIT 开源">MIT licensed</span></span><a href="https://github.com/kentsee02/stackforge" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a></div>
   </aside>
   <div class="body-shell">
-    <header class="topbar"><span>工作空间 <span class="slash">/</span> 项目生成器</span><span class="local-indicator">本机运行</span></header>
+    <header class="topbar"><span><span data-i18n="工作空间">Workspace</span> <span class="slash">/</span> <span data-i18n="项目生成器">Project generator</span></span><div class="topbar-tools"><label class="language-control" for="language">Language / 语言<select id="language" aria-label="Language / 语言"><option value="en" lang="en">English</option><option value="zh-CN" lang="zh-CN">华文</option></select></label><span class="local-indicator"><span data-i18n="本机运行">Running locally</span></span></div></header>
     <main class="sheet">
-      <div class="title-row"><div><h1>创建全栈项目</h1><p>选好技术栈，把重复的准备工作交给 StackForge。</p></div><button id="create" class="primary" type="submit" form="project-form" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>创建项目</span></button></div>
+      <div class="title-row"><div><h1><span data-i18n="创建全栈项目">Create a full-stack project</span></h1><p><span data-i18n="选好技术栈，把重复的准备工作交给 StackForge。">Choose your stack. Let StackForge handle the setup.</span></p></div><button id="create" class="primary" type="submit" form="project-form" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span><span data-i18n="创建项目">Create project</span></span></button></div>
       <div class="editor">
         <form id="project-form" class="configuration">
-          <section class="template-manager" aria-labelledby="templates-title"><h2 id="templates-title">我的模板</h2>
-            <div class="template-select-row"><label for="saved-template">使用已保存模板<select id="saved-template"><option value="">选择一个模板</option></select></label><button id="delete-template" type="button" class="secondary" disabled>删除模板</button></div>
-            <div class="template-save-row"><label for="template-name">模板名称<input id="template-name" maxlength="40" placeholder="例如：我的 Java 全栈" autocomplete="off"></label><button id="save-template" type="button" class="secondary">保存当前配置</button></div>
-            <div class="template-tools"><button id="export-templates" type="button">导出模板</button><button id="import-templates" type="button">导入模板</button><input id="template-file" type="file" accept=".json,application/json" hidden></div>
-            <p id="template-message" class="hint" role="status">保存在当前浏览器，可导出备份。不保存路径、提交身份或发布授权。</p>
+          <section class="template-manager" aria-labelledby="templates-title"><h2 id="templates-title"><span data-i18n="我的模板">My templates</span></h2>
+            <div class="template-select-row"><label for="saved-template"><span data-i18n="使用已保存模板">Use a saved template</span><select id="saved-template"><option value="" data-i18n="选择一个模板">Choose a template</option></select></label><button id="delete-template" type="button" class="secondary" disabled><span data-i18n="删除模板">Delete template</span></button></div>
+            <div class="template-save-row"><label for="template-name"><span data-i18n="模板名称">Template name</span><input id="template-name" maxlength="40" placeholder="e.g. My Java stack" data-i18n-placeholder="例如：我的 Java 全栈" autocomplete="off"></label><button id="save-template" type="button" class="secondary"><span data-i18n="保存当前配置">Save configuration</span></button></div>
+            <div class="template-tools"><button id="export-templates" type="button"><span data-i18n="导出模板">Export templates</span></button><button id="import-templates" type="button"><span data-i18n="导入模板">Import templates</span></button><input id="template-file" type="file" accept=".json,application/json" hidden></div>
+            <p id="template-message" class="hint" role="status"><span data-i18n="保存在当前浏览器，可导出备份。不保存路径、提交身份或发布授权。">Saved in this browser. Export a backup anytime. Paths, commit identity, and publishing permission are excluded.</span></p>
           </section>
-          <section aria-labelledby="project-title"><h2 id="project-title">项目信息</h2><div class="project-fields">
-            <label for="project-name">项目名称<input id="project-name" name="name" value="my-awesome-app" pattern="[a-z][a-z0-9\-]{1,47}" minlength="2" maxlength="48" required autocomplete="off" spellcheck="false" aria-describedby="name-hint"></label><p id="name-hint" class="hint">小写字母、数字或短横线，以字母开头。</p>
-            <label for="parent-dir">保存到<input id="parent-dir" name="parentDir" required autocomplete="off" spellcheck="false" placeholder="正在读取默认目录…"></label>
+          <section aria-labelledby="project-title"><h2 id="project-title"><span data-i18n="项目信息">Project details</span></h2><div class="project-fields">
+            <label for="project-name"><span data-i18n="项目名称">Project name</span><input id="project-name" name="name" value="my-awesome-app" pattern="[a-z][a-z0-9\-]{1,47}" minlength="2" maxlength="48" required autocomplete="off" spellcheck="false" aria-describedby="name-hint"></label><p id="name-hint" class="hint"><span data-i18n="小写字母、数字或短横线，以字母开头。">Lowercase letters, numbers, and hyphens. Start with a letter.</span></p>
+            <label for="parent-dir"><span data-i18n="保存到">Save to</span><input id="parent-dir" name="parentDir" required autocomplete="off" spellcheck="false" placeholder="Loading the default directory…" data-i18n-placeholder="正在读取默认目录…"></label>
           </div></section>
-          <fieldset><legend>前端框架</legend><div id="frontend-options" class="choices"></div></fieldset>
-          <fieldset><legend>后端框架</legend><div id="backend-options" class="choices"></div><label id="group-field" class="inline-field" for="group-id">Group ID<input id="group-id" name="groupId" value="com.example" required pattern="[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+" spellcheck="false"></label></fieldset>
-          <fieldset><legend>数据库</legend><div id="database-options" class="choices"></div><p id="database-hint" class="hint">生成 Compose 配置与连接驱动，开发启动时自动启动数据库。</p></fieldset>
-          <fieldset class="final-options"><legend>依赖安装</legend><label><input type="checkbox" id="install" name="install" checked><span>自动安装项目依赖<small>npm 依赖及 Maven 依赖，首次可能需要几分钟</small></span></label></fieldset>
-          <fieldset class="final-options git-options"><legend>Git 与 GitHub</legend>
-            <label><input type="checkbox" id="git" name="git" checked><span>初始化本地 Git 仓库<small>需要安装 Git；无需账号或登录</small></span></label>
-            <label><input type="checkbox" id="commit" name="commit"><span>创建首次提交<small>需要提交者姓名和邮箱；不需要登录</small></span></label>
-            <div id="identity-fields" class="identity-fields" hidden><label for="author-name">提交者姓名<input id="author-name" maxlength="100" placeholder="留空使用已有 Git 配置" autocomplete="name"></label><label for="author-email">提交者邮箱<input id="author-email" type="email" maxlength="254" placeholder="留空使用已有 Git 配置" autocomplete="email"></label><p class="hint">填写的身份只写入新项目的本地 Git 配置。</p></div>
-            <label><input type="checkbox" id="publish" name="publish"><span>创建 GitHub 仓库并推送<small>需要 GitHub CLI 认证；自动包含本地仓库和首次提交</small></span></label>
-            <div id="publish-fields" class="publish-fields" hidden><label for="repo-name">GitHub 仓库名<input id="repo-name" maxlength="100" value="my-awesome-app" pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,99}" autocomplete="off" spellcheck="false"></label><label for="visibility">仓库可见性<select id="visibility"><option value="private">私有 · 仅你和获授权成员可见</option><option value="public">公开 · 任何人都能查看源码</option></select></label><p id="publish-notice" class="hint">将代码推送到当前 GitHub 账号下的新私有仓库。</p></div>
+          <fieldset><legend><span data-i18n="前端框架">Frontend</span></legend><div id="frontend-options" class="choices"></div></fieldset>
+          <fieldset><legend><span data-i18n="后端框架">Backend</span></legend><div id="backend-options" class="choices"></div><label id="group-field" class="inline-field" for="group-id">Group ID<input id="group-id" name="groupId" value="com.example" required pattern="[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+" spellcheck="false"></label></fieldset>
+          <fieldset><legend><span data-i18n="数据库">Database</span></legend><div id="database-options" class="choices"></div><p id="database-hint" class="hint"><span data-i18n="生成 Compose 配置与连接驱动，开发启动时自动启动数据库。">Includes Compose and a database driver. The database starts with your development server.</span></p></fieldset>
+          <fieldset class="final-options"><legend><span data-i18n="依赖安装">Dependencies</span></legend><label><input type="checkbox" id="install" name="install" checked><span><span data-i18n="自动安装项目依赖">Install project dependencies</span><small><span data-i18n="npm 依赖及 Maven 依赖，首次可能需要几分钟">Install npm and Maven dependencies. The first run may take a few minutes.</span></small></span></label></fieldset>
+          <fieldset class="final-options git-options"><legend><span data-i18n="Git 与 GitHub">Git and GitHub</span></legend>
+            <label><input type="checkbox" id="git" name="git" checked><span><span data-i18n="初始化本地 Git 仓库">Initialize a local Git repository</span><small><span data-i18n="需要安装 Git；无需账号或登录">Requires Git. No account or sign-in needed.</span></small></span></label>
+            <label><input type="checkbox" id="commit" name="commit"><span><span data-i18n="创建首次提交">Create the first commit</span><small><span data-i18n="需要提交者姓名和邮箱；不需要登录">Requires an author name and email. No sign-in needed.</span></small></span></label>
+            <div id="identity-fields" class="identity-fields" hidden><label for="author-name"><span data-i18n="提交者姓名">Author name</span><input id="author-name" maxlength="100" placeholder="Leave blank to use your Git configuration" data-i18n-placeholder="留空使用已有 Git 配置" autocomplete="name"></label><label for="author-email"><span data-i18n="提交者邮箱">Author email</span><input id="author-email" type="email" maxlength="254" placeholder="Leave blank to use your Git configuration" data-i18n-placeholder="留空使用已有 Git 配置" autocomplete="email"></label><p class="hint"><span data-i18n="填写的身份只写入新项目的本地 Git 配置。">This identity is saved only in the new project’s local Git configuration.</span></p></div>
+            <label><input type="checkbox" id="publish" name="publish"><span><span data-i18n="创建 GitHub 仓库并推送">Create a GitHub repository and push</span><small><span data-i18n="需要 GitHub CLI 认证；自动包含本地仓库和首次提交">Requires GitHub CLI sign-in. Includes local Git initialization and the first commit.</span></small></span></label>
+            <div id="publish-fields" class="publish-fields" hidden><label for="repo-name"><span data-i18n="GitHub 仓库名">GitHub repository name</span><input id="repo-name" maxlength="100" value="my-awesome-app" pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,99}" autocomplete="off" spellcheck="false"></label><label for="visibility"><span data-i18n="仓库可见性">Repository visibility</span><select id="visibility"><option value="private" data-i18n="私有 · 仅你和获授权成员可见">Private · You and authorized collaborators</option><option value="public" data-i18n="公开 · 任何人都能查看源码">Public · Anyone can view the source</option></select></label><p id="publish-notice" class="hint"><span data-i18n="将代码推送到当前 GitHub 账号下的新私有仓库。">Push code to a new private repository under your current GitHub account.</span></p></div>
           </fieldset>
         </form>
         <div class="right-column">
-          <section class="environment" aria-labelledby="environment-title"><div class="panel-title"><h2 id="environment-title">创建前检查</h2><button type="button" id="check-environment" class="text-button">重新检测</button></div><p id="environment-summary" role="status" aria-live="polite">正在检测当前配置所需的环境…</p><ul id="critical-checks" class="check-list"></ul><details id="all-checks"><summary>查看已通过的检测项</summary><ul id="passed-checks" class="check-list"></ul></details><p class="hint">标红的问题会阻止创建。启动提示可在生成项目后处理。</p></section>
-          <section class="preview" aria-labelledby="preview-title"><div class="panel-title"><h2 id="preview-title">目录预览</h2><span id="stack-label">Vue / Spring Boot / MySQL</span></div><div class="tree-root"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v11H3zM3 7V4h7l2 3"/></svg><strong id="tree-name">my-awesome-app</strong><span>/</span></div><pre id="file-tree" aria-label="将生成的文件结构"></pre><div class="preview-note">独立目录 · 可直接开发 · 配置随项目保存</div></section>
-          <section class="launch" aria-labelledby="launch-title"><h2 id="launch-title">创建后，一条命令启动</h2><pre><code id="start-command">npm run dev</code></pre><p id="launch-description">同时启动前端、后端与数据库。前端 API 代理已配置。</p></section>
+          <section class="environment" aria-labelledby="environment-title"><div class="panel-title"><h2 id="environment-title"><span data-i18n="创建前检查">Preflight checks</span></h2><button type="button" id="check-environment" class="text-button"><span data-i18n="重新检测">Check again</span></button></div><p id="environment-summary" role="status" aria-live="polite"><span data-i18n="正在检测当前配置所需的环境…">Checking requirements for this configuration…</span></p><ul id="critical-checks" class="check-list"></ul><details id="all-checks"><summary><span data-i18n="查看已通过的检测项">View passed checks</span></summary><ul id="passed-checks" class="check-list"></ul></details><p class="hint"><span data-i18n="标红的问题会阻止创建。启动提示可在生成项目后处理。">Resolve errors before creating. Startup warnings can be addressed afterward.</span></p></section>
+          <section class="preview" aria-labelledby="preview-title"><div class="panel-title"><h2 id="preview-title"><span data-i18n="目录预览">Directory preview</span></h2><span id="stack-label">Vue / Spring Boot / MySQL</span></div><div class="tree-root"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v11H3zM3 7V4h7l2 3"/></svg><strong id="tree-name">my-awesome-app</strong><span>/</span></div><pre id="file-tree" aria-label="Files to be generated" data-i18n-aria-label="将生成的文件结构"></pre><div class="preview-note"><span data-i18n="独立目录 · 可直接开发 · 配置随项目保存">Separate directory · Ready to develop · Configuration included</span></div></section>
+          <section class="launch" aria-labelledby="launch-title"><h2 id="launch-title"><span data-i18n="创建后，一条命令启动">Start with one command</span></h2><pre><code id="start-command">npm run dev</code></pre><p id="launch-description"><span data-i18n="同时启动前端、后端与数据库。前端 API 代理已配置。">Start the frontend, backend, and database together. The API proxy is configured.</span></p></section>
           <section id="activity" class="activity" aria-labelledby="activity-title">
-            <div class="panel-title"><h2 id="activity-title">创建状态</h2><span id="job-state">准备就绪</span></div>
-            <label id="history-field" class="history-field" for="job-history" hidden>任务记录<select id="job-history" aria-label="任务记录"><option value="">选择任务</option></select></label>
-            <p id="job-message" role="status" aria-live="polite">项目会在新文件夹中创建。</p>
-            <progress id="progress" value="0" max="100" hidden aria-label="项目创建进度"></progress>
-            <div class="task-actions"><button id="cancel-job" type="button" class="secondary" hidden>取消任务</button><button id="resume-job" type="button" class="secondary" hidden>继续未完成的步骤</button></div>
-            <div id="recovery" hidden><p id="checkpoint-summary" class="hint"></p><code id="retained-path"></code><p class="hint">继续时使用此任务的原配置，保留已完成步骤。修改选项请创建新任务。</p></div>
-            <div id="result" hidden><p>项目路径</p><code id="result-path"></code><button id="copy-path" type="button" class="secondary">复制路径</button><p>进入项目目录后执行</p><pre><code id="result-commands"></code></pre><p id="remote-result"></p><a id="remote-link" target="_blank" rel="noreferrer" hidden>打开 GitHub 仓库</a><button id="retry-publish" type="button" class="secondary" hidden>重试 GitHub 发布</button></div>
-            <details id="logs-panel" hidden><summary>查看执行日志</summary><pre id="logs" tabindex="0"></pre></details>
+            <div class="panel-title"><h2 id="activity-title"><span data-i18n="创建状态">Creation status</span></h2><span id="job-state"><span data-i18n="准备就绪">Ready</span></span></div>
+            <label id="history-field" class="history-field" for="job-history" hidden><span data-i18n="任务记录">Task history</span><select id="job-history" aria-label="Task history" data-i18n-aria-label="任务记录"><option value="" data-i18n="选择任务">Choose a task</option></select></label>
+            <p id="job-message" role="status" aria-live="polite"><span data-i18n="项目会在新文件夹中创建。">Your project will be created in a new folder.</span></p>
+            <progress id="progress" value="0" max="100" hidden aria-label="Project creation progress" data-i18n-aria-label="项目创建进度"></progress>
+            <div class="task-actions"><button id="cancel-job" type="button" class="secondary" hidden><span data-i18n="取消任务">Cancel task</span></button><button id="resume-job" type="button" class="secondary" hidden><span data-i18n="继续未完成的步骤">Resume unfinished steps</span></button></div>
+            <div id="recovery" hidden><p id="checkpoint-summary" class="hint"></p><code id="retained-path"></code><p class="hint"><span data-i18n="继续时使用此任务的原配置，保留已完成步骤。修改选项请创建新任务。">Resume with the original configuration and keep completed steps. Start a new task to change options.</span></p></div>
+            <div id="result" hidden><p><span data-i18n="项目路径">Project path</span></p><code id="result-path"></code><button id="copy-path" type="button" class="secondary"><span data-i18n="复制路径">Copy path</span></button><p><span data-i18n="进入项目目录后执行">Run in the project directory</span></p><pre><code id="result-commands"></code></pre><p id="remote-result"></p><a id="remote-link" target="_blank" rel="noreferrer" hidden><span data-i18n="打开 GitHub 仓库">Open GitHub repository</span></a><button id="retry-publish" type="button" class="secondary" hidden><span data-i18n="重试 GitHub 发布">Retry GitHub publishing</span></button></div>
+            <details id="logs-panel" hidden><summary><span data-i18n="查看执行日志">View execution log</span></summary><pre id="logs" tabindex="0"></pre></details>
           </section>
         </div>
       </div>
-      <footer class="sheet-footer"><span>文件和创建操作都在你的电脑上完成。</span><span>StackForge / 从想法到代码</span></footer>
+      <footer class="sheet-footer"><span><span data-i18n="文件和创建操作都在你的电脑上完成。">Files are created on your computer.</span></span><span><span data-i18n="StackForge / 从想法到代码">StackForge / From idea to code</span></span></footer>
     </main>
   </div>
-  <noscript>请启用 JavaScript 以选择技术栈并创建项目。</noscript>
+  <noscript data-i18n="请启用 JavaScript 以选择技术栈并创建项目。">Enable JavaScript to choose a stack and create a project.</noscript>
 </body>
 </html>

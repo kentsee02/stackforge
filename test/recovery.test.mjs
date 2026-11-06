@@ -87,6 +87,7 @@ test('HTTP cancellation persists checkpoints, survives server restart and resume
   let installs = 0;
   const generate = (options, report, services) => generateProject(options, report, { ...services, fetchImpl, npm: async (args, { signal }) => {
     installs++;
+    if (signal.aborted) throw cancelled();
     if (installs === 1) await new Promise((resolve, reject) => { signal.addEventListener('abort', () => reject(cancelled()), { once: true }); });
   } });
   const open = async () => {

@@ -9,13 +9,13 @@ export function openBrowser(url) {
   const [command, args] = process.platform === 'win32' ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true, stdio: 'ignore' });
-    child.once('error', reject); child.once('close', code => code === 0 ? resolve() : reject(new Error('无法自动打开浏览器')));
+    child.once('error', reject); child.once('close', code => code === 0 ? resolve() : reject(new Error('Could not open the browser automatically.')));
   });
 }
 
 export async function launch({ port = 4310, directory = join(root, '.stackforge'), open = openBrowser, appOptions = {}, attempts = 20 } = {}) {
   const { createApp, identity } = await import('../src/server.mjs');
-  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('端口必须为 0–65535 之间的整数。');
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Port must be an integer between 0 and 65535.');
   const marker = join(directory, 'launcher.json');
   const isOurs = async url => {
     if (!/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(url)) return false;
@@ -45,22 +45,22 @@ export async function launch({ port = 4310, directory = join(root, '.stackforge'
     try { await mkdir(directory, { recursive: true }); await writeFile(marker, JSON.stringify({ url }), { mode: 0o600 }); }
     catch (error) { await new Promise(resolve => server.close(resolve)); throw error; }
     if (open) {
-      try { await open(url); } catch { console.log(`请在浏览器中打开 ${url}`); }
+      try { await open(url); } catch { console.log(`Open ${url} in your browser.`); }
     }
     return { url, server, reused: false };
   }
-  throw new Error('可选端口都已占用，请关闭旧服务，或使用 PORT 指定其他端口。');
+  throw new Error('All candidate ports are occupied. Close an old service or set PORT to another port.');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const [major, minor] = process.versions.node.split('.').map(Number);
   if (major < 22 || major === 22 && minor < 12) {
-    console.error('需要 Node.js 22.12+，推荐安装 Node.js 24 LTS：https://nodejs.org/en/download');
+    console.error('Node.js 22.12 or later is required. Install Node.js 24 LTS: https://nodejs.org/en/download');
     process.exitCode = 1;
   } else {
     try {
       const { url, server, reused } = await launch({ port: Number(process.env.PORT || 4310), open: process.env.STACKFORGE_NO_BROWSER === '1' ? false : openBrowser });
-      console.log(`\nStackForge 0.3.0\n${url}\n${reused ? '已打开现有服务。' : '关闭此窗口或按 Ctrl+C 停止服务；未完成的任务可恢复。'}\n`);
+      console.log(`\nStackForge 0.4.0\n${url}\n${reused ? 'Opened the existing service.' : 'Keep this window open. Press Ctrl+C to stop; unfinished tasks can be resumed.'}\n`);
       if (server) for (const event of ['SIGINT', 'SIGTERM']) process.on(event, async () => { await server.shutdownTasks(); server.close(() => process.exit(0)); });
     } catch (error) { console.error(error.message); process.exitCode = 1; }
   }

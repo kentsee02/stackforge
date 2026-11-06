@@ -1,9 +1,11 @@
-# StackForge 界面规范
+# StackForge interface
 
-用途为 Operate：在一个屏幕中选择技术栈，确认真实目录结构并创建项目。
+Mode: Operate. Choose a stack, inspect its actual directory structure, and create a project in one workspace.
 
-采用 framed-sheet 方向（seed 1874762435）。浅青灰 L 形外框与白色工作纸；左侧为真实可用预设与环境要求，主体左栏配置，右栏展示由当前选择推导的文件树。顶栏显示本机模式，唯一主要操作为创建项目。品牌符号为两个互相扣合的方括号，以组合工程目录为概念。使用实际文件树作为产品独有视觉内容。
+Preserve the framed-sheet direction (seed 1874762435): a pale blue-gray L-shaped frame around a white working sheet. The sidebar contains functional presets and requirements. Configuration is on the left; the derived file tree, checks, and task status are on the right. The top bar identifies local operation and provides a native language selector. The primary action creates a project. The mark uses interlocking square brackets to evoke assembled directories; the real file tree is the product’s signature visual content.
 
-字体 IBM Plex Sans（拉丁字形自托管），中文回退 Microsoft YaHei / system sans；代码与路径用系统等宽字体。标题 22px，段落 14px，小字 12px。主文字 #131416，次文字 #5d5f60，底色 #f0f5f6，工作纸 #fff，辅助表面 #f4f6f8，边框 #e8eaec，强调 #1b6c80，成功 #1e7b4f，错误 #c4242a。固定24px主间距；工作纸16px圆角，控件6px圆角。没有装饰图片、渐变或静态阴影。
+Use self-hosted IBM Plex Sans for Latin text, Microsoft YaHei / system sans for Chinese, and system monospace for code and paths. Title 22px, body 14px, secondary copy 12px. Tokens: text #131416, secondary #5d5f60, ground #f0f5f6, sheet #fff, auxiliary surface #f4f6f8, border #e8eaec, accent #1b6c80, success #1e7b4f, error #c4242a. Main spacing is 24px; sheet corners 16px and controls 6px. No decorative imagery, gradients, or resting shadows.
 
-选项为原生 radio 的完整点击行；强调选中边线，提供显著键盘焦点。生成时锁定配置，显示真实进度、可展开日志、成功路径与启动命令。错误保留选择并允许重试。窄屏隐藏侧栏、两列变单列，路径可换行。
+Use native radios with full clickable rows, selected borders, and visible keyboard focus. Lock configuration while generating; show real progress, expandable logs, the generated path, and startup commands. Preserve selections on errors and allow recovery.
+
+English is the default. A visible “Language / 语言” selector offers English and 华文 on desktop and narrow screens. Switching updates labels, metadata, accessible names, diagnostics, and task messages without reloading or changing inputs. User-authored names, paths, code, and external CLI output retain their content. Leave room for English text expansion and wrapping. Narrow screens hide the sidebar and stack columns; long paths wrap without horizontal page scrolling.

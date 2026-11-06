@@ -1,89 +1,87 @@
 # StackForge
 
-一个本地运行的全栈项目生成器。选择前端、后端和数据库，一键创建可以继续开发的项目。
+English | [华文](README.zh-CN.md)
 
-支持 **Vue / React + Spring Boot / Express + MySQL / PostgreSQL**，也可以只创建前端或后端。中文界面、真实目录预览、依赖自动安装、执行日志和 Git 初始化。
+A local, open-source full-stack project generator. Choose a frontend, backend, and database, then create a connected project in one step.
 
-v0.3 增加取消任务、从失败步骤继续、重启后恢复任务记录，以及 Windows 双击启动。已有创建前环境检测、自定义模板、本地 Git 初始化、首次提交和 GitHub 发布。
+**Vue / React + Spring Boot / Express + MySQL / PostgreSQL**, with frontend-only and backend-only options. Includes dependency installation, environment checks, reusable templates, Git setup, optional GitHub publishing, and resumable tasks. The generator has **zero third-party runtime dependencies**.
 
-## 快速开始
+Version 0.4 adds English and Chinese (华文), with English as the default. Switch languages from the top bar; your choice is remembered in the current browser. Switching does not reload the page or interrupt a task. Generated project documentation and starter messages are in English.
 
-先安装 [Node.js](https://nodejs.org/) 22.12+（推荐 24 LTS，自带 npm）和 Git，然后：
+## Quick start
+
+Install [Node.js](https://nodejs.org/en/download) 22.12 or later (Node.js 24 LTS recommended). Install Git to clone this repository and use Git features.
 
 ```sh
 git clone https://github.com/kentsee02/stackforge.git
 cd stackforge
-npm start
+npm run launch
 ```
 
-打开 **http://127.0.0.1:4310**。生成器本身没有第三方运行时依赖，不需要先执行 npm install。
+The launcher opens your browser, reuses an existing server for this checkout, and tries another port if 4310 is occupied. **On Windows, double-click `Start StackForge.cmd`** instead. Keep the terminal open while using the tool. No `npm install` is needed for StackForge itself.
 
-**Windows**：也可以双击项目内的 `Start StackForge.cmd`。它会检查 Node.js、启动服务并打开默认浏览器；重复启动会打开已有服务，默认端口被其他程序占用时会自动尝试后续端口。终端保持打开即可使用，关闭后未完成的任务仍可恢复。其他系统可以执行 `npm run launch` 使用相同启动流程。
+Alternatively, run `npm start` and open [http://127.0.0.1:4310](http://127.0.0.1:4310). Set `PORT` to use another port, for example `$env:PORT=4311; npm start` in PowerShell.
 
-1. 填写项目名称与保存父目录。
-2. 选择前端、后端、数据库，或使用侧栏预设。
-3. 查看「创建前检查」结果，按需选择安装依赖和 Git 操作，然后点击「检查并创建项目」。
-4. 成功后进入生成目录，执行 `npm run dev`。
+1. Enter a project name and an absolute parent directory.
+2. Choose your stack or apply a preset.
+3. Review preflight checks and select dependency installation and Git operations.
+4. Create the project, enter its directory, and run `npm run dev`.
 
-端口冲突时可用环境变量 `PORT` 修改监听端口。
+## Generated projects
 
-Windows PowerShell：`$env:PORT=4311; npm start`。
+- Vue 3 or React with Vite and TypeScript. Frontend `/api` requests proxy to the backend on port 8080.
+- Spring Boot from the official Spring Initializr service, using a stable release, Java 21, Maven Wrapper, a health endpoint, and optional JDBC connectivity.
+- Express with a health endpoint and optional mysql2 / pg connection pool and database check endpoint.
+- MySQL 8.4 or PostgreSQL 17 with Docker Compose, health checks, persistent volumes, and random local credentials.
+- npm workspaces for the frontend and Node backend, plus a development launcher that starts the database when needed.
+- English README, .gitignore, stackforge.json, and optional Git repository on the main branch.
+- npm dependencies resolved to exact versions at creation time, with a lockfile after installation.
 
-## 生成内容
+Database passwords are stored in the Git-ignored `.env`. Share `.env.example` instead. First commits and GitHub publishing are optional and off by default.
 
-- Vue 3 或 React，搭配 Vite 与 TypeScript；前端 `/api` 代理到本机 8080。
-- Spring Boot：从官方 Spring Initializr 下载稳定版本，包含 Java 21、Maven Wrapper、健康检查 API 和可选 JDBC 驱动。
-- Express：健康检查 API，可选 mysql2 / pg 连接池和数据库检查接口。
-- MySQL 8.4 或 PostgreSQL 17：Compose、持久化数据卷、健康检查，以及随机生成的本地密码。
-- npm workspaces 管理前端与 Node 后端；统一开发脚本在需要时自动启动数据库。
-- README、.gitignore、stackforge.json、可选 Git main 分支。
-- npm 包在创建时解析当前版本并写入精确版本号；安装后由 lockfile 锁定。
+## Preflight checks
 
-数据库密码放在被 Git 忽略的 `.env` 中，`.env.example` 可安全分享。首次提交和远程发布都是可选操作，默认关闭。
+Checks reflect the selected stack: Node.js, npm, JDK, Git, author identity, download sources, destination directory, and development ports. Database selections also check Docker Compose and its engine. GitHub CLI authentication and repository name availability are checked only when publishing is enabled.
 
-## 创建前环境检测
+Errors block creation and include recovery steps. npm and JDK are required immediately only when dependency installation needs them. A stopped Docker engine or occupied development port produces a startup warning, so files can still be generated. Requirements are checked again when a new task starts.
 
-按当前选择检查 Node.js、npm、JDK、Git、提交身份、下载源连接、保存目录及开发端口；使用数据库时检查 Compose 与 Docker 引擎。勾选 GitHub 发布后才检查 GitHub CLI 的认证账号和仓库名称。
+## Saved templates
 
-标红的问题会阻止创建，并附处理方法。JDK / npm 只有在勾选自动安装依赖时才必须立即可用；Docker 引擎未启动、开发端口占用等显示为启动提示，仍可先生成文件。每次实际创建都会重新检查，页面上的检测结果只代表检测时刻。
+Save the current stack under **My templates**. Saving an existing name replaces that template. Export/import JSON to back up templates or move them between browsers; duplicate names are skipped during import. Up to 20 templates are supported.
 
-## 自定义模板
+Templates live in browser storage for the current address. They contain stack choices, Group ID, installation, local Git, and first-commit options. They exclude project paths, names, author identity, credentials, and publishing permission. Applying a template always turns GitHub publishing off. Language preference is stored separately and is not part of a template.
 
-在「我的模板」中填写名称并保存当前技术栈。选择模板即可恢复配置；同名保存会更新该模板。支持导出 JSON 备份和导入，导入时跳过同名模板，最多保存 20 个。
+## Git and GitHub
 
-模板保存在当前浏览器、当前地址的本地存储中。更换浏览器或端口时可通过导出 / 导入迁移，清除浏览器数据会删除本地模板。模板只包含技术栈、Group ID、依赖安装、本地 Git 和首次提交选项；不保存项目路径、提交者身份、凭据或 GitHub 发布授权。应用模板始终关闭远程发布。
+- **Initialize a local repository:** requires Git 2.28 or later. No account or sign-in is needed.
+- **Create the first commit:** also requires an author name and email. Use existing Git configuration or enter an identity in the UI. An entered identity is saved only in the new project, without changing global Git settings.
+- **Create a GitHub repository and push:** install [GitHub CLI](https://cli.github.com/) and run `gh auth login --hostname github.com` first. This includes local initialization and the first commit. Repositories are private by default; publishing publicly requires choosing Public.
 
-## Git 与 GitHub
+The tool uses the current GitHub CLI account and does not collect passwords or tokens. It creates new repositories under that account and does not reuse or overwrite unrelated existing repositories.
 
-- **初始化本地 Git 仓库**：需要 Git 2.28+，不需要账号或登录。
-- **创建首次提交**：需要 Git 姓名和邮箱，可以使用已有配置，或在界面中填写。界面填写的身份只写入新项目，不修改全局设置。
-- **创建 GitHub 仓库并推送**：需要安装 [GitHub CLI](https://cli.github.com/)，先在终端执行 `gh auth login --hostname github.com`。工具使用该 CLI 当前账号创建新仓库，并推送 main 分支。此选项自动包含本地初始化和首次提交，默认创建私有仓库；可以明确选择公开。
+Publishing happens after the local project is ready. If it fails, local files, dependencies, and commits remain available. Retry from the UI, including after restarting via task history. Recorded remotes are checked against the account, repository ID, and visibility before retrying. If a network failure prevents the creation result from being recorded, inspect GitHub first; StackForge will not assume a same-name repository belongs to this task.
 
-工具不收集账号密码或令牌，也不会更改全局 Git 凭据配置。仅支持当前 GitHub 账号下的新仓库；同名仓库已存在时不会复用或覆盖。
+## Cancel and resume
 
-远程发布在本地项目创建完成后执行。发布失败时，本地代码、提交和依赖会保留，可点击「重试 GitHub 发布」；重启服务后也可从任务记录中找回。已创建并记录的远程仓库在重试前会校验账号、仓库 ID 和可见性，不会重复创建。网络中断导致创建结果未记录时，请先检查 GitHub 仓库，工具不会擅自复用同名仓库。
+**Cancel task** stops downloads and installation process trees, then preserves the unfinished project in a `.stackforge-*` directory under the chosen parent directory.
 
-## 取消与恢复
+**Resume unfinished steps** uses the original task configuration and skips completed stages. Completed files, existing `.env` passwords, and installation caches are preserved. An interrupted, incomplete file-generation stage may rewrite its own files. Start a new task to change the stack, name, or destination.
 
-创建时点击「取消任务」，工具会中止下载和安装进程，并等待子进程停止。未完成的项目保存在所选父目录下的 `.stackforge-*` 临时目录；取消不会删除已有文件。
+Task records are stored in the tool’s Git-ignored `.stackforge/jobs/` directory. They include paths, options, logs, and checkpoints, without copying `.env` passwords or GitHub credentials. After restarting, choose a task from **Task history**. Recovery validates directory ownership and stops if the retained directory was moved, removed, or its task marker no longer matches. Do not share `.stackforge/`: it may contain local paths and author identities. Unfinished directories are not automatically deleted.
 
-失败或取消后点击「继续未完成的步骤」，会沿用原任务配置，跳过完成的步骤，从未完成的步骤重试。已完成步骤生成的文件、已有 `.env` 密码和安装缓存会保留；正在生成但尚未完成的步骤可能重新写入其文件。若要更换技术栈、名称或保存位置，请新建任务。
+UI labels, preflight results, task status, and StackForge messages support both languages, including earlier task records. Output from external tools such as npm, Maven, and Git is displayed as emitted by those tools.
 
-任务记录保存在工具目录下被 Git 忽略的 `.stackforge/jobs/` 中，包含路径、配置、日志和进度，不复制 `.env` 密码或 GitHub 令牌。重启工具后，可在「任务记录」中选择并继续。恢复会验证临时目录归属；目录被移动、删除或标记不符时停止操作。不要将 `.stackforge/` 提交或分享，其中可能包含本机路径与提交身份。
+## Requirements and network access
 
-## 环境与网络
+- StackForge: Node.js 22.12 or later, including npm.
+- Spring Boot projects: Java 21 or later. Maven Wrapper is included; no global Maven is required.
+- Databases: Docker Desktop or Docker Engine with Compose v2. Images are pulled on the first development startup.
+- Git operations: Git 2.28 or later; commits need an author identity, and publishing needs an authenticated GitHub CLI.
+- Creation accesses npm registry and, for Spring Boot, start.spring.io. Maven and Docker need network access for initial downloads.
 
-- 工具本身：Node.js 22.12+；推荐 Node.js 24 LTS。
-- Spring Boot：Java 21+，无需全局安装 Maven。自动安装选项会通过 Wrapper 预下载 Java 依赖。
-- 数据库：Docker Desktop 或 Docker Engine + Compose v2。创建时生成配置，首次 `npm run dev` 时拉取镜像并启动。
-- Git 初始化：本机需要 Git 2.28+；首次提交额外需要姓名和邮箱，GitHub 发布额外需要已认证的 GitHub CLI。
-- 生成时需要访问 npm registry；选择 Spring Boot 时还需访问 start.spring.io。Maven 和 Docker 在首次下载时也需要网络。
+StackForge listens only on `127.0.0.1`. Do not deploy it as a public service. Write requests validate Host, Origin, and a random per-start request token. Commands use fixed argument lists. Projects are built in staging directories and moved into place after success; existing destinations are never merged or overwritten.
 
-工具只监听 `127.0.0.1`，不要将它作为公网服务部署。写入 API 校验 Host、Origin 和每次启动随机生成的请求令牌。执行固定命令，不接受自定义 shell 命令。
-
-创建过程使用临时目录，成功后才放到目标路径；遇到已存在的项目目录会拒绝覆盖。工具不会自动清理取消任务的临时目录或测试数据库的数据卷。
-
-## 开发
+## Development and validation
 
 ```sh
 npm test
@@ -91,18 +89,28 @@ npm run check
 npm start
 ```
 
-代码分为 `src/generator.mjs`（创建流程）、`src/checkpoint.mjs`（步骤恢复）、`src/jobs.mjs` 与 `src/job-store.mjs`（任务和持久化）、`src/templates.mjs`（技术栈模板）、`src/environment.mjs`（环境检查）、`src/git.mjs`（Git 和 GitHub）、`src/server.mjs`（本机 API）及 `public/`（界面）。测试使用 Node.js 自带运行器，覆盖技术栈、环境诊断、模板过滤、真实本地提交、子进程取消、重启恢复、目录归属、启动器和 API 写入保护。`npm test` 中的 GitHub 发布测试使用模拟 API，不创建远程仓库。
+Tests use Node’s built-in runner. They cover stack combinations, input validation, environment diagnostics, template filtering, real local commits, subprocess cancellation, restart recovery, directory ownership, launcher reuse, simulated GitHub retry, and local API protections. Unit tests do not create remote repositories.
 
-真实联调可执行 `npm run test:integration`。需要 Node.js、Git、Java 21、可用的 Docker 引擎及网络，并保持 5173 / 8080 端口空闲。它在 `work/integration/` 生成 Vue + Express + PostgreSQL 和 React + Spring Boot + MySQL，安装并构建，启动开发服务，通过前端代理执行真实数据库查询，并保存 `report.json`。结束后停止测试服务和容器，保留生成项目与数据库数据卷。
+For real frontend/backend/database integration:
 
-可选参数 `--only=node` / `--only=java` 只验证一组。显式执行 `npm run test:integration -- --only=node --github --repo-name=你的测试仓库名` 会使用当前已认证的 GitHub 账号创建并推送**新的私有仓库**，校验远程提交；仓库会保留，不归档或删除。默认联调不操作 GitHub。
+```sh
+npm run test:integration
+```
 
-欢迎通过 Issue 或 PR 添加框架和模板。说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+Requires Git, Java 21, a running Docker engine, network access, and free ports 5173 / 8080. Creates Vue + Express + PostgreSQL and React + Spring Boot + MySQL projects under `work/integration/`, installs and builds them, starts development services, performs real database queries through the frontend proxy, and writes `report.json`. Test services and containers stop afterward; projects and database volumes remain.
 
-## 当前范围
+Use `--only=node` or `--only=java` to check one stack. The explicit command below also creates and pushes a **new private GitHub repository** under the current authenticated account and verifies its remote commit. The repository is retained; it is not archived or deleted. Default integration tests do not operate on GitHub.
 
-第一版提供 npm、Java 21 / Maven、Vue / React、Express / Spring Boot、MySQL / PostgreSQL。暂不提供全局运行环境安装、桌面安装包、更多包管理器或远程部署。生成的是开发骨架，业务功能、身份验证和生产部署配置需要按需求添加。
+```sh
+npm run test:integration -- --only=node --github --repo-name=your-test-repository
+```
 
-## 致谢与许可
+Main modules: `src/generator.mjs` (creation), `src/checkpoint.mjs` (recovery), `src/jobs.mjs` / `src/job-store.mjs` (tasks), `src/templates.mjs` (generated code), `src/environment.mjs` (checks), `src/git.mjs` (Git/GitHub), `src/server.mjs` (local API), and `public/` (UI and localization). See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
 
-使用 [Vite](https://vite.dev/guide/)、[Spring Initializr](https://docs.spring.io/initializr/docs/current/reference/html/) 的官方接口与配置约定。界面的 IBM Plex Sans 字体来自 [IBM Plex](https://github.com/IBM/plex)，遵循 SIL Open Font License，见 [public/OFL.txt](public/OFL.txt)。本项目按 [MIT](LICENSE) 开源。
+## Scope
+
+Supports npm, Java 21 / Maven, Vue / React, Express / Spring Boot, and MySQL / PostgreSQL. Global runtime installation, desktop installers, other package managers, and remote deployment are outside the current scope. Generated projects are development starters: add business logic, authentication, and production configuration as needed.
+
+## Credits and license
+
+Uses official [Vite](https://vite.dev/guide/) conventions and [Spring Initializr](https://docs.spring.io/initializr/docs/current/reference/html/) APIs. IBM Plex Sans comes from [IBM Plex](https://github.com/IBM/plex) under the SIL Open Font License; see [public/OFL.txt](public/OFL.txt). StackForge is [MIT licensed](LICENSE).

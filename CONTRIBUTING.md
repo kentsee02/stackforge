@@ -1,7 +1,9 @@
-# 参与开发
+# Contributing to StackForge
 
-使用 Node.js 22.12+，克隆后执行 `npm test` 和 `npm run check`，`npm start` 启动本地界面。工具本身不依赖第三方 npm 包。
+Use Node.js 22.12 or later. Run `npm test` and `npm run check` after cloning; start the local UI with `npm start`. The generator has no third-party runtime dependencies.
 
-新增技术栈时，先在 `src/catalog.mjs` 声明选项，再扩展模板和创建流程；为兼容组合、文件生成、失败清理添加有意义的测试。保持默认只监听本机、不覆盖已有目录、不提交 `.env`，并避免将用户输入拼接到 shell 命令。
+For a new stack, declare its options in `src/catalog.mjs`, then extend the templates and generator. Add meaningful coverage for supported combinations, generated output, and failure recovery. Keep the server local, preserve existing directories, exclude `.env` from commits, and never interpolate user input into shell commands.
 
-提交 PR 时说明解决的问题、生成结果和验证方法。不要提交测试项目、node_modules、临时日志或凭据。
+For interface changes, support both English and Chinese. Add message pairs to `public/messages.js`; `{name}` slots hold runtime values. Use `setText` from `public/i18n.js` for dynamic UI messages so an in-progress task can switch languages without reloading. Use `data-i18n` and corresponding attribute bindings for static copy. Keep user names, paths, code, and external CLI output intact. English is the default; generated project documentation stays in English.
+
+Describe the problem, resulting behavior, and validation in English when submitting an issue or pull request. Do not commit generated test projects, node_modules, temporary logs, task records, or credentials. Real integration tests create local projects and persistent Docker volumes; `--github` additionally creates and retains a private remote repository.

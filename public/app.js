@@ -1,3 +1,5 @@
+import { setText, setupI18n } from './i18n.js';
+setupI18n();
 import { normalizeTemplate, parseTemplateFile } from './template-store.js';
 
 const $ = selector => document.querySelector(selector);
@@ -28,8 +30,8 @@ function choices(key) {
     const input = document.createElement('input');
     Object.assign(input, { type: 'radio', name: key, value: item.id, checked: index === 0 });
     const text = document.createElement('span');
-    const title = document.createElement('strong'); title.textContent = item.name;
-    const detail = document.createElement('small'); detail.textContent = item.detail;
+    const title = document.createElement('strong'); setText(title, item.name);
+    const detail = document.createElement('small'); setText(detail, item.detail);
     text.append(title, detail); label.append(input, text); container.append(label);
   }
 }
@@ -46,10 +48,10 @@ function updatePreview() {
   for (const field of document.querySelectorAll('#identity-fields input')) field.disabled = !$('#commit').checked;
   for (const field of document.querySelectorAll('#publish-fields input, #publish-fields select')) field.disabled = !$('#publish').checked;
   const options = readOptions();
-  if (!running) createButton.querySelector('span').textContent = options.publish ? '创建并发布到 GitHub' : '检查并创建项目';
-  $('#publish-notice').textContent = `将代码推送到当前 GitHub 账号下的新${options.visibility === 'public' ? '公开' : '私有'}仓库${options.visibility === 'public' ? '，源码和提交记录将对所有人可见。' : '。'}`;
+  if (!running) setText(createButton.querySelector('span'), options.publish ? '创建并发布到 GitHub' : '检查并创建项目');
+  setText($('#publish-notice'), `将代码推送到当前 GitHub 账号下的新${options.visibility === 'public' ? '公开' : '私有'}仓库${options.visibility === 'public' ? '，源码和提交记录将对所有人可见。' : '。'}`);
   const labels = ['frontend', 'backend', 'database'].filter(key => options[key] !== 'none').map(key => state.catalog[key].find(item => item.id === options[key]).name);
-  $('#stack-label').textContent = labels.join(' / ');
+  setText($('#stack-label'), labels.join(' / '));
   $('#tree-name').textContent = options.name || 'my-project';
   const nodes = [];
   if (options.frontend !== 'none') nodes.push(['frontend/', [`src/App.${options.frontend === 'vue' ? 'vue' : 'tsx'}`, `src/main.${options.frontend === 'vue' ? 'ts' : 'tsx'}`, 'vite.config.ts', 'package.json']]);
@@ -60,13 +62,13 @@ function updatePreview() {
   if (options.git) nodes.push(['.git/']);
   $('#file-tree').textContent = nodes.map(([name, children], index) => `${index === nodes.length - 1 ? '└' : '├'}─ ${name}${children ? '\n' + children.map((child, ci) => `${index === nodes.length - 1 ? ' ' : '│'}  ${ci === children.length - 1 ? '└' : '├'}─ ${child}`).join('\n') : ''}`).join('\n');
   $('#start-command').textContent = options.install ? 'npm run dev' : 'npm install\nnpm run dev';
-  $('#launch-description').textContent = options.database !== 'none' ? '自动启动数据库，并运行前后端服务。数据库数据保存在 Docker 数据卷中。' : backend === 'none' ? '启动 Vite 开发服务器，直接开始编写页面。' : options.frontend === 'none' ? '启动后端服务，健康检查接口开箱即用。' : '同时启动前后端，/api 请求自动代理到本机后端。';
-  $('#database-hint').textContent = options.database === 'none' ? '不生成数据库服务，后续可按需要添加。' : '生成 Compose 配置与连接驱动，开发启动时自动启动数据库。';
+  setText($('#launch-description'), options.database !== 'none' ? '自动启动数据库，并运行前后端服务。数据库数据保存在 Docker 数据卷中。' : backend === 'none' ? '启动 Vite 开发服务器，直接开始编写页面。' : options.frontend === 'none' ? '启动后端服务，健康检查接口开箱即用。' : '同时启动前后端，/api 请求自动代理到本机后端。');
+  setText($('#database-hint'), options.database === 'none' ? '不生成数据库服务，后续可按需要添加。' : '生成 Compose 配置与连接驱动，开发启动时自动启动数据库。');
   const requirements = ['Node.js 22.12+'];
   if (backend === 'spring') requirements.push('Java 21+ · 自动提供 Maven Wrapper');
   if (options.database !== 'none') requirements.push('Docker Desktop / Docker Compose v2');
   if (options.git) requirements.push('Git');
-  $('#requirements').replaceChildren(...requirements.map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
+  $('#requirements').replaceChildren(...requirements.map(text => { const li = document.createElement('li'); setText(li, text); return li; }));
   try { localStorage.setItem('stackforge.preferences', JSON.stringify({ frontend: options.frontend, backend, database: options.database, groupId: options.groupId, install: options.install, git: options.git, commit: options.commit })); } catch {}
 }
 
@@ -82,26 +84,26 @@ function renderEnvironment(report) {
   const warnings = report.checks.filter(item => item.status === 'warning');
   const passed = report.checks.filter(item => item.status === 'ok');
   $('.environment').dataset.status = errors.length ? 'error' : warnings.length ? 'warning' : 'ok';
-  $('#environment-summary').textContent = errors.length ? `${errors.length} 项问题需处理后再创建` : warnings.length ? `可以创建 · ${warnings.length} 项启动提示` : '环境就绪，可以创建';
+  setText($('#environment-summary'), errors.length ? `${errors.length} 项问题需处理后再创建` : warnings.length ? `可以创建 · ${warnings.length} 项启动提示` : '环境就绪，可以创建');
   const row = item => {
     const li = document.createElement('li'); li.dataset.status = item.status;
-    const title = document.createElement('strong'); title.textContent = item.label;
-    const detail = document.createElement('p'); detail.textContent = item.detail;
+    const title = document.createElement('strong'); setText(title, item.label);
+    const detail = document.createElement('p'); setText(detail, item.detail);
     li.append(title, detail);
-    if (item.status !== 'ok' && item.fix) { const fix = document.createElement('p'); fix.textContent = item.fix; li.append(fix); }
-    if (item.url) { const link = document.createElement('a'); link.href = item.url; link.textContent = '打开官方安装说明'; link.target = '_blank'; link.rel = 'noreferrer'; li.append(link); }
+    if (item.status !== 'ok' && item.fix) { const fix = document.createElement('p'); setText(fix, item.fix); li.append(fix); }
+    if (item.url) { const link = document.createElement('a'); link.href = item.url; setText(link, '打开官方安装说明'); link.target = '_blank'; link.rel = 'noreferrer'; li.append(link); }
     return li;
   };
   $('#critical-checks').replaceChildren(...[...errors, ...warnings].map(row));
   $('#passed-checks').replaceChildren(...passed.map(row));
-  $('#all-checks summary').textContent = `${passed.length} 项检测已通过`;
+  setText($('#all-checks summary'), `${passed.length} 项检测已通过`);
 }
 
 async function runChecks() {
   if (!state || running) return;
   const serial = ++checkSerial;
   $('#check-environment').disabled = true;
-  $('#environment-summary').textContent = '正在检测当前配置所需的环境…';
+  setText($('#environment-summary'), '正在检测当前配置所需的环境…');
   try {
     const response = await fetch('/api/checks', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': state.token }, body: JSON.stringify(readOptions()), signal: AbortSignal.timeout(40000) });
     const report = await response.json();
@@ -111,7 +113,7 @@ async function runChecks() {
   } catch (error) {
     if (serial !== checkSerial) return;
     $('.environment').dataset.status = 'error';
-    $('#environment-summary').textContent = error.message || '检测未完成，请检查本地服务后重试。';
+    setText($('#environment-summary'), error.message || '检测未完成，请检查本地服务后重试。');
   } finally { if (serial === checkSerial) $('#check-environment').disabled = running; }
 }
 
@@ -122,13 +124,13 @@ function scheduleChecks() {
 }
 
 function templateMessage(message, error = false) {
-  $('#template-message').textContent = message;
+  setText($('#template-message'), message);
   $('#template-message').dataset.status = error ? 'error' : 'ok';
 }
 
 function refreshTemplates(selected = '') {
   const select = $('#saved-template');
-  const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = templates.length ? '选择一个模板' : '还没有保存的模板';
+  const placeholder = document.createElement('option'); placeholder.value = ''; setText(placeholder, templates.length ? '选择一个模板' : '还没有保存的模板');
   select.replaceChildren(placeholder, ...templates.map(item => { const option = document.createElement('option'); option.value = item.name; option.textContent = item.name; return option; }));
   select.value = selected;
   $('#delete-template').disabled = running || !select.value;
@@ -156,7 +158,7 @@ function lockForm(value) {
   for (const input of form.querySelectorAll('input, select, button')) input.disabled = value;
   for (const button of document.querySelectorAll('[data-preset], #check-environment, #retry-publish, #resume-job, #job-history')) button.disabled = value;
   createButton.disabled = value;
-  createButton.querySelector('span').textContent = value ? '正在创建…' : '创建项目';
+  setText(createButton.querySelector('span'), value ? '正在创建…' : '创建项目');
   if (!value) { updatePreview(); refreshTemplates($('#saved-template').value); }
 }
 
@@ -164,10 +166,10 @@ function restoreOptions(options) {
   clearTimeout(checkTimer);
   ++checkSerial;
   $('.environment').dataset.status = 'idle';
-  $('#environment-summary').textContent = '已恢复任务配置；新建项目时会重新检查环境。';
+  setText($('#environment-summary'), '已恢复任务配置；新建项目时会重新检查环境。');
   $('#critical-checks').replaceChildren();
   $('#passed-checks').replaceChildren();
-  $('#all-checks summary').textContent = '尚未重新检测';
+  setText($('#all-checks summary'), '尚未重新检测');
   $('#check-environment').disabled = running;
   for (const key of ['frontend', 'backend', 'database', 'name', 'parentDir', 'groupId']) if (options[key]) form.elements[key].value = options[key];
   for (const key of ['install', 'git', 'commit', 'publish']) $(`#${key}`).checked = Boolean(options[key]);
@@ -177,10 +179,10 @@ function restoreOptions(options) {
 
 function renderHistory(jobs) {
   $('#history-field').hidden = !jobs.length;
-  const empty = document.createElement('option'); empty.value = ''; empty.textContent = '选择已保存的任务';
+  const empty = document.createElement('option'); empty.value = ''; setText(empty, '选择已保存的任务');
   $('#job-history').replaceChildren(empty, ...jobs.map(job => {
     const option = document.createElement('option'); option.value = job.id;
-    option.textContent = `${job.name} · ${statusNames[job.status] || job.status}`;
+    setText(option, `${job.name} · ${statusNames[job.status] || job.status}`);
     return option;
   }));
   if (jobs.some(job => job.id === currentJob)) $('#job-history').value = currentJob;
@@ -192,8 +194,8 @@ async function refreshHistory() {
 
 function showError(message) {
   activity.dataset.status = 'failed';
-  $('#job-state').textContent = '创建失败';
-  $('#job-message').textContent = message;
+  setText($('#job-state'), '创建失败');
+  setText($('#job-message'), message);
   $('#progress').hidden = true;
   lockForm(false);
 }
@@ -211,19 +213,19 @@ async function pollJob() {
       throw new Error(job.error);
     }
     activity.dataset.status = job.status;
-    $('#job-state').textContent = job.status === 'running' ? `${job.progress}%` : job.status === 'complete' ? '创建成功' : statusNames[job.status] || '创建失败';
-    $('#job-message').textContent = job.status === 'failed' ? job.error : job.step;
+    setText($('#job-state'), job.status === 'running' ? `${job.progress}%` : job.status === 'complete' ? '创建成功' : statusNames[job.status] || '创建失败');
+    setText($('#job-message'), job.status === 'failed' ? job.error : job.step);
     $('#progress').value = job.progress;
-    $('#logs').textContent = job.logs.join('\n');
+    setText($('#logs'), job.logs.join('\n'));
     const active = ['running', 'cancelling'].includes(job.status);
     $('#cancel-job').hidden = !active;
     $('#cancel-job').disabled = job.status === 'cancelling';
-    $('#cancel-job').textContent = job.status === 'cancelling' ? '正在停止…' : '取消任务';
+    setText($('#cancel-job'), job.status === 'cancelling' ? '正在停止…' : '取消任务');
     $('#resume-job').hidden = !job.canResume;
     $('#recovery').hidden = !job.canResume;
     if (job.canResume) {
-      $('#checkpoint-summary').textContent = job.retainedPath ? `已保留 ${job.completed.length} 个完成步骤与项目文件。` : '环境检查尚未通过，可以修复环境后重试。';
-      $('#retained-path').textContent = job.retainedPath || '';
+      setText($('#checkpoint-summary'), job.retainedPath ? `已保留 ${job.completed.length} 个完成步骤与项目文件。` : '环境检查尚未通过，可以修复环境后重试。');
+      setText($('#retained-path'), job.retainedPath || '');
     }
     if (job.environment) renderEnvironment(job.environment);
     if (active) { if (!running) lockForm(true); pollTimer = setTimeout(pollJob, 900); return; }
@@ -235,19 +237,19 @@ async function pollJob() {
       $('#result').hidden = false;
       $('#result-path').textContent = job.result.path;
       $('#result-commands').textContent = job.result.commands.join('\n');
-      if (job.status === 'complete') $('#job-message').textContent = '文件已生成。进入项目目录，即可开始开发。';
+      if (job.status === 'complete') setText($('#job-message'), '文件已生成。进入项目目录，即可开始开发。');
       const remote = job.result.remote;
       $('#remote-link').hidden = remote?.status !== 'published';
       $('#retry-publish').hidden = remote?.status !== 'failed';
-      $('#remote-result').textContent = remote?.status === 'published' ? `已发布到 GitHub · ${remote.visibility === 'public' ? '公开仓库' : '私有仓库'}` : remote?.status === 'failed' ? `本地项目已保留。GitHub 发布未完成：${remote.error}` : '';
+      setText($('#remote-result'), remote?.status === 'published' ? `已发布到 GitHub · ${remote.visibility === 'public' ? '公开仓库' : '私有仓库'}` : remote?.status === 'failed' ? `本地项目已保留。GitHub 发布未完成：${remote.error}` : '');
       if (remote?.status === 'published') $('#remote-link').href = remote.url;
-      if (remote?.status === 'failed') { $('#job-state').textContent = '本地已创建'; $('#logs-panel').open = true; }
+      if (remote?.status === 'failed') { setText($('#job-state'), '本地已创建'); $('#logs-panel').open = true; }
     }
     if (job.status !== 'complete') $('#logs-panel').open = true;
     refreshHistory();
   } catch (error) {
-    $('#job-state').textContent = '连接已断开';
-    $('#job-message').textContent = '无法读取创建状态，请检查本地服务。连接恢复后将继续显示进度。';
+    setText($('#job-state'), '连接已断开');
+    setText($('#job-message'), '无法读取创建状态，请检查本地服务。连接恢复后将继续显示进度。');
     pollTimer = setTimeout(pollJob, 3000);
   }
 }
@@ -271,14 +273,14 @@ form.addEventListener('submit', async event => {
   $('#result').hidden = true;
   $('#recovery').hidden = true;
   $('#resume-job').hidden = true;
-  $('#logs').textContent = '';
+  setText($('#logs'), '');
   $('#logs-panel').hidden = false;
   $('#logs-panel').open = false;
   $('#progress').hidden = false;
   $('#progress').value = 0;
   activity.dataset.status = 'running';
-  $('#job-state').textContent = '准备中';
-  $('#job-message').textContent = '正在执行创建前检查…';
+  setText($('#job-state'), '准备中');
+  setText($('#job-message'), '正在执行创建前检查…');
   lockForm(true);
   try {
     const response = await fetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': state.token }, body: JSON.stringify(options) });
@@ -354,7 +356,7 @@ $('#cancel-job').addEventListener('click', async () => {
     const response = await fetch(`/api/jobs/${currentJob}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': state.token }, body: '{}' });
     const data = await response.json(); if (!response.ok) throw new Error(data.error);
     clearTimeout(pollTimer); pollJob();
-  } catch (error) { $('#job-message').textContent = error.message; $('#cancel-job').disabled = false; }
+  } catch (error) { setText($('#job-message'), error.message); $('#cancel-job').disabled = false; }
 });
 $('#resume-job').addEventListener('click', async () => {
   restoreOptions(currentOptions); lockForm(true);
@@ -375,8 +377,8 @@ $('#job-history').addEventListener('change', async () => {
   $('#logs-panel').hidden = false; pollJob();
 });
 $('#copy-path').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText($('#result-path').textContent); $('#copy-path').textContent = '已复制'; setTimeout(() => { $('#copy-path').textContent = '复制路径'; }, 1600); }
-  catch { $('#copy-path').textContent = '请手动选择上方路径复制'; }
+  try { await navigator.clipboard.writeText($('#result-path').textContent); setText($('#copy-path'), '已复制'); setTimeout(() => { setText($('#copy-path'), '复制路径'); }, 1600); }
+  catch { setText($('#copy-path'), '请手动选择上方路径复制'); }
 });
 
 async function init() {
@@ -387,7 +389,7 @@ async function init() {
     renderHistory(state.jobs || []);
     ['frontend', 'backend', 'database'].forEach(choices);
     $('#parent-dir').value = state.defaultDir;
-    $('#node-version').textContent = `Node.js ${state.node} · 已连接`;
+    setText($('#node-version'), `Node.js ${state.node} · 已连接`);
     let preferences;
     try { preferences = JSON.parse(localStorage.getItem('stackforge.preferences') || 'null'); } catch {}
     if (preferences) {
@@ -411,6 +413,6 @@ async function init() {
       if (check.ok) { lockForm(true); $('#logs-panel').hidden = false; $('#progress').hidden = false; pollJob(); }
       else { try { sessionStorage.removeItem('stackforge.job'); } catch {} }
     }
-  } catch (error) { $('#job-state').textContent = '服务未连接'; $('#job-message').textContent = error.message; }
+  } catch (error) { setText($('#job-state'), '服务未连接'); setText($('#job-message'), error.message); }
 }
 init();

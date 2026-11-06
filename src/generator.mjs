@@ -10,7 +10,7 @@ import { json, frontendFiles, expressFiles, databaseFiles, devScript, generatedR
 
 export async function download(url, { fetchImpl = fetch, binary = false, signal } = {}) {
   throwIfCancelled(signal);
-  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.3.0' } });
+  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.4.0' } });
   if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）：${new URL(url).hostname}`);
   if (binary) {
     const reader = response.body.getReader();
@@ -126,7 +126,7 @@ export async function generateProject(input, report = () => {}, services = {}) {
       const path = 'backend/src/main/java/' + packageName.replaceAll('.', '/') + '/HealthController.java';
       await put(staging, {
         'backend/src/main/resources/application.properties': properties,
-        [path]: `package ${packageName};\n\nimport java.util.Map;\nimport org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RestController;\n${options.database === 'none' ? '' : 'import org.springframework.jdbc.core.JdbcTemplate;\nimport org.springframework.http.ResponseEntity;\n'}\n@RestController\npublic class HealthController {\n${options.database === 'none' ? '' : '    private final JdbcTemplate jdbc;\n    public HealthController(JdbcTemplate jdbc) { this.jdbc = jdbc; }\n'}    @GetMapping("/api/health")\n    public Map<String, String> health() { return Map.of("status", "ok", "message", "你好，${options.name}！前后端已连接。"); }\n${options.database === 'none' ? '' : `    @GetMapping("/api/db")\n    public ResponseEntity<Map<String, String>> database() {\n        try { jdbc.queryForObject("SELECT 1", Integer.class); return ResponseEntity.ok(Map.of("status", "ok", "database", "${options.database}")); }\n        catch (Exception ex) { return ResponseEntity.status(503).body(Map.of("status", "unavailable")); }\n    }\n`}}\n`
+        [path]: `package ${packageName};\n\nimport java.util.Map;\nimport org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RestController;\n${options.database === 'none' ? '' : 'import org.springframework.jdbc.core.JdbcTemplate;\nimport org.springframework.http.ResponseEntity;\n'}\n@RestController\npublic class HealthController {\n${options.database === 'none' ? '' : '    private final JdbcTemplate jdbc;\n    public HealthController(JdbcTemplate jdbc) { this.jdbc = jdbc; }\n'}    @GetMapping("/api/health")\n    public Map<String, String> health() { return Map.of("status", "ok", "message", "Hello, ${options.name}! The frontend and backend are connected."); }\n${options.database === 'none' ? '' : `    @GetMapping("/api/db")\n    public ResponseEntity<Map<String, String>> database() {\n        try { jdbc.queryForObject("SELECT 1", Integer.class); return ResponseEntity.ok(Map.of("status", "ok", "database", "${options.database}")); }\n        catch (Exception ex) { return ResponseEntity.status(503).body(Map.of("status", "unavailable")); }\n    }\n`}}\n`
       });
     } else if (options.backend === 'express') await put(staging, expressFiles(options, versions));
     });
@@ -138,7 +138,7 @@ export async function generateProject(input, report = () => {}, services = {}) {
       '.gitignore': 'node_modules/\ndist/\ntarget/\n.env\n.env.*\n!.env.example\n.stackforge-owner\n.stackforge-cache/\n*.log\n.idea/\n.vscode/\n.DS_Store\n',
       'scripts/dev.mjs': devScript(options),
       'README.md': generatedReadme(options),
-      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.3.0', createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
+      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.4.0', createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
     });
     });
     if (options.install) {

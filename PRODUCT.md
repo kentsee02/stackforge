@@ -1,13 +1,15 @@
 # StackForge
 
-面向反复初始化全栈项目的开发者。工具在本机运行，通过中文浏览器界面将前端、后端、数据库选择转换为一个独立目录。
+A local tool for developers who repeatedly initialize full-stack projects. A browser interface turns frontend, backend, and database choices into an independent project directory. English is the default; English and Chinese (华文) can be switched without reloading, including during creation. Language preference is stored in the current browser.
 
-第一版支持 Vue / React / 无前端，Spring Boot / Express / 无后端，MySQL / PostgreSQL / 无数据库。生成真实代码、API 代理、数据库驱动、Compose、随机本地凭据、Maven Wrapper、可选依赖安装和 Git 初始化。提供日志、错误与重试。
+Supports Vue / React / no frontend, Spring Boot / Express / no backend, and MySQL / PostgreSQL / no database. Generates real code, an API proxy, database drivers, Compose, random local credentials, Maven Wrapper, English documentation, optional dependency installation, and optional local Git initialization. Uses Node.js with no third-party runtime dependencies and is MIT licensed.
 
-它只监听本机回环地址；不会安装系统级 Node、Java 或 Docker。使用者需自行具备对应运行环境。生成数据库配置，首次启动开发脚本才拉取 Docker 镜像。保存目标不可覆盖已有目录。
+The server listens only on loopback. Users install Node.js, Java, and Docker themselves. Database images are pulled when the generated development launcher first starts them. Existing project directories cannot be overwritten.
 
-本项目使用 MIT 开源许可，第一版以无第三方运行时依赖的 Node.js 本地工具交付。
+Preflight checks cover runtime tools, download sources, destinations, and ports, separating creation blockers from startup warnings. Personal templates use browser storage, support JSON import/export, and exclude paths, identities, and publishing permission.
 
-v0.2 在创建前检测系统环境、下载源、保存位置和端口，区分创建阻碍与启动提示。个人模板存储于浏览器，支持 JSON 导入导出，排除路径、身份和发布授权。Git 操作拆为本地初始化、首次提交和 GitHub 发布，只有后者需要认证。发布默认关闭、可见性默认私有，不覆盖已有远程仓库，失败保留本地项目并支持重试。提交身份仅写入新项目本地配置；不收集凭据或修改全局 Git 配置。
+Git operations are separate: local initialization, first commit, and GitHub publishing. Only publishing requires authentication. Publishing is off by default, private by default, and never overwrites an unrelated remote repository. Author identity is applied only to the generated project; credentials and global Git configuration remain under the user’s control.
 
-v0.3 提供任务取消、步骤恢复和持久任务记录。取消会停止下载与安装子进程，保留工作目录；恢复使用原配置和目录归属标记，跳过完成步骤并保留原密码。服务重启后可从任务历史继续，也可恢复未完成的远程发布。记录只写入本地被 Git 忽略的 `.stackforge/`，不复制环境变量密码。Windows 提供双击启动脚本，自动打开浏览器、复用同项目服务并避开占用端口。真实联调脚本覆盖两组前后端与 MySQL / PostgreSQL 查询，GitHub 实测为显式选项。
+Tasks support cancellation, checkpoint recovery, and persistent history. Cancellation stops downloads and installation subprocesses while retaining files. Recovery uses the original configuration, validates directory ownership, skips completed steps, and preserves passwords. Records live in the Git-ignored `.stackforge/` without copying `.env` passwords or tokens. GitHub publishing can be retried after restarting.
+
+The Windows launcher opens the browser, reuses a service for the same checkout/version, and avoids occupied ports. Real integration scripts verify both frontend/backend families and MySQL / PostgreSQL queries. GitHub creation/push testing is an explicit opt-in; its private repository is retained.

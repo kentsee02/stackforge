@@ -31,3 +31,8 @@
 #retained-path{display:block;overflow-wrap:anywhere;font-size:12px;margin-top:6px}
 #recovery{padding:12px 0}
 .activity[data-status=cancelled] #job-state{color:#805016}
+.topbar-tools{display:flex;align-items:center;gap:20px;min-width:0}
+.language-control{display:flex;align-items:center;gap:8px;font-size:12px;white-space:nowrap}
+.language-control select{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--control);border-radius:var(--radius);padding:5px 8px;min-height:32px;max-width:120px}
+.choice strong,.secondary{overflow-wrap:anywhere}
+@media(max-width:600px){.topbar{height:auto;min-height:64px;gap:12px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}.topbar-tools{gap:12px;flex-wrap:wrap}.local-indicator{display:none}.language-control select{min-height:44px}.template-manager .secondary{white-space:normal}.title-row{flex-wrap:wrap}.title-row>div{min-width:0}.choices .choice span{min-width:0}.choice strong{flex-shrink:1}}
