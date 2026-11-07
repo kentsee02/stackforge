@@ -159,7 +159,7 @@ test('import registers a renamed StackForge folder without running it and surviv
   let app = await startServer();
   t.after(() => app.close());
   assert.equal((await app.post('/api/projects/import', { path }, 'https://example.com')).status, 403);
-  assert.equal((await app.post('/api/projects/import', { path: parent })).status, 400);
+  assert.equal((await app.post('/api/projects/import', { path: join(parent, 'missing') })).status, 400);
   const imported = await app.post('/api/projects/import', { path, command: 'ignored' });
   assert.equal(imported.status, 201);
   const { id } = await imported.json();

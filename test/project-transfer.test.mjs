@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../src/server.mjs';
 import { cloneGithub } from '../src/project-clone.mjs';
 import { ProjectOperations } from '../src/project-operations.mjs';
+import { ProjectConfig } from '../src/project-config.mjs';
+import { detectFrameworks } from '../src/project-detection.mjs';
+import { createDesktop } from '../src/desktop.mjs';
 
 async function fixture(t, options) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-transfer-')));
@@ -27,14 +30,17 @@ async function fixture(t, options) {
   return { directory, base, token, post, get };
 }
 
-test('GitHub clone validates the remote and registers external projects without deleting their files', async t => {
+test('GitHub clone detects frameworks and recycles only a verified cloned directory', async t => {
   const commands = [];
   const command = async (name, args) => {
     commands.push([name, args]);
     await mkdir(join(args.at(-1), '.git'), { recursive: true });
-    await writeFile(join(args.at(-1), 'package.json'), '{"scripts":{"test":"node --test"}}');
+    await writeFile(join(args.at(-1), 'package.json'), '{"dependencies":{"react":"^19"},"scripts":{"test":"node --test"}}');
   };
-  const { directory, post, get } = await fixture(t, { clone: (repo, parent, options) => cloneGithub(repo, parent, { ...options, command }) });
+  const desktop = { ...createDesktop(), trashProject: path => rename(path, path + '-recycled') };
+  const { directory, post, get } = await fixture(t, {
+    desktop, clone: (repo, parent, options) => cloneGithub(repo, parent, { ...options, command })
+  });
   const clone = repository => post('/api/projects/clone', { repository, parentDir: directory });
   for (const url of ['https://github.com.evil.test/owner/demo', 'https://github.com/owner/..', 'file:///tmp/demo', 'https://user@github.com/owner/demo']) {
     assert.equal((await clone(url)).status, 409);
@@ -43,7 +49,11 @@ test('GitHub clone validates the remote and registers external projects without 
   const response = await clone('https://github.com/owner/Demo.git');
   assert.equal(response.status, 201);
   const project = await response.json();
-  assert.equal(project.external, true);
+  assert.equal(project.unmanaged, true);
+  assert.equal(project.external, false);
+  assert.equal(project.cloned, true);
+  assert.equal(project.cloneId, undefined);
+  assert.deepEqual(project.frameworks, ['React']);
   assert.equal(project.name, 'Demo');
   assert.equal(commands[0][0], 'git');
   assert.equal(commands[0][1].at(-2), 'https://github.com/owner/Demo.git');
@@ -53,12 +63,57 @@ test('GitHub clone validates the remote and registers external projects without 
   const route = `/api/projects/${project.id}`;
   assert.equal((await post(route + '/start')).status, 409);
   assert.deepEqual((await get(route + '/checks')).checks.map(check => check.id), ['root:test']);
-  assert.equal((await post(route + '/trash', { confirmName: project.name })).status, 200);
-  await access(join(project.path, '.git'));
-  assert.equal(await readFile(join(project.path, 'package.json'), 'utf8'), '{"scripts":{"test":"node --test"}}');
-  const local = await post('/api/projects/import', { path: project.path });
+  const confirm = { confirmName: project.name };
+  assert.equal((await post(route + '/trash', { confirmName: 'wrong' })).status, 400);
+  const marker = join(project.path, '.git', 'stackforge-clone');
+  const original = await readFile(marker);
+  await writeFile(marker, 'wrong');
+  assert.equal((await post(route + '/trash', confirm)).status, 409);
+  await access(join(project.path, 'package.json'));
+  await writeFile(marker, original);
+  const deleted = await post(route + '/trash', confirm);
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(await deleted.json(), { trashed: true, databaseDeleted: false });
+  await assert.rejects(access(project.path), { code: 'ENOENT' });
+  await access(join(project.path + '-recycled', 'package.json'));
+
+  const local = await post('/api/projects/import', { path: project.path + '-recycled' });
   assert.equal(local.status, 201);
-  assert.equal((await local.json()).external, true);
+  const imported = await local.json();
+  assert.deepEqual(imported.frameworks, ['React']);
+  assert.equal(imported.cloned, undefined);
+  assert.deepEqual(await post(`/api/projects/${imported.id}/trash`, { confirmName: imported.name }).then(response => response.json()), { removed: true });
+  await access(join(imported.path, 'package.json'));
+});
+
+test('unrecognized directories can be imported and old external records acquire detected frameworks', async t => {
+  const { directory, post } = await fixture(t);
+  const folder = join(directory, 'local-folder');
+  await mkdir(folder);
+  const local = await post('/api/projects/import', { path: folder });
+  assert.equal(local.status, 201);
+  const project = await local.json();
+  assert.equal(project.external, true);
+  assert.deepEqual(project.frameworks, []);
+
+  const front = join(folder, 'frontend');
+  const backend = join(folder, 'backend');
+  const workspace = join(folder, 'apps', 'java');
+  await Promise.all([front, backend, workspace].map(path => mkdir(path, { recursive: true })));
+  await Promise.all([
+    writeFile(join(front, 'package.json'), '{"dependencies":{"next":"^16","react":"^19"}}'),
+    writeFile(join(backend, 'package.json'), '{"dependencies":{"@nestjs/core":"^12","express":"^5"}}'),
+    writeFile(join(folder, 'pyproject.toml'), '[project]\ndependencies = [\n  "fastapi",\n  "django[argon2]>=5",\n]\n'),
+    writeFile(join(workspace, 'pom.xml'), '<project><parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId></parent></project>')
+  ]);
+  const expected = ['Django', 'FastAPI', 'NestJS', 'Next.js', 'Spring Boot'];
+  assert.deepEqual((await detectFrameworks(folder)).sort(), expected);
+  const file = join(directory, 'projects.json');
+  await writeFile(file, JSON.stringify({ version: 1, imports: [{ id: project.id, path: folder, external: true }] }));
+  const saved = new ProjectConfig(file);
+  await saved.ready;
+  assert.equal(saved.value.imports[0].unmanaged, true);
+  assert.deepEqual(saved.value.imports[0].frameworks.sort(), expected);
 });
 
 test('database transfer locks the project, preserves binary output and requires an empty target', async t => {

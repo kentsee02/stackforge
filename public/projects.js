@@ -5,6 +5,7 @@ setupI18n();
 const $ = id => document.getElementById(id);
 const stateLabels = { stopped: '已停止', starting: '正在启动…', running: '运行中', stopping: '正在停止…', failed: '启动失败或异常退出' };
 const stackNames = { vue: 'Vue', react: 'React', express: 'Express', nestjs: 'NestJS', spring: 'Spring Boot', mysql: 'MySQL', postgres: 'PostgreSQL' };
+const removesFiles = project => !project.unmanaged || project.cloned;
 const diagnosticMessages = {
   port: 'Free the occupied port, or choose a different one under Development ports if this project supports it.',
   java: 'Set JAVA_HOME and PATH to a JDK that supports Java 21, then restart StackForge and try again.',
@@ -66,7 +67,7 @@ function renderServices(project) {
 function renderPorts(project, busy) {
   const details = $('project-ports');
   const form = $('project-port-form');
-  details.hidden = project.external || !project.portDefaults;
+  details.hidden = project.unmanaged || !project.portDefaults;
   if (details.hidden) return;
   $('project-ports-legacy').hidden = project.canConfigurePorts;
   form.hidden = !project.canConfigurePorts;
@@ -299,8 +300,8 @@ function renderRows() {
     if (!row) {
       row = $('project-row').content.firstElementChild.cloneNode(true);
       row.querySelector('strong').textContent = project.name;
-      setText(row.querySelector('small'), project.external ? 'External project' :
-        [project.frontend, project.backend, project.database].map(key => stackNames[key]).filter(Boolean).join(' / '));
+      const frameworks = project.unmanaged ? project.frameworks : [project.frontend, project.backend, project.database].map(key => stackNames[key]).filter(Boolean);
+      setText(row.querySelector('small'), frameworks.join(' / ') || 'External project');
       row.firstElementChild.addEventListener('click', () => {
         if (selected !== project.id) actionError = undefined;
         selected = project.id;
@@ -318,7 +319,7 @@ function renderRows() {
     if (!row.hidden) matches++;
     row.firstElementChild.setAttribute('aria-pressed', String(project.id === selected));
     const status = row.querySelector('.runtime-state');
-    status.hidden = Boolean(project.external);
+    status.hidden = Boolean(project.unmanaged);
     showState(status, project.ready ? 'ready' : project.status);
   }
   $('project-no-match').hidden = matches > 0;
@@ -338,8 +339,8 @@ function render() {
   renderRows();
   const project = projects.find(item => item.id === selected);
   if (!project) return;
-  for (const id of ['runtime-action', 'selected-project-state', 'project-runtime-log', 'project-dependencies']) $(id).hidden = Boolean(project.external);
-  $('external-project-note').hidden = !project.external;
+  for (const id of ['runtime-action', 'selected-project-state', 'project-runtime-log', 'project-dependencies']) $(id).hidden = Boolean(project.unmanaged);
+  $('unmanaged-project-note').hidden = !project.unmanaged;
   if ($('selected-project-name').textContent !== project.name) $('selected-project-name').textContent = project.name;
   if ($('selected-project-path').textContent !== project.path) $('selected-project-path').textContent = project.path;
   showState($('selected-project-state'), project.ready ? 'ready' : project.status);
@@ -372,7 +373,7 @@ function render() {
   showMessage(diagnosticField, diagnostic);
   diagnosticField.hidden = !diagnostic;
   $('project-delete').disabled = busy || unavailable;
-  setText($('project-delete').querySelector('span'), project.external ? 'Remove from Projects' : 'Delete project');
+  setText($('project-delete').querySelector('span'), removesFiles(project) ? 'Delete project' : 'Remove from Projects');
   $('project-delete-hint').hidden = !busy && !deleting && !project.operation;
   setText($('project-delete-hint'), deleting ? 'Moving to trash…' : project.operation ? 'Wait for the current project operation to finish.' : 'Stop the project first.');
   const output = $('runtime-output');
@@ -555,10 +556,11 @@ $('project-delete').addEventListener('click', () => {
   $('project-trash-name').value = '';
   $('project-trash-confirm').disabled = true;
   $('project-trash-backup').hidden = project.database === 'none';
-  setText($('project-trash-title'), project.external ? 'Remove project from Projects?' : 'Delete project?');
-  setText($('project-trash-instruction'), project.external ? 'Type the project name below to confirm removal.' : 'Type the project name below to confirm deletion.');
-  setText($('project-trash-confirm'), project.external ? 'Remove from Projects' : 'Delete project');
-  setText($('project-trash-description'), project.external ? 'This removes the entry from the Projects list. Your files stay in this folder.' : project.database !== 'none'
+  const deleteFiles = removesFiles(project);
+  setText($('project-trash-title'), deleteFiles ? 'Delete project?' : 'Remove project from Projects?');
+  setText($('project-trash-instruction'), deleteFiles ? 'Type the project name below to confirm deletion.' : 'Type the project name below to confirm removal.');
+  setText($('project-trash-confirm'), deleteFiles ? 'Delete project' : 'Remove from Projects');
+  setText($('project-trash-description'), !deleteFiles ? 'This removes the entry from the Projects list. Your files stay in this folder.' : project.database !== 'none'
     ? 'The project folder will move to the system trash. Its local database and data volume will be permanently deleted.'
     : 'The entire local project folder will move to the system trash. You can restore it from there.');
   $('project-trash-dialog').showModal();

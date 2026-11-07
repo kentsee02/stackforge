@@ -15,11 +15,12 @@ import { createDesktop } from './desktop.mjs';
 import { ProjectRuntime, inspectRecordedProject, projectDirectory, readProjectFolder, developmentScript, startupDiagnostic } from './project-runtime.mjs';
 import { ProjectConfig, defaultPorts, validatePorts, importedProject, projectPathKey } from './project-config.mjs';
 import { ProjectOperations } from './project-operations.mjs';
-import { cloneGithub } from './project-clone.mjs';
+import { cloneGithub, verifyClone } from './project-clone.mjs';
+import { detectFrameworks } from './project-detection.mjs';
 import { backupLimit } from './database-backup.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const identity = { application: 'stackforge-local', version: '0.14.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
+export const identity = { application: 'stackforge-local', version: '0.15.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
 const staticFiles = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/messages.js': ['messages.js', 'text/javascript; charset=utf-8'], '/template-store.js': ['template-store.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'], '/plex-regular.ttf': ['plex-regular.ttf', 'font/ttf'], '/plex-semibold.ttf': ['plex-semibold.ttf', 'font/ttf'] };
 staticFiles['/projects'] = ['projects.html', 'text/html; charset=utf-8'];
 staticFiles['/projects.js'] = ['projects.js', 'text/javascript; charset=utf-8'];
@@ -29,8 +30,9 @@ async function locationExists(path) {
   catch (error) { return !['ENOENT', 'ENOTDIR'].includes(error.code); }
 }
 
-const projectMarkers = ['.git', 'package.json', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'pyproject.toml',
-  'requirements.txt', 'Cargo.toml', 'go.mod', 'composer.json', 'Gemfile', 'CMakeLists.txt'];
+function projectDetails({ cloneId, ...project }) {
+  return { ...project, ...(cloneId && { cloned: true }), ...(project.unmanaged && { external: !project.frameworks.length }) };
+}
 
 export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations() } = {}) {
   const token = randomBytes(32).toString('hex');
@@ -46,7 +48,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     const paths = new Set(created.map(project => projectPathKey(project.path)));
     return [...projectConfig.value.imports.filter(project => !paths.has(projectPathKey(project.path))), ...created];
   }
-  async function registerProject(path) {
+  async function registerProject(path, cloneId) {
     const directory = await projectDirectory(absoluteDirectory(path)).catch(() => {
       throw new Error('Choose an existing project directory.');
     });
@@ -54,18 +56,15 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     try {
       const { manifest } = await readProjectFolder(directory);
       await developmentScript(directory);
-      project = importedProject(randomUUID(), directory, manifest.options);
+      const { name, frontend, backend, database } = manifest.options ?? {};
+      project = importedProject(randomUUID(), directory, { name, frontend, backend, database, cloneId });
     } catch {
-      const markers = await Promise.all(projectMarkers.map(name => lstat(join(directory, name)).catch(() => null)));
-      if (!markers.some((item, index) => item?.isFile() || projectMarkers[index] === '.git' && item?.isDirectory())) {
-        throw new Error('Choose a repository or a folder with a supported project file.');
-      }
-      project = importedProject(randomUUID(), directory, { external: true });
+      project = importedProject(randomUUID(), directory, { unmanaged: true, cloneId, frameworks: await detectFrameworks(directory) });
     }
     const existing = await Promise.all(jobs.projects().map(item => realpath(item.path).catch(() => item.path)));
     if (existing.some(item => projectPathKey(item) === projectPathKey(project.path))) throw new Error('This folder is already in Projects.');
     await projectConfig.addProject(project);
-    return project;
+    return projectDetails(project);
   }
   function send(res, status, value) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -93,7 +92,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const deleting = removals.has(project.path);
           const session = runtime.status(project, project.id === selected);
           if (!deleting && !['starting', 'running', 'stopping'].includes(session.status) && !await locationExists(project.path)) return;
-          const detail = { ...project, ...session, ...operations.status(project, project.id === selected), deleting };
+          const detail = { ...projectDetails(project), ...session, ...operations.status(project, project.id === selected), deleting };
           if (transfer?.path === project.path) detail.operation = 'databaseTransfer';
           if (project.id === selected) {
             const info = await inspectRecordedProject(project).catch(() => null);
@@ -182,8 +181,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const controller = new AbortController();
           res.once('close', () => { if (!res.writableFinished) controller.abort(); });
           const done = (async () => {
-            const path = await clone(payload.repository, payload.parentDir, { signal: controller.signal });
-            return registerProject(path);
+            const { path, cloneId } = await clone(payload.repository, payload.parentDir, { signal: controller.signal });
+            return registerProject(path, cloneId);
           })();
           cloneTask = { done, controller };
           try { return send(res, 201, await done); }
@@ -202,7 +201,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const project = managedProjects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
           if (transfer?.path === project.path) return send(res, 409, { error: 'Wait for the current project operation to finish.' });
-          if (project.external && !['run-check', 'check-cancel', 'trash'].includes(action)) {
+          if (project.unmanaged && !['run-check', 'check-cancel', 'trash'].includes(action)) {
             return send(res, 409, { error: 'This action requires a StackForge project.' });
           }
           if (removals.has(project.path)) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
@@ -239,7 +238,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           }
           if (action === 'trash') {
             if (payload.confirmName !== project.name) return send(res, 400, { error: 'Enter the exact project name to confirm deletion.' });
-            if (project.external) {
+            if (project.unmanaged && !project.cloneId) {
               await projectConfig.removeImport(project.id);
               return send(res, 200, { removed: true });
             }
@@ -247,8 +246,10 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before moving it to the trash.' });
             const moving = (async () => {
               const info = await inspectRecordedProject(project);
+              if (project.cloneId) await verifyClone(info.directory, project.cloneId);
               const databaseDeleted = project.database !== 'none' && await operations.removeDatabase(project, projectConfig.ports(project), info);
               try {
+                if (project.cloneId && project.database !== 'none') await verifyClone(info.directory, project.cloneId);
                 await desktop.trashProject(info.directory);
                 if (await locationExists(project.path)) throw new Error('The project is still at its original location. Check the system trash before retrying.');
               } catch (error) {

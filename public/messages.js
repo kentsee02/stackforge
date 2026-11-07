@@ -1,9 +1,8 @@
 // [Chinese source, English translation]. {name} slots preserve runtime values.
 export const messages = [
   ['导入本地项目', 'Import a local project'],
-  ['选择项目文件夹，例如 Git 仓库或包含 package.json 的目录。', 'Choose a project folder, such as a Git repository or a directory with package.json.'],
+  ['选择任意项目文件夹。StackForge 会尝试识别项目使用的框架。', 'Choose any project folder. StackForge will look for its frameworks.'],
   ['请选择一个已存在的项目目录。', 'Choose an existing project directory.'],
-  ['请选择 Git 仓库或包含受支持项目文件的目录。', 'Choose a repository or a folder with a supported project file.'],
   ['从 GitHub 克隆', 'Clone from GitHub'],
   ['GitHub 仓库地址', 'GitHub repository URL'],
   ['保存父目录', 'Destination parent folder'],
@@ -13,9 +12,11 @@ export const messages = [
   ['请输入 GitHub 仓库地址，例如 https://github.com/owner/project。', 'Enter a GitHub repository URL such as https://github.com/owner/project.'],
   ['此位置已存在与仓库同名的文件或目录。', 'A file or folder with the repository name already exists in this location.'],
   ['另一个 StackForge 任务正在使用此目标目录。', 'Another StackForge task is using this destination.'],
+  ['无法核实克隆的仓库。', 'Could not verify the cloned repository.'],
+  ['无法确认该文件夹是 StackForge 原先克隆的目录。', 'The folder could not be verified as the original StackForge clone.'],
   ['Git 无法克隆仓库。请检查地址、网络和 Git 凭据。', 'Git could not clone the repository. Check the URL, network, and Git credentials.'],
   ['外部项目', 'External project'],
-  ['外部项目可查看 Git 状态和运行可识别的检查。请使用项目自己的启动命令。', "External projects support Git status and detected checks. Use the project's own startup commands."],
+  ['可在这里查看 Git 状态和运行支持的检查。启动时请使用该项目自己的命令。', "Git status and supported checks are available here. Use the project's own startup commands."],
   ['此操作需要 StackForge 项目。', 'This action requires a StackForge project.'],
   ['从项目列表移除', 'Remove from Projects'],
   ['从项目列表移除这个项目？', 'Remove project from Projects?'],

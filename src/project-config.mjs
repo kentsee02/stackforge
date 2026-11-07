@@ -3,18 +3,21 @@ import { basename, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { absoluteDirectory } from './paths.mjs';
 import { validateOptions } from './catalog.mjs';
+import { detectFrameworks, validFrameworks } from './project-detection.mjs';
 
 export const projectPathKey = path => process.platform === 'win32' ? path.toLowerCase() : path;
 
 export function importedProject(id, path, source) {
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid project record.');
   path = absoluteDirectory(path);
-  if (source?.external === true) return {
-    id, path, name: basename(path), frontend: 'none', backend: 'none', database: 'none', imported: true, external: true
+  const cloned = /^[a-f0-9]{32}$/.test(source?.cloneId ?? '') ? { cloneId: source.cloneId } : {};
+  if (source?.unmanaged === true || source?.external === true) return {
+    id, path, name: basename(path) || path, frontend: 'none', backend: 'none', database: 'none',
+    imported: true, unmanaged: true, frameworks: validFrameworks(source.frameworks), ...cloned
   };
   if (!['name', 'frontend', 'backend', 'database'].every(key => typeof source?.[key] === 'string')) throw new Error('Invalid project record.');
   const { name, frontend, backend, database } = validateOptions({ name: source.name, parentDir: dirname(path), frontend: source.frontend, backend: source.backend, database: source.database, install: false, git: false });
-  return { id, path, name, frontend, backend, database, imported: true };
+  return { id, path, name, frontend, backend, database, imported: true, ...cloned };
 }
 
 export function defaultPorts(project) {
@@ -53,7 +56,11 @@ export class ProjectConfig {
       if (saved.version !== 1) return;
       if (saved.ports && typeof saved.ports === 'object') this.value.ports = saved.ports;
       if (Array.isArray(saved.imports)) for (const project of saved.imports) {
-        try { this.value.imports.push(importedProject(project.id, project.path, project)); }
+        try {
+          const imported = importedProject(project.id, project.path, project);
+          if (imported.unmanaged && !Array.isArray(project.frameworks)) imported.frameworks = await detectFrameworks(imported.path);
+          this.value.imports.push(imported);
+        }
         catch { /* ignore a single damaged project record */ }
       }
     } catch { /* a missing or damaged file should not block startup */ }

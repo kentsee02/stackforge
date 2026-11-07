@@ -13,7 +13,7 @@
   <a class="skip-link" href="#main" data-i18n="跳到主要内容">Skip to content</a>
   <aside class="sidebar">
     <a class="brand" href="/" aria-label="StackForge home" data-i18n-aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
-    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.14</span></div>
+    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.15</span></div>
     <a class="side-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a>
     <a class="side-link" href="/#activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg><span data-i18n="任务记录">Task history</span></a>
     <a class="side-active projects-nav" href="/projects" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2h7v2"/></svg><span data-i18n="项目管理">Projects</span></a>
@@ -25,7 +25,7 @@
       <div class="title-row projects-title"><div><h1 data-i18n="项目管理">Projects</h1><p data-i18n="启动、停止或查看 StackForge 项目的开发日志。">Start, stop, and inspect your StackForge development sessions.</p></div><div class="project-title-actions"><button id="project-import-toggle" class="secondary" type="button" aria-expanded="false" aria-controls="project-import" data-i18n="导入项目">Import project</button><a class="secondary project-create-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a></div></div>
       <section id="project-import" class="project-import" aria-labelledby="project-import-title" hidden>
         <h2 id="project-import-title" data-i18n="导入本地项目">Import a local project</h2>
-        <p class="hint" data-i18n="选择项目文件夹，例如 Git 仓库或包含 package.json 的目录。">Choose a project folder, such as a Git repository or a directory with package.json.</p>
+        <p class="hint" data-i18n="选择任意项目文件夹。StackForge 会尝试识别项目使用的框架。">Choose any project folder. StackForge will look for its frameworks.</p>
         <form id="project-import-form">
           <label for="project-import-path" data-i18n="项目文件夹路径">Project folder path</label>
           <div class="project-import-fields"><input id="project-import-path" required spellcheck="false" autocomplete="off" placeholder="Absolute folder path" data-i18n-placeholder="文件夹的绝对路径"><button id="project-import-browse" type="button" class="secondary" data-i18n="选择文件夹…">Browse…</button><button id="project-import-submit" type="submit" class="secondary" data-i18n="加入项目列表">Add to Projects</button></div>
@@ -61,7 +61,7 @@
               <a id="runtime-backend" class="secondary" target="_blank" rel="noopener noreferrer" data-i18n="打开 API" hidden>Open API</a>
             </div>
           </div>
-          <p id="external-project-note" class="runtime-error small" data-i18n="外部项目可查看 Git 状态和运行可识别的检查。请使用项目自己的启动命令。" hidden>External projects support Git status and detected checks. Use the project's own startup commands.</p>
+          <p id="unmanaged-project-note" class="runtime-error small" data-i18n="可在这里查看 Git 状态和运行支持的检查。启动时请使用该项目自己的命令。" hidden>Git status and supported checks are available here. Use the project's own startup commands.</p>
           <p id="runtime-error" class="runtime-error" role="status" hidden></p>
           <p id="runtime-diagnostic" class="runtime-diagnostic" role="status" hidden></p>
           <section id="project-dependencies" class="project-operation" aria-labelledby="project-dependencies-title">

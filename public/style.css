@@ -273,7 +273,7 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 .project-import-fields .secondary { margin: 0; }
 .project-clone-form { border-top: 1px solid var(--border); padding-top: 14px; }
 .project-clone-form label { display: block; margin-top: 8px; }
-#external-project-note { color: var(--muted); }
+#unmanaged-project-note { color: var(--muted); }
 #project-import-message:empty { display: none; }
 .project-manager { display: grid; grid-template-columns: minmax(230px, .85fr) minmax(0, 1.45fr); gap: 28px; align-items: start; }
 .project-index { min-width: 0; }

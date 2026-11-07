@@ -55,7 +55,7 @@ export async function readProjectFolder(path) {
 
 export async function inspectRecordedProject(project) {
   try {
-    if (project.external) {
+    if (project.unmanaged) {
       const directory = await projectDirectory(project.path);
       if (projectPathKey(directory) !== projectPathKey(project.path)) throw new Error();
       return { directory, manifest: {} };
