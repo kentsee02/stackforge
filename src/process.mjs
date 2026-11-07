@@ -77,3 +77,14 @@ export function npm(args, options) {
   const { command, prefix } = npmCommand();
   return run(command, [...prefix, ...args], options);
 }
+
+export function installNodeDependencies(options, command = npm) {
+  return command(['install', '--no-audit', '--no-fund'], options);
+}
+
+export function installMavenDependencies(options, command = run) {
+  const args = ['-B', '-DskipTests', 'dependency:go-offline'];
+  return process.platform === 'win32'
+    ? command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `mvnw.cmd ${args.join(' ')}`], options)
+    : command('./mvnw', args, options);
+}

@@ -99,6 +99,7 @@ export class ProjectRuntime {
     if (entry?.status === 'running') {
       runtime.services = entry.services;
       runtime.ready = Object.values(entry.services).every(service => service.ready);
+      runtime.initialized = entry.initialized === true;
     }
     if (entry && (runtime.status === 'failed' || runtime.status === 'running' && !runtime.ready)) {
       runtime.diagnostic = startupDiagnostic(project, (entry.error || '') + '\n' + entry.log.slice(-12000));
@@ -167,7 +168,9 @@ export class ProjectRuntime {
       const checks = await Promise.all(services.map(service => this.probeEndpoint(service.url, signal)));
       if (signal.aborted) return;
       for (const [index, service] of services.entries()) service.ready = checks[index];
-      await delay(checks.every(Boolean) ? 2000 : 850, undefined, { signal, ref: false });
+      const ready = checks.every(Boolean);
+      if (ready) entry.initialized = true;
+      await delay(ready ? 2000 : 850, undefined, { signal, ref: false });
     }
   }
 

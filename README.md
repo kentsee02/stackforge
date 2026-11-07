@@ -44,7 +44,11 @@ Open **Projects** to find projects created by this StackForge checkout, includin
 - **Import project** adds a moved or cloned StackForge project using its `stackforge.json` and development script. Imports register the existing folder and start only when you click **Start project**.
 - Startup diagnostics highlight common port, dependency, Java, and Docker problems alongside the development log.
 
-**Stop project** stops development processes started from this page. A normal StackForge shutdown also stops them. Docker databases run separately and can be stopped with the generated project's `npm run db:down` command. Logs are kept in memory for the latest run of each project and cleared when StackForge restarts.
+**Install dependencies** runs npm, downloads Maven dependencies through the project's Maven Wrapper, or does both for a mixed stack. The installation log shows progress and errors. You can cancel an installation and retry it later.
+
+**Database controls** shows the Docker Compose database status and the last 100 lines of container output. It uses the project's saved database port and can start or stop the database separately. Stopping the database keeps its data volume.
+
+**Stop project** stops the development processes started from this page. A normal StackForge shutdown also stops them. Development and installation logs are held in memory until StackForge restarts.
 
 **Delete project** shows the folder path before moving the entire local folder to the system trash. Stop the project in StackForge first. Restore the folder to its original location to see it in Projects again. GitHub repositories and Docker volumes stay intact. Linux requires `gio` for this action, and the drive must support the system trash.
 

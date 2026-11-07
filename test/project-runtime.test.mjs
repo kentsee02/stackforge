@@ -10,6 +10,7 @@ import { ProjectRuntime, startupDiagnostic } from '../src/project-runtime.mjs';
 import { createApp } from '../src/server.mjs';
 import { createDesktop } from '../src/desktop.mjs';
 import { ProjectConfig, validatePorts } from '../src/project-config.mjs';
+import { ProjectOperations } from '../src/project-operations.mjs';
 
 const childScript = `import { spawn } from 'node:child_process';
 const program = "const server = require('node:net').createServer(); server.listen(0, '127.0.0.1', () => console.log('ready', server.address().port));";
@@ -232,4 +233,82 @@ test('project API protects runtime and recycling actions, locks moves, and redis
   assert.equal(await readFile(join(trash, 'stackforge.json'), 'utf8'), original);
   await rename(trash, project.path);
   assert.equal((await detail()).id, id);
+});
+
+test('project operations cancel and retry installation, manage the configured database, and reject foreign containers', { timeout: 15000 }, async t => {
+  const parent = await workspace(t);
+  const project = await createProject(parent, 'operations-app', '', { backend: 'spring', database: 'postgres' });
+  const directory = await realpath(project.path);
+  await mkdir(join(directory, 'backend'));
+  await Promise.all([
+    writeFile(join(directory, 'stackforge.json'), JSON.stringify({ generator: 'StackForge', portConfig: 1, options: project })),
+    writeFile(join(directory, 'package.json'), '{}'),
+    writeFile(join(directory, 'compose.yaml'), 'services: {}'),
+    writeFile(join(directory, '.env'), 'DB_PORT=5432\n'),
+    writeFile(join(directory, 'backend', process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw'), '')
+  ]);
+  let attempts = 0;
+  let owner = directory;
+  let container = '';
+  let mavenFolder;
+  const databaseWrites = [];
+  const operations = new ProjectOperations({
+    install: async (args, { log, signal }) => {
+      assert.equal(args[0], 'install');
+      log('npm output\n');
+      if (++attempts === 1) await sleep(5000, undefined, { signal });
+    },
+    command: async (command, args, config) => {
+      if (command !== 'docker') {
+        mavenFolder = config.cwd;
+        assert.match(args.join(' '), /dependency:go-offline/);
+        config.log('Maven output\n');
+        return;
+      }
+      assert.equal(config.env.DB_PORT, '15432');
+      if (args[0] === 'inspect') return `${JSON.stringify(owner)}\tdb\t${container}\thealthy\n`;
+      if (args[1] === 'ps') return container ? 'abcdef123456\n' : '';
+      if (args[1] === 'logs') { config.log('ready to accept connections\n'); return; }
+      databaseWrites.push(args);
+      container = args[1] === 'up' ? 'running' : 'exited';
+    }
+  });
+  const server = createApp({ stateDir: false, operations });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(async () => { await server.shutdownTasks(); await new Promise(resolve => server.close(resolve)); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const get = async route => (await fetch(base + route)).json();
+  const { token } = await get('/api/state');
+  const post = (route, body = {}) => fetch(base + route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, body: JSON.stringify(body) });
+  const imported = await post('/api/projects/import', { path: directory });
+  assert.equal(imported.status, 201);
+  const { id } = await imported.json();
+  const route = `/api/projects/${id}`;
+  const detail = async () => (await get(`/api/projects?logs=${id}`)).projects[0];
+  assert.equal((await post(`${route}/ports`, { ports: { database: 15432 } })).status, 200);
+  assert.equal((await post(`${route}/install`)).status, 202);
+  await until(() => attempts === 1);
+  assert.equal((await post(`${route}/start`)).status, 409);
+  assert.equal((await post(`${route}/install-cancel`)).status, 202);
+  await until(async () => (await detail()).dependencies.status === 'cancelled');
+  assert.equal((await post(`${route}/install`)).status, 202);
+  await until(async () => (await detail()).dependencies.status === 'succeeded');
+  assert.equal(mavenFolder, join(directory, 'backend'));
+  assert.match((await detail()).dependencies.log, /npm output\nMaven output/);
+
+  assert.equal((await get(`${route}/database`)).status, 'absent');
+  assert.equal((await post(`${route}/database-start`)).status, 202);
+  await until(async () => (await detail()).databaseTask.status === 'succeeded');
+  assert.deepEqual(await get(`${route}/database?logs=1`), { status: 'running', log: 'ready to accept connections\n' });
+  owner = parent;
+  assert.equal((await post(`${route}/database-stop`)).status, 202);
+  await until(async () => (await detail()).databaseTask.status === 'failed');
+  assert.match((await detail()).databaseTask.error, /another project folder/);
+  assert.equal(databaseWrites.length, 1);
+  owner = directory;
+  assert.equal((await post(`${route}/database-stop`)).status, 202);
+  await until(async () => (await detail()).databaseTask.status === 'succeeded');
+  assert.equal((await get(`${route}/database`)).status, 'stopped');
+  assert.deepEqual(databaseWrites, [['compose', 'up', '-d', '--wait', '--no-deps', 'db'], ['compose', 'stop', 'db']]);
 });

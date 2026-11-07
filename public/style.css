@@ -309,7 +309,15 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 #runtime-log-empty { color: var(--muted); }
 #runtime-output { max-height: min(52vh, 560px); overflow: auto; }
 #runtime-log-truncated { margin: 0 0 8px; }
-#runtime-database { padding: 0 19px 15px; margin: 0; }
+.project-operation { padding: 12px 19px; border-top: 1px solid var(--border); }
+.project-operation-heading, .project-operation-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.project-operation-heading h3, .project-operation-heading strong { font-size: 13px; margin: 0; }
+#project-database .project-operation-heading { margin-top: 10px; }
+.project-operation-actions .secondary { margin-top: 6px; }
+.project-operation-error { color: var(--negative); overflow-wrap: anywhere; }
+#dependency-log { margin-top: 8px; }
+#dependency-log summary { cursor: pointer; }
+#dependency-output, #database-output, #database-container-log { max-height: 270px; overflow: auto; margin: 8px 0 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 .project-empty, .project-connection { padding: 20px 0; border-top: 1px solid var(--border); }
 .project-empty p, .project-connection { color: var(--muted); }
 .project-feedback { padding: 8px 0 16px; color: var(--positive); }

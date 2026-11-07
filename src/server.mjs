@@ -14,9 +14,10 @@ import { Settings } from './settings.mjs';
 import { createDesktop } from './desktop.mjs';
 import { ProjectRuntime, inspectRecordedProject, readProjectFolder, developmentScript, startupDiagnostic } from './project-runtime.mjs';
 import { ProjectConfig, defaultPorts, validatePorts, importedProject, projectPathKey } from './project-config.mjs';
+import { ProjectOperations } from './project-operations.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const identity = { application: 'stackforge-local', version: '0.9.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
+export const identity = { application: 'stackforge-local', version: '0.10.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
 const staticFiles = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/messages.js': ['messages.js', 'text/javascript; charset=utf-8'], '/template-store.js': ['template-store.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'], '/plex-regular.ttf': ['plex-regular.ttf', 'font/ttf'], '/plex-semibold.ttf': ['plex-semibold.ttf', 'font/ttf'] };
 staticFiles['/projects'] = ['projects.html', 'text/html; charset=utf-8'];
 staticFiles['/projects.js'] = ['projects.js', 'text/javascript; charset=utf-8'];
@@ -26,7 +27,7 @@ async function locationExists(path) {
   catch (error) { return !['ENOENT', 'ENOTDIR'].includes(error.code); }
 }
 
-export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime() } = {}) {
+export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations() } = {}) {
   const token = randomBytes(32).toString('hex');
   const jobs = new Jobs({ directory: stateDir, generate, check, publish });
   const settings = new Settings(settingsFile);
@@ -72,7 +73,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const deleting = removals.has(project.path);
           const session = runtime.status(project, project.id === selected);
           if (!deleting && !['starting', 'running', 'stopping'].includes(session.status) && !await locationExists(project.path)) return;
-          const detail = { ...project, ...session, deleting };
+          const detail = { ...project, ...session, ...operations.status(project, project.id === selected), deleting };
           if (project.id === selected) {
             const info = await inspectRecordedProject(project).catch(() => null);
             Object.assign(detail, { portDefaults: defaultPorts(project), ports: projectConfig.ports(project), canConfigurePorts: info?.manifest.portConfig === 1 });
@@ -81,12 +82,19 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         }));
         return send(res, 200, { projects: projects.filter(Boolean) });
       }
+      const databaseView = /^\/api\/projects\/([^/]+)\/database$/.exec(url.pathname);
+      if (req.method === 'GET' && databaseView) {
+        const project = managedProjects().find(item => item.id === databaseView[1]);
+        if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
+        try { return send(res, 200, await operations.database(project, projectConfig.ports(project), url.searchParams.has('logs'))); }
+        catch (error) { return send(res, 409, { error: error.message.split('\n')[0].trim(), diagnostic: startupDiagnostic(project, error.message) }); }
+      }
       if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, jobs.list());
       if (req.method === 'GET' && url.pathname.startsWith('/api/jobs/')) {
         const job = jobs.view(url.pathname.slice('/api/jobs/'.length));
         return send(res, job ? 200 : 404, job ?? { error: '找不到这个创建任务。' });
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|trash|ports)$/.exec(url.pathname);
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|trash|ports|install|install-cancel|database-start|database-stop)$/.exec(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         const origin = req.headers.origin;
         if ((origin && origin !== `http://${req.headers.host}`) || req.headers['x-stackforge-token'] !== token || req.headers['content-type']?.split(';')[0] !== 'application/json') return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
@@ -109,6 +117,21 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
           if (removals.has(project.path)) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
           if (portWrites.has(project.path)) return send(res, 409, { error: 'Wait for the project ports to finish saving.' });
+          if (action === 'install-cancel') {
+            operations.cancelInstall(project);
+            return send(res, 202, operations.status(project, true));
+          }
+          if (action !== 'stop' && operations.active(project)) return send(res, 409, { error: 'Wait for the current project operation to finish.' });
+          if (action === 'install' || action.startsWith('database-')) {
+            const session = runtime.status(project);
+            const inTransition = ['starting', 'stopping'].includes(session.status);
+            if (action === 'install' && (inTransition || session.status === 'running')) return send(res, 409, { error: 'Stop the project before installing dependencies.' });
+            if (action.startsWith('database-') && (inTransition || session.status === 'running' && !session.initialized)) return send(res, 409, { error: 'Wait for the project to become ready or stop it first.' });
+            try {
+              operations.start(project, action, projectConfig.ports(project));
+              return send(res, 202, operations.status(project, true));
+            } catch (error) { return send(res, 409, { error: error.message }); }
+          }
           if (action === 'ports') {
             if (closing || ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before changing its ports.' });
             const saving = (async () => {
@@ -194,7 +217,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   server.shutdownTasks = async () => {
     closing = true;
     desktop.shutdown();
-    await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), ...removals.values(), ...portWrites.values()]);
+    await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), operations.shutdown(), ...removals.values(), ...portWrites.values()]);
   };
   server.jobs = jobs;
   return server;

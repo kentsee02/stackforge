@@ -3,14 +3,14 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { validateOptions } from './catalog.mjs';
 import { extractZip } from './zip.mjs';
-import { npm, run, throwIfCancelled } from './process.mjs';
+import { installMavenDependencies, installNodeDependencies, npm, run, throwIfCancelled } from './process.mjs';
 import { initializeGit, publishProject } from './git.mjs';
 import { createSteps, verifyStaging, wasPromoted, writeOwnedFiles } from './checkpoint.mjs';
 import { json, frontendFiles, expressFiles, databaseFiles, devScript, generatedReadme } from './templates.mjs';
 
 export async function download(url, { fetchImpl = fetch, binary = false, signal } = {}) {
   throwIfCancelled(signal);
-  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.9.0' } });
+  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.10.0' } });
   if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）：${new URL(url).hostname}`);
   if (binary) {
     const reader = response.body.getReader();
@@ -143,16 +143,13 @@ export async function generateProject(input, report = () => {}, services = {}) {
       '.gitignore': 'node_modules/\ndist/\ntarget/\n.env\n.env.*\n!.env.example\n.stackforge-owner\n.stackforge-cache/\n*.log\n.idea/\n.vscode/\n.DS_Store\n',
       'scripts/dev.mjs': devScript(options),
       'README.md': generatedReadme(options),
-      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.9.0', ...(configurablePorts && { portConfig: 1 }), createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
+      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.10.0', ...(configurablePorts && { portConfig: 1 }), createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
     });
     });
     if (options.install) {
-      if (options.frontend !== 'none' || options.backend === 'express') await steps('npm', '安装 npm 依赖（可取消，失败后可继续）', 64, () => install(['install', '--no-audit', '--no-fund'], { cwd: staging, log }));
+      if (options.frontend !== 'none' || options.backend === 'express') await steps('npm', '安装 npm 依赖（可取消，失败后可继续）', 64, () => installNodeDependencies({ cwd: staging, log }, install));
       if (options.backend === 'spring') {
-        await steps('maven', '通过 Maven Wrapper 预下载 Java 依赖', 78, async () => {
-        if (process.platform === 'win32') await command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'mvnw.cmd -B -DskipTests dependency:go-offline'], { cwd: join(staging, 'backend'), log });
-        else await command('./mvnw', ['-B', '-DskipTests', 'dependency:go-offline'], { cwd: join(staging, 'backend'), log });
-        });
+        await steps('maven', '通过 Maven Wrapper 预下载 Java 依赖', 78, () => installMavenDependencies({ cwd: join(staging, 'backend'), log }, command));
       }
     }
     if (options.git) {

@@ -10,7 +10,7 @@ const diagnosticMessages = {
   java: 'Set JAVA_HOME and PATH to a JDK that supports Java 21, then restart StackForge and try again.',
   docker: 'Start Docker Desktop or the Docker Engine, wait until it is ready, then start the project again.',
   database: 'Check the database startup output for Docker, port, or configuration errors, then try again.',
-  dependencies: 'Run npm install from the project folder, then start the project again.',
+  dependencies: 'Use Install dependencies, then start the project again.',
   waiting: 'The process is still running. Check the log for progress, especially on a first build or database download.'
 };
 const rows = new Map();
@@ -20,6 +20,7 @@ let pending;
 let confirming;
 let actionError;
 let portMessage;
+let databaseView;
 let timer;
 let revision = 0;
 
@@ -84,6 +85,87 @@ function renderPorts(project, busy) {
   showMessage($('project-port-message'), portMessage?.id === project.id ? portMessage.message : '');
 }
 
+function renderOutput(output, id, log = '') {
+  const follow = output.dataset.project !== id || output.scrollHeight - output.scrollTop - output.clientHeight < 32;
+  output.dataset.project = id;
+  if (output.textContent !== log) {
+    output.textContent = log;
+    if (follow) output.scrollTop = output.scrollHeight;
+  }
+}
+
+function renderDependencies(project, busy, unavailable) {
+  const task = project.dependencies;
+  const installing = project.operation === 'dependencies' || (pending?.id === project.id && pending.action === 'install');
+  const phases = { npm: 'Installing npm dependencies…', maven: 'Downloading Maven dependencies…' };
+  const results = { succeeded: 'Dependencies installed.', failed: 'Installation failed.', cancelled: 'Installation cancelled.' };
+  let status = results[task?.status] ?? (busy ? 'Stop the project before installing dependencies.' : '');
+  if (installing) status = task?.status === 'cancelling' ? 'Cancelling installation…' : phases[task?.phase] ?? 'Preparing installation…';
+  showMessage($('dependency-status'), status);
+  $('install-dependencies').hidden = installing;
+  $('install-dependencies').disabled = busy || unavailable;
+  $('cancel-install').hidden = !installing;
+  $('cancel-install').disabled = Boolean(pending) || task?.status === 'cancelling';
+  const error = actionError?.id === project.id && actionError.action?.startsWith('install') ? actionError.message : task?.error;
+  showMessage($('dependency-error'), error);
+  $('dependency-error').hidden = !error;
+  const details = $('dependency-log');
+  if (details.dataset.project !== project.id) details.open = false;
+  details.dataset.project = project.id;
+  details.hidden = !task?.log;
+  renderOutput($('dependency-output'), project.id, task?.log);
+}
+
+const databaseLabels = { absent: 'Database not created', stopped: '已停止', running: '运行中', starting: '正在启动…', stopping: '正在停止…', restarting: 'Restarting…', unhealthy: 'Health check failed', paused: 'Paused' };
+
+function renderDatabase(project, busy, unavailable) {
+  const details = $('project-database');
+  details.hidden = project.database === 'none';
+  if (databaseView?.id !== project.id) databaseView = { id: project.id, next: 0 };
+  const view = databaseView;
+  const task = project.databaseTask;
+  if (view.taskStatus !== task?.status) view.next = 0;
+  view.taskStatus = task?.status;
+  const changing = project.operation === 'databaseTask';
+  const state = changing ? (task?.phase === 'database-stop' ? 'stopping' : 'starting') : view.status;
+  $('database-engine').textContent = stackNames[project.database] ?? '';
+  showMessage($('database-status'), databaseLabels[state] ?? (view.error ? 'Database status unavailable' : 'Checking database…'));
+  const transitioning = busy && !project.initialized;
+  const disabled = unavailable || transitioning || !view.status || Boolean(view.error);
+  $('database-start').disabled = disabled || ['running', 'starting', 'restarting', 'paused'].includes(state);
+  $('database-stop').disabled = disabled || ['absent', 'stopped'].includes(state);
+  $('database-logs').disabled = view.loading || !view.status || state === 'absent' || Boolean(view.error);
+  const issue = task?.diagnostic ?? view.diagnostic;
+  const hint = issue === 'docker' ? 'Start Docker Desktop or the Docker Engine to manage the database.' : diagnosticMessages[issue];
+  const error = actionError?.id === project.id && actionError.action?.startsWith('database-') ? actionError.message : hint ?? task?.error ?? view.error;
+  showMessage($('database-error'), error);
+  $('database-error').hidden = !error;
+  $('database-transition').hidden = !transitioning || Boolean(error);
+  $('database-output').hidden = !task?.log || task.status === 'succeeded';
+  renderOutput($('database-output'), project.id, task?.log);
+  $('database-log-empty').hidden = view.log !== '';
+  $('database-container-log').hidden = !view.log;
+  renderOutput($('database-container-log'), project.id, view.log);
+}
+
+async function loadDatabase(logs = false) {
+  const view = databaseView;
+  if (!view || view.loading || (!logs && Date.now() < view.next) || !$('project-database').open || $('project-database').hidden) return;
+  view.loading = true;
+  $('database-logs').disabled = true;
+  try {
+    const state = await request(`/api/projects/${view.id}/database${logs ? '?logs=1' : ''}`, { signal: AbortSignal.timeout(11000) });
+    Object.assign(view, state, { error: undefined, diagnostic: undefined });
+    if (logs && state.log === undefined) view.log = '';
+    if (!logs && state.status === 'absent') view.log = undefined;
+  } catch (error) { Object.assign(view, { error: error.message, diagnostic: error.diagnostic }); }
+  finally {
+    view.loading = false;
+    view.next = Date.now() + 3500;
+    if (view === databaseView) render();
+  }
+}
+
 function renderRows() {
   const filter = $('project-search').value.trim().toLowerCase();
   const list = $('project-list');
@@ -129,31 +211,33 @@ function render() {
   const running = project.status === 'running' || project.status === 'starting';
   const busy = running || project.status === 'stopping';
   const deleting = project.deleting || (pending?.id === project.id && pending.action === 'trash');
-  renderPorts(project, busy || deleting || Boolean(pending));
+  const unavailable = deleting || Boolean(pending) || Boolean(project.operation);
+  renderPorts(project, busy || unavailable);
+  renderDependencies(project, busy, unavailable);
+  renderDatabase(project, busy, unavailable);
   const action = $('runtime-action');
   action.dataset.action = running ? 'stop' : 'start';
   action.className = running || project.status === 'stopping' ? 'secondary' : 'primary';
-  action.disabled = Boolean(pending) || deleting || project.status === 'stopping';
+  action.disabled = Boolean(pending) || deleting || project.status === 'stopping' || (!running && Boolean(project.operation));
   setText(action.firstElementChild, project.status === 'stopping' ? 'Stopping…' : running ? 'Stop project' : 'Start project');
-  const error = actionError?.id === project.id ? actionError.message : project.error;
+  const devError = actionError?.id === project.id && ['start', 'stop'].includes(actionError.action) ? actionError : undefined;
+  const error = devError?.message ?? project.error;
   $('runtime-error').hidden = !error;
   showMessage($('runtime-error'), error);
-  const diagnostic = diagnosticMessages[(actionError?.id === project.id && actionError.diagnostic) || project.diagnostic];
+  const issue = devError?.diagnostic ?? project.diagnostic;
+  const diagnostic = issue === 'dependencies' && project.dependencies?.status === 'succeeded' ? undefined : diagnosticMessages[issue];
   const diagnosticField = $('runtime-diagnostic');
   showMessage(diagnosticField, diagnostic);
   diagnosticField.hidden = !diagnostic;
-  $('runtime-database').hidden = project.database === 'none';
-  $('project-delete').disabled = Boolean(pending) || busy || deleting;
-  $('project-delete-hint').hidden = !busy && !deleting;
-  setText($('project-delete-hint'), deleting ? 'Moving to trash…' : 'Stop the project first.');
+  $('project-delete').disabled = busy || unavailable;
+  $('project-delete-hint').hidden = !busy && !deleting && !project.operation;
+  setText($('project-delete-hint'), deleting ? 'Moving to trash…' : project.operation ? 'Wait for the current project operation to finish.' : 'Stop the project first.');
   const output = $('runtime-output');
   const log = project.log ?? '';
-  const follow = output.dataset.project !== project.id || output.scrollHeight - output.scrollTop - output.clientHeight < 32;
-  output.dataset.project = project.id;
   output.hidden = !log;
   $('runtime-log-empty').hidden = Boolean(log);
   $('runtime-log-truncated').hidden = !project.truncated;
-  if (output.textContent !== log) { output.textContent = log; if (follow) output.scrollTop = output.scrollHeight; }
+  renderOutput(output, project.id, log);
 }
 
 async function refresh() {
@@ -168,6 +252,7 @@ async function refresh() {
     $('project-connection').hidden = true;
     render();
     if (selected && selected !== requested) { refresh(); return; }
+    loadDatabase();
   } catch {
     if (version !== revision) return;
     $('project-connection').hidden = false;
@@ -195,16 +280,19 @@ async function act(id, action, body = {}) {
       const project = projects.find(item => item.id === id);
       if (project) project.ports = runtime.ports;
       portMessage = { id, message: 'Development ports saved.' };
+    } else if (['install', 'install-cancel', 'database-start', 'database-stop'].includes(action)) {
+      const project = projects.find(item => item.id === id);
+      if (project) Object.assign(project, runtime);
     } else {
       const project = projects.find(item => item.id === id);
-      if (project) Object.assign(project, { status: runtime.status, error: runtime.error, services: runtime.services, ready: runtime.ready, diagnostic: runtime.diagnostic });
+      if (project) Object.assign(project, { status: runtime.status, error: runtime.error, services: runtime.services, ready: runtime.ready, initialized: runtime.initialized, diagnostic: runtime.diagnostic });
     }
   } catch (error) {
     if (action === 'trash') {
       $('project-feedback').dataset.status = 'error';
       setText($('project-feedback'), error.message);
     } else if (action === 'ports') portMessage = { id, message: error.message };
-    else actionError = { id, message: error.message, diagnostic: error.diagnostic };
+    else actionError = { id, action, message: error.message, diagnostic: error.diagnostic };
   }
   finally {
     pending = undefined;
@@ -267,6 +355,12 @@ $('project-port-form').addEventListener('submit', event => {
   act(selected, 'ports', { ports });
 });
 $('runtime-action').addEventListener('click', event => act(selected, event.currentTarget.dataset.action));
+$('install-dependencies').addEventListener('click', () => { $('dependency-log').open = true; act(selected, 'install'); });
+$('cancel-install').addEventListener('click', () => act(selected, 'install-cancel'));
+$('project-database').addEventListener('toggle', () => loadDatabase());
+$('database-start').addEventListener('click', () => act(selected, 'database-start'));
+$('database-stop').addEventListener('click', () => act(selected, 'database-stop'));
+$('database-logs').addEventListener('click', () => loadDatabase(true));
 $('project-delete').addEventListener('click', () => {
   const project = projects.find(item => item.id === selected);
   if (!project || pending) return;

@@ -13,7 +13,7 @@
   <a class="skip-link" href="#main" data-i18n="跳到主要内容">Skip to content</a>
   <aside class="sidebar">
     <a class="brand" href="/" aria-label="StackForge home" data-i18n-aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
-    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.9</span></div>
+    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.10</span></div>
     <a class="side-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a>
     <a class="side-link" href="/#activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg><span data-i18n="任务记录">Task history</span></a>
     <a class="side-active projects-nav" href="/projects" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2h7v2"/></svg><span data-i18n="项目管理">Projects</span></a>
@@ -55,13 +55,36 @@
           </div>
           <p id="runtime-error" class="runtime-error" role="status" hidden></p>
           <p id="runtime-diagnostic" class="runtime-diagnostic" role="status" hidden></p>
+          <section class="project-operation" aria-labelledby="project-dependencies-title">
+            <div class="project-operation-heading"><h3 id="project-dependencies-title" data-i18n="依赖安装">Dependencies</h3><span id="dependency-status" class="small" role="status"></span></div>
+            <div class="project-operation-actions">
+              <button id="install-dependencies" type="button" class="secondary" data-i18n="安装依赖">Install dependencies</button>
+              <button id="cancel-install" type="button" class="secondary" data-i18n="取消安装" hidden>Cancel installation</button>
+            </div>
+            <p id="dependency-error" class="hint project-operation-error" role="status" hidden></p>
+            <details id="dependency-log" hidden><summary data-i18n="安装日志">Installation log</summary><pre id="dependency-output" tabindex="0" aria-label="Installation log" data-i18n-aria-label="安装日志"></pre></details>
+          </section>
           <div class="runtime-log">
             <h3 id="runtime-log-title" data-i18n="开发日志">Development log</h3>
             <p id="runtime-log-truncated" class="hint" data-i18n="仅显示最近的日志。" hidden>Showing the most recent output.</p>
             <p id="runtime-log-empty" data-i18n="启动项目后，输出会显示在这里。">Output will appear here after you start the project.</p>
             <pre id="runtime-output" aria-labelledby="runtime-log-title" tabindex="0" hidden></pre>
           </div>
-          <p id="runtime-database" class="hint" data-i18n="开发进程停止后，Docker 数据库仍可单独使用。" hidden>The Docker database remains available after the development processes stop.</p>
+          <details id="project-database" class="project-ports" hidden>
+            <summary data-i18n="数据库管理">Database controls</summary>
+            <div class="project-operation-heading"><strong id="database-engine"></strong><span id="database-status" class="small" role="status"></span></div>
+            <div class="project-operation-actions">
+              <button id="database-start" type="button" class="secondary" data-i18n="启动数据库">Start database</button>
+              <button id="database-stop" type="button" class="secondary" data-i18n="停止数据库">Stop database</button>
+              <button id="database-logs" type="button" class="secondary" data-i18n="查看数据库日志">View database logs</button>
+            </div>
+            <p class="hint" data-i18n="停止数据库会保留数据卷。">Stopping the database keeps its data volume.</p>
+            <p id="database-transition" class="hint" data-i18n="请等待项目就绪，或先停止项目。" hidden>Wait for the project to become ready or stop it first.</p>
+            <p id="database-error" class="hint project-operation-error" role="status" hidden></p>
+            <pre id="database-output" tabindex="0" aria-label="Database operation log" data-i18n-aria-label="数据库操作日志" hidden></pre>
+            <pre id="database-container-log" tabindex="0" aria-label="Database container log" data-i18n-aria-label="数据库容器日志" hidden></pre>
+            <p id="database-log-empty" class="hint" data-i18n="暂无数据库日志。" hidden>No database logs yet.</p>
+          </details>
           <details id="project-ports" class="project-ports" hidden>
             <summary data-i18n="开发端口">Development ports</summary>
             <p id="project-ports-legacy" class="hint" data-i18n="这个项目使用旧版启动脚本，网页和 API 使用原有端口。">This project uses an older launcher with its original app ports.</p>
