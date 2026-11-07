@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
-import { mkdtemp, mkdir, writeFile, rm, rename, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, rename, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -169,7 +169,7 @@ test('import registers a renamed StackForge folder without running it and surviv
   await app.close();
   app = await startServer();
   const restored = await getProject();
-  assert.deepEqual([restored.id, restored.path, restored.name, restored.imported], [id, path, original.name, true]);
+  assert.deepEqual([restored.id, restored.path, restored.name, restored.imported], [id, await realpath(path), original.name, true]);
   assert.equal((await app.post(`/api/projects/${id}/start`, {})).status, 202);
   await until(async () => (await getProject()).log.includes('imported script started'));
   assert.equal((await app.post(`/api/projects/${id}/stop`, {})).status, 202);
