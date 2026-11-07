@@ -1,27 +1,70 @@
 import { spawn } from 'node:child_process';
 import { lstat, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { portAvailable } from './environment.mjs';
 import { terminateTree } from './process.mjs';
+import { defaultPorts, projectPathKey } from './project-config.mjs';
 
 const logLimit = 64 * 1024;
 const active = new Set(['starting', 'running', 'stopping']);
-const pathKey = path => process.platform === 'win32' ? path.toLowerCase() : path;
 
-export async function recordedProjectDirectory(project) {
+async function probeService(url, signal) {
   try {
-    const root = await lstat(project.path);
-    if (!root.isDirectory() || root.isSymbolicLink()) throw new Error();
-    const directory = await realpath(project.path);
-    const manifestFile = join(directory, 'stackforge.json');
-    const manifestInfo = await lstat(manifestFile);
-    if (!manifestInfo.isFile() || manifestInfo.size > 64 * 1024) throw new Error();
-    const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
-    if (manifest.generator !== 'StackForge' || ['name', 'frontend', 'backend', 'database'].some(key => manifest.options?.[key] !== project[key])) throw new Error();
-    return directory;
+    const response = await fetch(url, { redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(1500)]) });
+    if (!response.ok || !url.endsWith('/api/health')) {
+      await response.body?.cancel();
+      return response.ok;
+    }
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of response.body ?? []) {
+      size += chunk.byteLength;
+      if (size > 4096) return false;
+      chunks.push(chunk);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')).status === 'ok';
+  } catch { return false; }
+}
+
+export function startupDiagnostic(project, output) {
+  if (/EADDRINUSE|address already in use|port [^\r\n]{1,32}(?:already in use|already allocated)|ports are not available/i.test(output)) return 'port';
+  if (project.backend === 'spring' && /JAVA_HOME[^\r\n]*(?:not|incorrect|invalid)|(?:invalid (?:target|source) release|release version \d+ not supported)|UnsupportedClassVersionError|(?:java|javac)[^\r\n]*(?:not found|not recognized|不是内部或外部命令)/i.test(output)) return 'java';
+  if (project.database !== 'none') {
+    if (/cannot connect to the docker daemon|is the docker daemon running|dockerDesktopLinuxEngine|docker_engine.*(?:cannot|not find|denied)|spawn docker ENOENT|docker[^\r\n]*(?:not recognized|command not found|不是内部或外部命令)/i.test(output)) return 'docker';
+    if (/Database startup failed/i.test(output)) return 'database';
+  }
+  if (/Cannot find package ['"](?:vite|vue|react|express|mysql2|pg|@vitejs\/[^'"]+)['"]|vite['"]?[^\r\n]{0,32}(?:not recognized|not found|不是内部或外部命令)|failed to load config[^\r\n]*\n[^\r\n]*Cannot find package/i.test(output)) return 'dependencies';
+}
+
+export async function readProjectFolder(path) {
+  const root = await lstat(path);
+  if (!root.isDirectory() || root.isSymbolicLink()) throw new Error();
+  const directory = await realpath(path);
+  const manifestFile = join(directory, 'stackforge.json');
+  const manifestInfo = await lstat(manifestFile);
+  if (!manifestInfo.isFile() || manifestInfo.size > 64 * 1024) throw new Error();
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  if (manifest.generator !== 'StackForge') throw new Error();
+  return { directory, manifest };
+}
+
+export async function inspectRecordedProject(project) {
+  try {
+    const info = await readProjectFolder(project.path);
+    if (['name', 'frontend', 'backend', 'database'].some(key => info.manifest.options?.[key] !== project[key])) throw new Error();
+    return info;
   } catch {
     throw new Error('The recorded StackForge project is missing, has moved, or no longer matches its record.');
   }
+}
+
+export async function developmentScript(directory) {
+  const script = join(directory, 'scripts', 'dev.mjs');
+  try {
+    if (!(await lstat(script)).isFile() || projectPathKey(await realpath(script)) !== projectPathKey(script)) throw new Error();
+    return script;
+  } catch { throw new Error('The recorded StackForge project or its development script is missing or has moved.'); }
 }
 
 function stopTree(child) {
@@ -43,45 +86,58 @@ function stopTree(child) {
 }
 
 export class ProjectRuntime {
-  constructor({ probePort = portAvailable } = {}) {
+  constructor({ probePort = portAvailable, probeEndpoint = probeService } = {}) {
     this.probePort = probePort;
+    this.probeEndpoint = probeEndpoint;
     this.runs = new Map();
     this.closing = false;
   }
 
   status(project, includeLogs = false) {
-    const entry = this.runs.get(pathKey(project.path));
+    const entry = this.runs.get(projectPathKey(project.path));
     const runtime = { status: entry?.status ?? 'stopped', error: entry?.error };
+    if (entry?.status === 'running') {
+      runtime.services = entry.services;
+      runtime.ready = Object.values(entry.services).every(service => service.ready);
+    }
+    if (entry && (runtime.status === 'failed' || runtime.status === 'running' && !runtime.ready)) {
+      runtime.diagnostic = startupDiagnostic(project, (entry.error || '') + '\n' + entry.log.slice(-12000));
+      if (!runtime.diagnostic && runtime.status === 'running' && Date.now() - entry.launchedAt > 30000) runtime.diagnostic = 'waiting';
+    }
     if (includeLogs) Object.assign(runtime, { log: entry?.log ?? '', truncated: entry?.truncated ?? false });
     return runtime;
   }
 
-  start(project) {
+  start(project, overrides = {}) {
     if (this.closing) throw new Error('StackForge is shutting down.');
-    const key = pathKey(project.path);
+    const key = projectPathKey(project.path);
     if (active.has(this.runs.get(key)?.status)) return;
-    const ports = [project.frontend !== 'none' ? 5173 : null, project.backend !== 'none' ? 8080 : null].filter(Boolean);
+    const effective = { ...defaultPorts(project), ...overrides };
+    const ports = [effective.frontend, effective.backend, overrides.database].filter(Boolean);
     const reserved = ports.find(port => [...this.runs.values()].some(other => active.has(other.status) && other.ports.includes(port)));
     if (reserved) throw new Error(`Development port ${reserved} is already in use.`);
-    const entry = { status: 'starting', ports, log: '', truncated: false };
+    const services = {};
+    if (effective.frontend) services.frontend = { url: `http://127.0.0.1:${effective.frontend}/`, ready: false };
+    if (effective.backend) services.backend = { url: `http://127.0.0.1:${effective.backend}/api/health`, ready: false };
+    const entry = { status: 'starting', ports, services, readiness: new AbortController(), log: '', truncated: false };
     this.runs.set(key, entry);
-    entry.done = this.launch(project, entry).catch(error => {
+    entry.done = this.launch(project, entry, effective, overrides).catch(error => {
       if (entry.status !== 'stopping') entry.error = error.message;
-    }).finally(() => { entry.status = entry.error ? 'failed' : 'stopped'; entry.child = undefined; });
+    }).finally(() => { entry.readiness.abort(); entry.status = entry.error ? 'failed' : 'stopped'; entry.child = undefined; });
   }
 
-  async launch(project, entry) {
-    const directory = await recordedProjectDirectory(project);
-    const script = join(directory, 'scripts', 'dev.mjs');
-    try {
-      if (!(await lstat(script)).isFile() || pathKey(await realpath(script)) !== pathKey(script)) throw new Error();
-    } catch { throw new Error('The recorded StackForge project or its development script is missing or has moved.'); }
+  async launch(project, entry, effective, overrides) {
+    const { directory, manifest } = await inspectRecordedProject(project);
+    if (Object.keys(overrides).length && manifest.portConfig !== 1) throw new Error('This project uses an older launcher with fixed app ports.');
+    const script = await developmentScript(directory);
     if (entry.status === 'stopping') return;
-    for (const port of entry.ports) if (!await this.probePort(port)) throw new Error(`Development port ${port} is already in use.`);
+    // A database left running from the previous session may already own its port.
+    for (const port of [effective.frontend, effective.backend].filter(Boolean)) if (!await this.probePort(port)) throw new Error(`Development port ${port} is already in use.`);
     if (entry.status === 'stopping') return;
 
     const child = spawn(process.execPath, [script], {
       cwd: directory, shell: false, detached: process.platform !== 'win32', windowsHide: true,
+      env: { ...process.env, STACKFORGE_FRONTEND_PORT: String(effective.frontend ?? ''), STACKFORGE_BACKEND_PORT: String(effective.backend ?? ''), STACKFORGE_DATABASE_PORT: String(overrides.database ?? '') },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     entry.child = child;
@@ -92,21 +148,38 @@ export class ProjectRuntime {
     };
     child.stdout.setEncoding('utf8').on('data', capture);
     child.stderr.setEncoding('utf8').on('data', capture);
-    child.once('spawn', () => { if (entry.status === 'starting') entry.status = 'running'; });
+    child.once('spawn', () => {
+      if (entry.status !== 'starting') return;
+      entry.launchedAt = Date.now();
+      entry.status = 'running';
+      this.watchReadiness(entry).catch(() => {});
+    });
     child.once('error', error => { if (entry.status !== 'stopping') entry.error = `Could not start the development process: ${error.message}`; });
     const [code, signal] = await new Promise(resolve => child.once('close', (...result) => resolve(result)));
     await entry.termination;
     if (entry.status !== 'stopping' && !entry.error && code !== 0) entry.error = `Development process exited (${code ?? signal}). See the log for details.`;
   }
 
+  async watchReadiness(entry) {
+    const signal = entry.readiness.signal;
+    const services = Object.values(entry.services);
+    while (!signal.aborted) {
+      const checks = await Promise.all(services.map(service => this.probeEndpoint(service.url, signal)));
+      if (signal.aborted) return;
+      for (const [index, service] of services.entries()) service.ready = checks[index];
+      await delay(checks.every(Boolean) ? 2000 : 850, undefined, { signal, ref: false });
+    }
+  }
+
   stop(project) {
-    const entry = this.runs.get(pathKey(project.path));
+    const entry = this.runs.get(projectPathKey(project.path));
     if (entry) this.stopRun(entry);
   }
 
   stopRun(entry) {
     if (!active.has(entry.status) || entry.status === 'stopping') return;
     entry.status = 'stopping';
+    entry.readiness.abort();
     if (entry.child) entry.termination = stopTree(entry.child);
   }
 

@@ -39,13 +39,18 @@ Desktop actions use the applications installed on your computer. On Windows, **O
 
 Open **Projects** to find projects created by this StackForge checkout, including ones from earlier versions. Select a project and click **Start project** to run its existing `scripts/dev.mjs`. The page shows process status and streams the latest development output. Install the project's dependencies first if you skipped them during creation.
 
+- **Open app** and **Open API** appear as their local checks pass. The backend check verifies `/api/health`.
+- **Development ports** saves frontend, backend, and database port overrides per project for the next start. The frontend proxy follows the backend port. Projects generated with an older fixed-port launcher continue using their original ports.
+- **Import project** adds a moved or cloned StackForge project using its `stackforge.json` and development script. Imports register the existing folder and start only when you click **Start project**.
+- Startup diagnostics highlight common port, dependency, Java, and Docker problems alongside the development log.
+
 **Stop project** stops development processes started from this page. A normal StackForge shutdown also stops them. Docker databases run separately and can be stopped with the generated project's `npm run db:down` command. Logs are kept in memory for the latest run of each project and cleared when StackForge restarts.
 
 **Delete project** shows the folder path before moving the entire local folder to the system trash. Stop the project in StackForge first. Restore the folder to its original location to see it in Projects again. GitHub repositories and Docker volumes stay intact. Linux requires `gio` for this action, and the drive must support the system trash.
 
 ## Generated projects
 
-- Vue 3 or React with Vite and TypeScript. Frontend `/api` requests proxy to the backend on port 8080.
+- Vue 3 or React with Vite and TypeScript. Frontend `/api` requests proxy to the backend, which defaults to port 8080.
 - Spring Boot from the official Spring Initializr service, using a stable release, Java 21, Maven Wrapper, a health endpoint, and optional JDBC connectivity.
 - Express with a health endpoint and optional mysql2 / pg connection pool and database check endpoint.
 - MySQL 8.4 or PostgreSQL 17 with Docker Compose, health checks, persistent volumes, and random local credentials.

@@ -259,8 +259,16 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 .projects-nav { margin-top: 6px; }
 .projects-sheet { padding-bottom: 32px; }
 .projects-title { justify-content: space-between; gap: 16px; }
+.project-title-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
+.project-title-actions .secondary { margin: 0; }
 .project-create-link { display: inline-flex; align-items: center; gap: 6px; margin: 0; white-space: nowrap; }
 .project-create-link svg { width: 16px; height: 16px; }
+.project-import { margin-bottom: 22px; padding: 15px 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.project-import form { margin-top: 10px; font-size: 12px; }
+.project-import-fields { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin-top: 4px; }
+.project-import-fields input { flex: 1 1 210px; min-width: 0; min-height: 38px; padding: 6px 9px; border: 1px solid var(--control); border-radius: 6px; color: var(--text); background: var(--surface); }
+.project-import-fields .secondary { margin: 0; }
+#project-import-message:empty { display: none; }
 .project-manager { display: grid; grid-template-columns: minmax(230px, .85fr) minmax(0, 1.45fr); gap: 28px; align-items: start; }
 .project-index { min-width: 0; }
 .project-index h2 { margin-bottom: 12px; }
@@ -276,7 +284,7 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 .project-row-copy strong { font-weight: 600; }
 .runtime-state { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; font-size: 12px; color: var(--muted); }
 .runtime-state::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.runtime-state[data-state=running] { color: var(--positive); }
+.runtime-state[data-state=ready] { color: var(--positive); }
 .runtime-state[data-state=failed] { color: var(--negative); }
 .runtime-state[data-state=starting], .runtime-state[data-state=stopping] { color: var(--warning); }
 .project-detail { min-width: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--raised); scroll-margin-top: 16px; }
@@ -284,8 +292,17 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 .project-detail-name { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
 .project-detail h2 { font-size: 17px; overflow-wrap: anywhere; }
 .project-detail-head code { grid-column: 1 / -1; overflow-wrap: anywhere; color: var(--muted); }
+.runtime-services { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; }
+.runtime-services a { display: inline-flex; align-items: center; margin: 0; }
+.project-ports { padding: 10px 19px; border-top: 1px solid var(--border); }
+.project-ports summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.project-port-fields { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; }
+.project-port-fields label { display: grid; gap: 4px; font-size: 12px; }
+.project-port-fields input { width: 106px; min-height: 36px; padding: 5px 8px; border: 1px solid var(--control); border-radius: 6px; background: var(--surface); color: var(--text); }
+#project-port-message:empty { display: none; }
 #runtime-action { width: auto; min-height: 40px; margin: 0; white-space: nowrap; }
 .runtime-error { padding: 0 19px 12px; overflow-wrap: anywhere; color: var(--negative); }
+.runtime-diagnostic { margin: 0 19px 14px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--warning); font-size: 13px; }
 .runtime-log { padding: 14px 19px 19px; border-top: 1px solid var(--border); }
 .runtime-log h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; }
 #runtime-output, #runtime-log-empty { min-height: 122px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
@@ -320,7 +337,9 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
   #runtime-action, .project-create-link, .project-danger-link, .project-trash-confirm { min-height: 44px; }
 }
 @media(max-width:480px) {
-  .projects-title { align-items: start; }
+  .projects-title { align-items: start; flex-wrap: wrap; }
+  .project-title-actions { justify-content: start; }
+  .project-import-fields input { font-size: 16px; }
   .project-search input { font-size: 16px; }
   .project-detail-head, .runtime-log { padding-inline: 13px; }
 }

@@ -6,9 +6,10 @@ import { mkdtemp, mkdir, writeFile, rm, rename, readFile } from 'node:fs/promise
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { ProjectRuntime } from '../src/project-runtime.mjs';
+import { ProjectRuntime, startupDiagnostic } from '../src/project-runtime.mjs';
 import { createApp } from '../src/server.mjs';
 import { createDesktop } from '../src/desktop.mjs';
+import { ProjectConfig, validatePorts } from '../src/project-config.mjs';
 
 const childScript = `import { spawn } from 'node:child_process';
 const program = "const server = require('node:net').createServer(); server.listen(0, '127.0.0.1', () => console.log('ready', server.address().port));";
@@ -22,9 +23,9 @@ async function workspace(t) {
   return directory;
 }
 
-async function createProject(parent, name, script) {
+async function createProject(parent, name, script, stack = {}) {
   const path = join(parent, name);
-  const options = { name, frontend: 'vue', backend: 'none', database: 'none' };
+  const options = { name, frontend: 'vue', backend: 'none', database: 'none', ...stack };
   await mkdir(join(path, 'scripts'), { recursive: true });
   await writeFile(join(path, 'stackforge.json'), JSON.stringify({ generator: 'StackForge', options }));
   await writeFile(join(path, 'scripts', 'dev.mjs'), script);
@@ -86,6 +87,93 @@ test('stopping during startup prevents execution and a failed run retains bounde
   await until(() => runtime.status(project).status === 'failed');
   assert.match(runtime.status(project).error, /no longer matches its record/);
   assert.equal(runtime.status(project, true).log, '');
+});
+
+test('startup diagnostics distinguish missing packages, Java mismatch, Docker, and occupied ports', () => {
+  const project = { backend: 'spring', database: 'postgres' };
+  assert.equal(startupDiagnostic(project, 'Fatal error compiling: error: release version 21 not supported'), 'java');
+  assert.equal(startupDiagnostic(project, 'Cannot connect to the Docker daemon. Is the docker daemon running?'), 'docker');
+  assert.equal(startupDiagnostic(project, 'Ports are not available: bind: address already in use\nDatabase startup failed'), 'port');
+  assert.equal(startupDiagnostic(project, 'Database startup failed. Ensure Docker Desktop is running, then check .env and ports.'), 'database');
+  assert.equal(startupDiagnostic({ ...project, backend: 'express' }, "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'express' imported from server.js"), 'dependencies');
+  assert.equal(startupDiagnostic(project, 'The frontend plugin printed a custom message.'), undefined);
+});
+
+test('service links appear only after their readiness checks pass and disappear on stop', async t => {
+  const parent = await workspace(t);
+  const project = await createProject(parent, 'readiness-app', 'setInterval(() => {}, 1000);', { backend: 'express' });
+  let apiReady = false;
+  const runtime = new ProjectRuntime({ probePort: async () => true, probeEndpoint: async url => !url.endsWith('/api/health') || apiReady });
+  t.after(() => runtime.shutdown());
+  runtime.start(project);
+  await until(() => runtime.status(project).services?.frontend.ready);
+  assert.equal(runtime.status(project).ready, false);
+  assert.deepEqual(runtime.status(project).services.backend, { url: 'http://127.0.0.1:8080/api/health', ready: false });
+  apiReady = true;
+  await until(() => runtime.status(project).ready);
+  runtime.stop(project);
+  assert.equal(runtime.status(project).services, undefined);
+  await until(() => runtime.status(project).status === 'stopped');
+});
+
+test('configured ports persist per project, reject collisions, and are passed to the managed launcher', async t => {
+  const parent = await workspace(t);
+  const project = { ...await createProject(parent, 'configured-app', "console.log(process.env.STACKFORGE_FRONTEND_PORT, process.env.STACKFORGE_BACKEND_PORT); setInterval(() => {}, 1000);", { backend: 'express' }), id: 'configured' };
+  await writeFile(join(project.path, 'stackforge.json'), JSON.stringify({ generator: 'StackForge', options: project, portConfig: 1 }));
+  const config = new ProjectConfig(join(parent, 'projects.json'));
+  assert.throws(() => validatePorts(project, { frontend: 8080 }), /different port/);
+  assert.throws(() => validatePorts(project, { backend: 80 }), /1024 to 65535/);
+  await config.savePorts(project, validatePorts(project, { frontend: 15173, backend: 18080 }));
+  const restored = new ProjectConfig(config.file);
+  await restored.ready;
+  assert.deepEqual(restored.ports({ ...project, id: 'different' }), {});
+  const probed = [];
+  const runtime = new ProjectRuntime({ probePort: async port => { probed.push(port); return true; }, probeEndpoint: async () => true });
+  t.after(() => runtime.shutdown());
+  runtime.start(project, restored.ports(project));
+  await until(() => runtime.status(project, true).log.includes('15173 18080'));
+  assert.deepEqual(probed, [15173, 18080]);
+  assert.equal(runtime.status(project).services.frontend.url, 'http://127.0.0.1:15173/');
+  assert.equal(runtime.status(project).services.backend.url, 'http://127.0.0.1:18080/api/health');
+  await runtime.shutdown();
+});
+
+test('import registers a renamed StackForge folder without running it and survives restart', async t => {
+  const parent = await workspace(t);
+  const original = await createProject(parent, 'original-name', "console.log('imported script started'); setInterval(() => {}, 1000);");
+  const path = join(parent, 'moved & renamed');
+  await rename(original.path, path);
+  const stateDir = join(parent, 'state', 'jobs');
+  async function startServer() {
+    const server = createApp({ stateDir, runtime: new ProjectRuntime({ probePort: async () => true, probeEndpoint: async () => true }) });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const get = route => fetch(base + route).then(response => response.json());
+    const { token } = await get('/api/state');
+    const post = (route, data, origin) => fetch(base + route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token, ...(origin && { Origin: origin }) }, body: JSON.stringify(data) });
+    const close = async () => { await server.shutdownTasks(); await new Promise(resolve => server.close(resolve)); };
+    return { get, post, close };
+  }
+  let app = await startServer();
+  t.after(() => app.close());
+  assert.equal((await app.post('/api/projects/import', { path }, 'https://example.com')).status, 403);
+  assert.equal((await app.post('/api/projects/import', { path: parent })).status, 400);
+  const imported = await app.post('/api/projects/import', { path, command: 'ignored' });
+  assert.equal(imported.status, 201);
+  const { id } = await imported.json();
+  assert.equal((await app.post('/api/projects/import', { path })).status, 400);
+  const getProject = async () => (await app.get(`/api/projects?logs=${id}`)).projects[0];
+  assert.equal((await getProject()).status, 'stopped');
+  assert.equal((await getProject()).log, '');
+  await app.close();
+  app = await startServer();
+  const restored = await getProject();
+  assert.deepEqual([restored.id, restored.path, restored.name, restored.imported], [id, path, original.name, true]);
+  assert.equal((await app.post(`/api/projects/${id}/start`, {})).status, 202);
+  await until(async () => (await getProject()).log.includes('imported script started'));
+  assert.equal((await app.post(`/api/projects/${id}/stop`, {})).status, 202);
+  await until(async () => (await getProject()).status === 'stopped');
 });
 
 test('project API protects runtime and recycling actions, locks moves, and rediscovers restored projects', { timeout: 15000 }, async t => {

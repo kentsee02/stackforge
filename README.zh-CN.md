@@ -43,13 +43,18 @@ Windows PowerShell：`$env:PORT=4311; npm start`。
 
 打开「项目管理」，可以查看当前这份 StackForge 创建过的项目，包括早期版本生成的项目。选中项目后点击「启动项目」，工具会运行它已有的 `scripts/dev.mjs`，并实时显示进程状态和输出。如果创建时跳过了依赖安装，请先安装该项目的依赖。
 
+- 前端检查通过后可「打开网页」，后端 `/api/health` 检查通过后可「打开 API」。
+- 「开发端口」按项目保存前端、后端和数据库端口，下次启动时生效。前端代理会跟随后端端口。使用旧版固定端口启动脚本的项目继续沿用原来的端口。
+- 「导入项目」可以添加移动或克隆后的 StackForge 项目。请选择包含 `stackforge.json` 和开发脚本的文件夹。点击「启动项目」后才会运行脚本。
+- 启动时遇到常见的端口、依赖、Java 或 Docker 问题，页面会在日志旁显示处理提示。
+
 「停止项目」会停止从这个页面启动的开发进程。正常关闭 StackForge 时，也会停止这些进程。Docker 数据库独立运行，可在项目目录用 `npm run db:down` 停止。每个项目最近一次运行的日志保存在内存中，重启 StackForge 后会清空。
 
 「删除项目」会先显示完整路径，确认后将整个本地项目文件夹移到系统回收站。请先停止项目。在系统回收站把文件夹恢复到原位后，它会重新出现在项目管理页。GitHub 仓库和 Docker 数据卷会保留。Linux 上此操作需要 `gio`，所在磁盘须支持系统回收站。
 
 ## 生成内容
 
-- Vue 3 或 React，搭配 Vite 与 TypeScript；前端 `/api` 代理到本机 8080。
+- Vue 3 或 React，搭配 Vite 与 TypeScript。前端 `/api` 会代理到后端，默认端口为 8080。
 - Spring Boot：从官方 Spring Initializr 下载稳定版本，包含 Java 21、Maven Wrapper、健康检查 API 和可选 JDBC 驱动。
 - Express：健康检查 API，可选 mysql2 / pg 连接池和数据库检查接口。
 - MySQL 8.4 或 PostgreSQL 17：Compose、持久化数据卷、健康检查，以及随机生成的本地密码。

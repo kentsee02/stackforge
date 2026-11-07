@@ -10,7 +10,7 @@ import { json, frontendFiles, expressFiles, databaseFiles, devScript, generatedR
 
 export async function download(url, { fetchImpl = fetch, binary = false, signal } = {}) {
   throwIfCancelled(signal);
-  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.8.0' } });
+  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.9.0' } });
   if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）：${new URL(url).hostname}`);
   if (binary) {
     const reader = response.body.getReader();
@@ -81,7 +81,10 @@ export async function generateProject(input, report = () => {}, services = {}) {
     const failure = fetched.find(item => item.status === 'rejected');
     if (failure) throw failure.reason;
     });
-    if (options.frontend !== 'none') await steps('frontend', '生成 TypeScript 前端与 API 代理', 22, () => put(staging, frontendFiles(options, versions)));
+    if (options.frontend !== 'none') await steps('frontend', '生成 TypeScript 前端与 API 代理', 22, async () => {
+      await put(staging, frontendFiles(options, versions));
+      checkpoint.configurableFrontend = true;
+    });
     await steps('backend', '生成后端服务与连接配置', 35, async () => {
     if (options.backend === 'spring') {
       let boot = versions.springBoot;
@@ -118,7 +121,7 @@ export async function generateProject(input, report = () => {}, services = {}) {
         await writeFile(pomPath, pom.replace('</dependencies>', '\t<dependency>\n\t\t<groupId>com.h2database</groupId>\n\t\t<artifactId>h2</artifactId>\n\t\t<scope>test</scope>\n\t</dependency>\n\t</dependencies>'));
         await put(staging, { 'backend/src/test/resources/application.properties': 'spring.datasource.url=jdbc:h2:mem:stackforge_test;DB_CLOSE_DELAY=-1\nspring.datasource.username=sa\nspring.datasource.password=\n' });
       }
-      let properties = 'spring.application.name=' + options.name + '\nserver.address=127.0.0.1\nserver.port=8080\n';
+      let properties = 'spring.application.name=' + options.name + '\nserver.address=127.0.0.1\nserver.port=${STACKFORGE_BACKEND_PORT:8080}\n';
       if (options.database !== 'none') {
         const mysql = options.database === 'mysql';
         properties += 'spring.datasource.url=jdbc:' + (mysql ? 'mysql' : 'postgresql') + '://${DB_HOST:127.0.0.1}:${DB_PORT:' + (mysql ? '3306' : '5432') + '}/${DB_NAME:app}\nspring.datasource.username=${DB_USER:app}\nspring.datasource.password=${DB_PASSWORD}\n';
@@ -129,16 +132,18 @@ export async function generateProject(input, report = () => {}, services = {}) {
         [path]: `package ${packageName};\n\nimport java.util.Map;\nimport org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RestController;\n${options.database === 'none' ? '' : 'import org.springframework.jdbc.core.JdbcTemplate;\nimport org.springframework.http.ResponseEntity;\n'}\n@RestController\npublic class HealthController {\n${options.database === 'none' ? '' : '    private final JdbcTemplate jdbc;\n    public HealthController(JdbcTemplate jdbc) { this.jdbc = jdbc; }\n'}    @GetMapping("/api/health")\n    public Map<String, String> health() { return Map.of("status", "ok", "message", "Hello, ${options.name}! The frontend and backend are connected."); }\n${options.database === 'none' ? '' : `    @GetMapping("/api/db")\n    public ResponseEntity<Map<String, String>> database() {\n        try { jdbc.queryForObject("SELECT 1", Integer.class); return ResponseEntity.ok(Map.of("status", "ok", "database", "${options.database}")); }\n        catch (Exception ex) { return ResponseEntity.status(503).body(Map.of("status", "unavailable")); }\n    }\n`}}\n`
       });
     } else if (options.backend === 'express') await put(staging, expressFiles(options, versions));
+    checkpoint.configurableBackend = true;
     });
     await steps('files', '生成环境变量、开发脚本与说明', 52, async () => {
     if (options.database !== 'none') await put(staging, databaseFiles(options, randomBytes(24).toString('hex'), randomBytes(24).toString('hex')));
     const workspaces = [...(options.frontend !== 'none' ? ['frontend'] : []), ...(options.backend === 'express' ? ['backend'] : [])];
+    const configurablePorts = (options.frontend === 'none' || checkpoint.configurableFrontend) && (options.backend === 'none' || checkpoint.configurableBackend);
     await put(staging, {
       'package.json': json({ name: options.name, private: true, version: '0.1.0', type: 'module', engines: { node: '>=22.12.0' }, ...(workspaces.length > 0 && { workspaces }), scripts: { dev: 'node scripts/dev.mjs', ...(options.frontend !== 'none' && { build: 'npm run build --workspace frontend' }), ...(options.database !== 'none' && { 'db:up': 'docker compose up -d --wait', 'db:down': 'docker compose down' }) } }),
       '.gitignore': 'node_modules/\ndist/\ntarget/\n.env\n.env.*\n!.env.example\n.stackforge-owner\n.stackforge-cache/\n*.log\n.idea/\n.vscode/\n.DS_Store\n',
       'scripts/dev.mjs': devScript(options),
       'README.md': generatedReadme(options),
-      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.8.0', createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
+      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.9.0', ...(configurablePorts && { portConfig: 1 }), createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
     });
     });
     if (options.install) {

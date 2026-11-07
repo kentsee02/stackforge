@@ -1,8 +1,8 @@
 import { createServer } from 'node:http';
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { catalog, validateOptions } from './catalog.mjs';
 import { generateProject } from './generator.mjs';
 import { checkEnvironment } from './environment.mjs';
@@ -12,10 +12,11 @@ import { Jobs } from './jobs.mjs';
 import { absoluteDirectory, defaultProjectsDirectory } from './paths.mjs';
 import { Settings } from './settings.mjs';
 import { createDesktop } from './desktop.mjs';
-import { ProjectRuntime, recordedProjectDirectory } from './project-runtime.mjs';
+import { ProjectRuntime, inspectRecordedProject, readProjectFolder, developmentScript, startupDiagnostic } from './project-runtime.mjs';
+import { ProjectConfig, defaultPorts, validatePorts, importedProject, projectPathKey } from './project-config.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const identity = { application: 'stackforge-local', version: '0.8.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
+export const identity = { application: 'stackforge-local', version: '0.9.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
 const staticFiles = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/messages.js': ['messages.js', 'text/javascript; charset=utf-8'], '/template-store.js': ['template-store.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'], '/plex-regular.ttf': ['plex-regular.ttf', 'font/ttf'], '/plex-semibold.ttf': ['plex-semibold.ttf', 'font/ttf'] };
 staticFiles['/projects'] = ['projects.html', 'text/html; charset=utf-8'];
 staticFiles['/projects.js'] = ['projects.js', 'text/javascript; charset=utf-8'];
@@ -29,8 +30,27 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   const token = randomBytes(32).toString('hex');
   const jobs = new Jobs({ directory: stateDir, generate, check, publish });
   const settings = new Settings(settingsFile);
+  const projectConfig = new ProjectConfig(stateDir ? join(dirname(stateDir), 'projects.json') : false);
   const removals = new Map();
+  const portWrites = new Map();
   let closing = false;
+  function managedProjects() {
+    const created = jobs.projects();
+    const paths = new Set(created.map(project => projectPathKey(project.path)));
+    return [...projectConfig.value.imports.filter(project => !paths.has(projectPathKey(project.path))), ...created];
+  }
+  async function registerProject(path) {
+    let project;
+    try {
+      const { directory, manifest } = await readProjectFolder(absoluteDirectory(path));
+      await developmentScript(directory);
+      project = importedProject(randomUUID(), directory, manifest.options);
+    } catch { throw new Error('Choose a StackForge project folder with a valid stackforge.json and development script.'); }
+    const existing = await Promise.all(jobs.projects().map(item => realpath(item.path).catch(() => item.path)));
+    if (existing.some(item => projectPathKey(item) === projectPathKey(project.path))) throw new Error('This folder is already in Projects.');
+    await projectConfig.addProject(project);
+    return project;
+  }
   function send(res, status, value) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(value));
@@ -42,16 +62,22 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     const validHosts = [`127.0.0.1:${req.socket.localPort}`, `localhost:${req.socket.localPort}`];
     if (!validHosts.includes(req.headers.host)) return send(res, 403, { error: '只允许从本机地址访问。' });
     try {
-      await Promise.all([jobs.ready, settings.ready]);
+      await Promise.all([jobs.ready, settings.ready, projectConfig.ready]);
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (req.method === 'GET' && url.pathname === '/api/identity') return send(res, 200, identity);
       if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, { catalog, token, defaultDir, node: process.version, platform: process.platform, version: identity.version, jobs: jobs.list(), preferences: settings.value, desktop: await desktop.capabilities() });
       if (req.method === 'GET' && url.pathname === '/api/projects') {
         const selected = url.searchParams.get('logs');
-        const projects = await Promise.all(jobs.projects().map(async project => {
+        const projects = await Promise.all(managedProjects().map(async project => {
           const deleting = removals.has(project.path);
           const session = runtime.status(project, project.id === selected);
-          if (deleting || ['starting', 'running', 'stopping'].includes(session.status) || await locationExists(project.path)) return { ...project, ...session, deleting };
+          if (!deleting && !['starting', 'running', 'stopping'].includes(session.status) && !await locationExists(project.path)) return;
+          const detail = { ...project, ...session, deleting };
+          if (project.id === selected) {
+            const info = await inspectRecordedProject(project).catch(() => null);
+            Object.assign(detail, { portDefaults: defaultPorts(project), ports: projectConfig.ports(project), canConfigurePorts: info?.manifest.portConfig === 1 });
+          }
+          return detail;
         }));
         return send(res, 200, { projects: projects.filter(Boolean) });
       }
@@ -60,8 +86,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         const job = jobs.view(url.pathname.slice('/api/jobs/'.length));
         return send(res, job ? 200 : 404, job ?? { error: '找不到这个创建任务。' });
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|trash)$/.exec(url.pathname);
-      if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|trash|ports)$/.exec(url.pathname);
+      if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         const origin = req.headers.origin;
         if ((origin && origin !== `http://${req.headers.host}`) || req.headers['x-stackforge-token'] !== token || req.headers['content-type']?.split(';')[0] !== 'application/json') return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
@@ -71,18 +97,38 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         let payload;
         try { payload = JSON.parse(body); if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error(); }
         catch { return send(res, 400, { error: 'Invalid JSON request.' }); }
-        if (removals.size && (url.pathname === '/api/projects' || /\/api\/jobs\/[^/]+\/(publish|retry|open)$/.test(url.pathname))) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
+        if (removals.size && (['/api/projects', '/api/projects/import'].includes(url.pathname) || /\/api\/jobs\/[^/]+\/(publish|retry|open)$/.test(url.pathname))) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
+        if (url.pathname === '/api/projects/import') {
+          if (closing || jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
+          try { return send(res, 201, await registerProject(payload.path)); }
+          catch (error) { return send(res, 400, { error: error.message }); }
+        }
         if (projectAction) {
           const [, id, action] = projectAction;
-          const project = jobs.projects().find(item => item.id === id);
+          const project = managedProjects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
           if (removals.has(project.path)) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
+          if (portWrites.has(project.path)) return send(res, 409, { error: 'Wait for the project ports to finish saving.' });
+          if (action === 'ports') {
+            if (closing || ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before changing its ports.' });
+            const saving = (async () => {
+              const ports = validatePorts(project, payload.ports);
+              const { manifest } = await inspectRecordedProject(project);
+              if (manifest.portConfig !== 1) throw new Error('This project uses an older launcher with fixed app ports.');
+              await projectConfig.savePorts(project, ports);
+              return ports;
+            })();
+            portWrites.set(project.path, saving);
+            try { return send(res, 200, { ports: await saving }); }
+            catch (error) { return send(res, 400, { error: error.message }); }
+            finally { portWrites.delete(project.path); }
+          }
           if (action === 'trash') {
             if (payload.confirm !== true) return send(res, 400, { error: 'Confirm moving this project to the trash.' });
             if (closing || jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
             if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before moving it to the trash.' });
             const moving = (async () => {
-              const directory = await recordedProjectDirectory(project);
+              const { directory } = await inspectRecordedProject(project);
               await desktop.trashProject(directory);
               if (await locationExists(project.path)) throw new Error('The project is still at its original location. Check the system trash before retrying.');
             })();
@@ -92,9 +138,10 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             finally { removals.delete(project.path); }
           }
           try {
-            runtime[action](project);
+            if (action === 'start') runtime.start(project, projectConfig.ports(project));
+            else runtime.stop(project);
             return send(res, 202, runtime.status(project));
-          } catch (error) { return send(res, 409, { error: error.message }); }
+          } catch (error) { return send(res, 409, { error: error.message, diagnostic: startupDiagnostic(project, error.message) }); }
         }
         if (url.pathname === '/api/preferences') {
           try { return send(res, 200, await settings.save(payload)); }
@@ -147,7 +194,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   server.shutdownTasks = async () => {
     closing = true;
     desktop.shutdown();
-    await Promise.allSettled([jobs.shutdown(), settings.pending, runtime.shutdown(), ...removals.values()]);
+    await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), ...removals.values(), ...portWrites.values()]);
   };
   server.jobs = jobs;
   return server;
