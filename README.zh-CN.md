@@ -6,23 +6,31 @@
 
 支持 **Vue / React + Spring Boot / Express + MySQL / PostgreSQL**，也可以只创建前端或后端。英文 / 华文界面（默认英文）、真实目录预览、依赖自动安装、执行日志和 Git 初始化。
 
-v0.5 优化工作台：快速预设、右侧状态与预览、可折叠模板和进阶 Git 选项、文件 / 启动命令页签，以及手机底部创建栏。支持复制启动命令和 Ctrl/Cmd+Enter 创建，取消与恢复入口保持清晰。
+在项目管理页可以启停本地项目、管理数据库、运行构建和测试，以及查看 Git 状态。
 
 默认英文，支持华文切换并记住偏好；切换不刷新页面，也不会中断任务。生成项目的 README 和初始提示使用英文。保留取消、恢复、Windows 双击启动、环境检测、个人模板和 GitHub 发布。
 
 ## 快速开始
 
-先安装 [Node.js](https://nodejs.org/) 22.12+（推荐 24 LTS，自带 npm）和 Git，然后：
+1. 安装 [Node.js 22.12 或更高版本](https://nodejs.org/en/download)，包含 npm。
+2. 打开 [最新发布](https://github.com/kentsee02/stackforge/releases/latest)，在 **Assets** 下载 **Source code (zip)** 并解压。
+3. Windows 用户双击解压文件夹内的 **Start StackForge.cmd**。macOS 或 Linux 用户在该文件夹打开终端，运行 `npm run launch`。
+
+启动器会打开浏览器，默认使用 4310 端口。使用时请保持终端打开。StackForge 本身无需运行 `npm install`。如需克隆仓库或使用 Git 功能，请安装 Git。
+
+也可以通过 Git 克隆仓库后启动。
 
 ```sh
 git clone https://github.com/kentsee02/stackforge.git
 cd stackforge
-npm start
+npm run launch
 ```
 
-打开 **http://127.0.0.1:4310**。生成器本身没有第三方运行时依赖，不需要先执行 npm install。
+也可以运行 `npm start`，然后打开 [http://127.0.0.1:4310](http://127.0.0.1:4310)。可通过 `PORT` 指定端口，例如在 PowerShell 运行 `$env:PORT=4311; npm start`。
 
-**Windows**：也可以双击项目内的 `Start StackForge.cmd`。它会检查 Node.js、启动服务并打开默认浏览器；重复启动会打开已有服务，默认端口被其他程序占用时会自动尝试后续端口。终端保持打开即可使用，关闭后未完成的任务仍可恢复。其他系统可以执行 `npm run launch` 使用相同启动流程。
+如果解压到新文件夹升级，先关闭 StackForge，再把旧目录下的 `.stackforge/` 复制到新目录，以保留项目记录和设置。
+
+### 创建项目
 
 1. 填写项目名称，点击「选择文件夹…」选择保存父目录，也可以在「保存到」中填写绝对路径。
 2. 选择前端、后端、数据库，或使用快速预设。

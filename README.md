@@ -6,13 +6,19 @@ A local, open-source full-stack project generator. Choose a frontend, backend, a
 
 **Vue / React + Spring Boot / Express + MySQL / PostgreSQL**, with frontend-only and backend-only options. Includes dependency installation, environment checks, reusable templates, Git setup, optional GitHub publishing, and resumable tasks. The generator has **zero third-party runtime dependencies**.
 
-Version 0.5 makes the workspace easier to scan: compact presets, a persistent review column, collapsible templates and advanced Git options, file/command preview tabs, and a mobile action bar. Copy startup commands or use Ctrl/Cmd+Enter to create a project. Task status stays prominent during creation and recovery.
+The Projects workspace lets you run local development sessions, manage databases, run build and test commands, and check Git status.
 
 English is the default, with Chinese (华文) available from the top bar. Your choice is remembered in this browser; switching does not reload the page or interrupt a task. Generated project documentation and starter messages are in English.
 
 ## Quick start
 
-Install [Node.js](https://nodejs.org/en/download) 22.12 or later (Node.js 24 LTS recommended). Install Git to clone this repository and use Git features.
+1. Install [Node.js 22.12 or later](https://nodejs.org/en/download), including npm.
+2. Open the [latest release](https://github.com/kentsee02/stackforge/releases/latest), download **Source code (zip)** under **Assets**, and extract it.
+3. On Windows, double-click **Start StackForge.cmd** in the extracted folder. On macOS or Linux, open a terminal in that folder and run `npm run launch`.
+
+The launcher opens your browser and uses port 4310 by default. Keep the terminal open while using StackForge. StackForge itself requires no `npm install`. Install Git if you want to clone the repository or use Git features.
+
+To run from a Git checkout, clone the repository and launch it.
 
 ```sh
 git clone https://github.com/kentsee02/stackforge.git
@@ -20,9 +26,11 @@ cd stackforge
 npm run launch
 ```
 
-The launcher opens your browser, reuses an existing server for this checkout, and tries another port if 4310 is occupied. **On Windows, double-click `Start StackForge.cmd`** instead. Keep the terminal open while using the tool. No `npm install` is needed for StackForge itself.
-
 Alternatively, run `npm start` and open [http://127.0.0.1:4310](http://127.0.0.1:4310). Set `PORT` to use another port, for example `$env:PORT=4311; npm start` in PowerShell.
+
+When upgrading to a new folder, close StackForge and copy the local `.stackforge/` directory to the new folder to keep project records and settings.
+
+### Create a project
 
 1. Enter a project name. Use **Browse…** to pick a parent folder or enter an absolute path in **Save to**.
 2. Choose your stack or apply a preset.
