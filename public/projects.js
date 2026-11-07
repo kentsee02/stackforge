@@ -166,7 +166,7 @@ async function backupAction(project, file) {
   try {
     const { token } = await request('/api/state');
     const response = await fetch(`/api/projects/${project.id}/${pending.action}`, {
-      method: 'POST', signal: AbortSignal.timeout(610000),
+      method: 'POST', signal: AbortSignal.timeout(660_000),
       headers: { 'X-StackForge-Token': token, 'Content-Type': file ? 'application/octet-stream' : 'application/json',
         ...(file && { 'X-StackForge-Confirm-Name': project.name }) },
       body: file ?? '{}'
@@ -195,7 +195,8 @@ async function loadDatabase(logs = false) {
   view.loading = true;
   $('database-logs').disabled = true;
   try {
-    const state = await request(`/api/projects/${view.id}/database${logs ? '?logs=1' : ''}`, { signal: AbortSignal.timeout(11000) });
+    // Allow time for the Compose list, inspection, and optional log commands.
+    const state = await request(`/api/projects/${view.id}/database${logs ? '?logs=1' : ''}`, { signal: AbortSignal.timeout(50_000) });
     Object.assign(view, state, { error: undefined, diagnostic: undefined });
     if (logs && state.log === undefined) view.log = '';
     if (!logs && state.status === 'absent') view.log = undefined;
@@ -417,7 +418,7 @@ async function act(id, action, body = {}) {
   render();
   try {
     const { token } = await request('/api/state');
-    const runtime = await post(`/api/projects/${id}/${action}`, token, body, action === 'trash' ? 90000 : 5000);
+    const runtime = await post(`/api/projects/${id}/${action}`, token, body, action === 'trash' ? 180_000 : 5000);
     if (action === 'trash') {
       projects = projects.filter(item => item.id !== id);
       if (selected === id) selected = projects[0]?.id;
