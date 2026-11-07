@@ -17,7 +17,7 @@ import { ProjectConfig, defaultPorts, validatePorts, importedProject, projectPat
 import { ProjectOperations } from './project-operations.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const identity = { application: 'stackforge-local', version: '0.11.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
+export const identity = { application: 'stackforge-local', version: '0.12.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
 const staticFiles = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/messages.js': ['messages.js', 'text/javascript; charset=utf-8'], '/template-store.js': ['template-store.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'], '/plex-regular.ttf': ['plex-regular.ttf', 'font/ttf'], '/plex-semibold.ttf': ['plex-semibold.ttf', 'font/ttf'] };
 staticFiles['/projects'] = ['projects.html', 'text/html; charset=utf-8'];
 staticFiles['/projects.js'] = ['projects.js', 'text/javascript; charset=utf-8'];
@@ -82,19 +82,25 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         }));
         return send(res, 200, { projects: projects.filter(Boolean) });
       }
-      const databaseView = /^\/api\/projects\/([^/]+)\/database$/.exec(url.pathname);
-      if (req.method === 'GET' && databaseView) {
-        const project = managedProjects().find(item => item.id === databaseView[1]);
+      const projectView = /^\/api\/projects\/([^/]+)\/(database|checks|git)$/.exec(url.pathname);
+      if (req.method === 'GET' && projectView) {
+        const [, id, view] = projectView;
+        const project = managedProjects().find(item => item.id === id);
         if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
-        try { return send(res, 200, await operations.database(project, projectConfig.ports(project), url.searchParams.has('logs'))); }
-        catch (error) { return send(res, 409, { error: error.message.split('\n')[0].trim(), diagnostic: startupDiagnostic(project, error.message) }); }
+        try {
+          if (view === 'checks') return send(res, 200, { checks: await operations.checks(project) });
+          if (view === 'git') return send(res, 200, await operations.git(project));
+          return send(res, 200, await operations.database(project, projectConfig.ports(project), url.searchParams.has('logs')));
+        } catch (error) {
+          return send(res, 409, { error: error.message.split('\n')[0].trim(), diagnostic: view === 'database' ? startupDiagnostic(project, error.message) : undefined });
+        }
       }
       if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, jobs.list());
       if (req.method === 'GET' && url.pathname.startsWith('/api/jobs/')) {
         const job = jobs.view(url.pathname.slice('/api/jobs/'.length));
         return send(res, job ? 200 : 404, job ?? { error: '找不到这个创建任务。' });
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|trash|ports|install|install-cancel|database-start|database-stop)$/.exec(url.pathname);
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|trash|ports|install|install-cancel|database-start|database-stop|run-check|check-cancel)$/.exec(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         const origin = req.headers.origin;
         if ((origin && origin !== `http://${req.headers.host}`) || req.headers['x-stackforge-token'] !== token || req.headers['content-type']?.split(';')[0] !== 'application/json') return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
@@ -117,18 +123,19 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
           if (removals.has(project.path)) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
           if (portWrites.has(project.path)) return send(res, 409, { error: 'Wait for the project ports to finish saving.' });
-          if (action === 'install-cancel') {
-            operations.cancelInstall(project);
+          if (action === 'install-cancel' || action === 'check-cancel') {
+            operations.cancel(project, action === 'install-cancel' ? 'dependencies' : 'checkTask');
             return send(res, 202, operations.status(project, true));
           }
           if (action !== 'stop' && operations.active(project)) return send(res, 409, { error: 'Wait for the current project operation to finish.' });
-          if (action === 'install' || action.startsWith('database-')) {
+          if (action === 'install' || action === 'run-check' || action.startsWith('database-')) {
             const session = runtime.status(project);
             const inTransition = ['starting', 'stopping'].includes(session.status);
             if (action === 'install' && (inTransition || session.status === 'running')) return send(res, 409, { error: 'Stop the project before installing dependencies.' });
+            if (action === 'run-check' && (inTransition || session.status === 'running')) return send(res, 409, { error: 'Stop the project before running checks.' });
             if (action.startsWith('database-') && (inTransition || session.status === 'running' && !session.initialized)) return send(res, 409, { error: 'Wait for the project to become ready or stop it first.' });
             try {
-              operations.start(project, action, projectConfig.ports(project));
+              operations.start(project, action, projectConfig.ports(project), payload.check);
               return send(res, 202, operations.status(project, true));
             } catch (error) { return send(res, 409, { error: error.message }); }
           }

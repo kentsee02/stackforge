@@ -48,6 +48,10 @@ Open **Projects** to find projects created by this StackForge checkout, includin
 
 **Database controls** shows the Docker Compose database status and the last 100 lines of container output. It uses the project's saved database port and can start or stop the database separately. Stopping the database keeps its data volume.
 
+**Build, test & lint** runs the `build`, `test`, and `lint` scripts declared in the project's root, frontend, or backend package. Spring Boot projects also offer Maven Wrapper `package` and `test`. Stop the development server before running a check. The panel shows live output, the latest result, and a cancel button during execution.
+
+**Git status** shows the current branch, pending changes, and how many commits the branch is ahead of or behind its tracked upstream. Refresh reads the local repository and compares it with the upstream information from the last fetch or pull.
+
 **Stop project** stops the development processes started from this page. A normal StackForge shutdown also stops them. Development and installation logs are held in memory until StackForge restarts.
 
 **Delete project** shows the folder path and asks you to type the exact project name. Stop the project in StackForge first. Project files go to the system trash and can be restored to their original location. Deletion also permanently removes the project's local Docker database container and its dedicated data volume. Docker must be running for projects with a database. StackForge blocks deletion when volume ownership is unclear, including older volumes with no matching container. On Linux, moving files to the system trash requires `gio` and a drive that supports it.

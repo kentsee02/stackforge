@@ -1,9 +1,10 @@
 import { lstat, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
-import { installMavenDependencies, installNodeDependencies, npm, run, throwIfCancelled } from './process.mjs';
+import { installMavenDependencies, installNodeDependencies, maven, npm, run, throwIfCancelled } from './process.mjs';
 import { projectPathKey } from './project-config.mjs';
 import { inspectRecordedProject, startupDiagnostic } from './project-runtime.mjs';
+import { projectChecks, projectGitStatus } from './project-tools.mjs';
 
 const logLimit = 64 * 1024;
 const databaseLabel = 'io.stackforge.database-id';
@@ -44,41 +45,69 @@ export class ProjectOperations {
     const entry = this.projects.get(projectPathKey(project.path));
     if (!entry) return {};
     const result = { operation: entry.active?.kind };
-    if (includeLogs) for (const kind of ['dependencies', 'databaseTask']) {
+    if (includeLogs) for (const kind of ['dependencies', 'databaseTask', 'checkTask']) {
       const task = entry[kind];
       if (task) result[kind] = { status: task.status, phase: task.phase, log: task.log, error: task.error, diagnostic: task.diagnostic };
     }
     return result;
   }
 
-  start(project, action, ports) {
+  start(project, action, ports, checkId) {
     if (this.closing) throw new Error('StackForge is shutting down.');
     const key = projectPathKey(project.path);
     const entry = this.projects.get(key) ?? {};
     if (entry.active) throw new Error('Wait for the current project operation to finish.');
-    const kind = action === 'install' ? 'dependencies' : 'databaseTask';
+    const kind = action === 'install' ? 'dependencies' : action === 'run-check' ? 'checkTask' : 'databaseTask';
+    if (kind === 'checkTask' && (typeof checkId !== 'string' || !/^(?:(?:root|frontend|backend):(?:build|test|lint)|maven:(?:package|test))$/.test(checkId))) {
+      throw new Error('Choose an available project check.');
+    }
     const controller = new AbortController();
-    const task = { kind, phase: action, status: 'running', controller, log: '' };
+    const task = { kind, phase: kind === 'checkTask' ? checkId : action, status: 'running', controller, log: '' };
     entry.active = entry[kind] = task;
     this.projects.set(key, entry);
     const options = { signal: controller.signal, log: chunk => { task.log = (task.log + chunk).slice(-logLimit); } };
-    task.done = (action === 'install' ? this.installDependencies(project, task, options) : this.changeDatabase(project, action, ports, options))
+    const work = {
+      dependencies: () => this.installDependencies(project, task, options),
+      databaseTask: () => this.changeDatabase(project, action, ports, options),
+      checkTask: () => this.runCheck(project, checkId, options)
+    };
+    task.done = work[kind]()
       .then(() => { task.status = 'succeeded'; })
       .catch(error => {
         task.status = error.name === 'AbortError' ? 'cancelled' : 'failed';
         if (task.status === 'failed') {
-          task.error = error.message.split('\n')[0].trim();
+          task.error = kind === 'checkTask' && Number.isInteger(error.exitCode)
+            ? `Check command exited with code ${error.exitCode}.`
+            : error.message.split('\n')[0].trim();
           task.diagnostic = startupDiagnostic(project, `${error.message}\n${task.log.slice(-12000)}`);
         }
       })
       .finally(() => { entry.active = undefined; });
   }
 
-  cancelInstall(project) {
+  cancel(project, kind) {
     const task = this.active(project);
-    if (task?.kind !== 'dependencies') return;
+    if (task?.kind !== kind) return;
     task.status = 'cancelling';
     task.controller.abort();
+  }
+
+  async checks(project) {
+    return (await projectChecks(project)).map(({ id, scope, tool, name }) => ({ id, scope, tool, name }));
+  }
+
+  git(project) {
+    return projectGitStatus(project, this.command);
+  }
+
+  async runCheck(project, checkId, options) {
+    const checks = await projectChecks(project);
+    throwIfCancelled(options.signal);
+    const check = checks.find(item => item.id === checkId);
+    if (!check) throw new Error('This project check is no longer available.');
+    const config = { ...options, cwd: check.cwd };
+    if (check.tool === 'maven') await maven(['-B', check.name], config, this.command);
+    else await npm(['run', check.name], config);
   }
 
   async installDependencies(project, task, options) {

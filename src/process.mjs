@@ -82,9 +82,12 @@ export function installNodeDependencies(options, command = npm) {
   return command(['install', '--no-audit', '--no-fund'], options);
 }
 
-export function installMavenDependencies(options, command = run) {
-  const args = ['-B', '-DskipTests', 'dependency:go-offline'];
+export function maven(args, options, command = run) {
   return process.platform === 'win32'
     ? command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `mvnw.cmd ${args.join(' ')}`], options)
     : command('./mvnw', args, options);
+}
+
+export function installMavenDependencies(options, command = run) {
+  return maven(['-B', '-DskipTests', 'dependency:go-offline'], options, command);
 }

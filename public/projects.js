@@ -21,6 +21,7 @@ let confirming;
 let actionError;
 let portMessage;
 let databaseView;
+let toolsView;
 let timer;
 let revision = 0;
 
@@ -166,6 +167,89 @@ async function loadDatabase(logs = false) {
   }
 }
 
+const checkStates = { running: 'Check running…', cancelling: 'Cancelling check…', succeeded: 'Check passed', failed: 'Check failed', cancelled: 'Check cancelled' };
+const checkScopes = { root: 'Project · {command}', frontend: 'Frontend · {command}', backend: 'Backend · {command}', maven: 'Backend · {command}' };
+
+function checkLabel(id) {
+  const [scope, name] = id.split(':');
+  const command = scope === 'maven' ? `Maven Wrapper ${name}` : `npm run ${name}`;
+  return checkScopes[scope].replace('{command}', command);
+}
+
+function renderChecks(project, busy, unavailable) {
+  const view = toolsView.checks;
+  const task = project.checkTask;
+  const launching = pending?.id === project.id && pending.action === 'run-check';
+  const status = launching ? 'running' : task?.status;
+  const active = project.operation === 'checkTask' || launching;
+  const loaded = Boolean(view.data?.checks.length);
+  const statusLabel = $('check-status');
+  statusLabel.dataset.status = status ?? '';
+  showMessage(statusLabel, active ? checkStates[status] ?? checkStates.running : checkStates[status]);
+  $('check-form').hidden = !loaded && !active;
+  $('check-command').disabled = unavailable || view.loading || !loaded;
+  $('run-check').disabled = busy || unavailable || view.loading || !loaded;
+  $('run-check').hidden = active;
+  $('check-cancel').hidden = !active;
+  $('check-cancel').disabled = Boolean(pending) || status === 'cancelling';
+  showMessage($('check-message'), view.loading ? 'Reading available checks…' : view.data && !loaded ? 'No build, test, or lint commands were found.' : loaded && busy ? 'Stop the project before running checks.' : '');
+  const error = actionError?.id === project.id && ['run-check', 'check-cancel'].includes(actionError.action) ? actionError.message : view.error ?? task?.error;
+  showMessage($('check-error'), error);
+  $('check-error').hidden = !error;
+  $('check-last').hidden = !task?.phase;
+  showMessage($('check-last-command'), task?.phase ? checkLabel(task.phase) : '');
+  $('check-output').hidden = !task?.log;
+  renderOutput($('check-output'), project.id, task?.log);
+}
+
+function renderGit() {
+  const { data, loading, error } = toolsView.git;
+  const available = data?.status === 'available' && !error;
+  $('git-summary').hidden = !available;
+  $('git-initial').hidden = !available || !data.initial;
+  $('git-refresh').disabled = Boolean(loading);
+  showMessage($('git-message'), loading ? 'Reading Git status…' : error ?? (data?.status === 'absent' ? 'This project has no local Git repository.' : ''));
+  if (!available) return;
+  $('git-branch').textContent = data.branch ?? '';
+  $('git-branch').hidden = !data.branch;
+  $('git-detached').hidden = Boolean(data.branch);
+  showMessage($('git-changes'), data.changes === 0 ? 'Clean' : data.changes === 1 ? '1 change' : `${data.changes} changes`);
+  $('git-upstream').textContent = data.upstream ?? '';
+  $('git-upstream').hidden = !data.upstream;
+  $('git-no-upstream').hidden = Boolean(data.upstream);
+  $('git-comparison').hidden = !data.upstream;
+  showMessage($('git-comparison'), data.ahead === null ? 'Local comparison unavailable' : `${data.ahead} ahead · ${data.behind} behind`);
+}
+
+async function loadProjectTool(tool, reload = false) {
+  const current = toolsView;
+  const view = current?.[tool];
+  if (!view || current.id !== selected || !$('project-' + tool).open || view.loading || (!reload && (view.data || view.error))) return;
+  view.loading = true;
+  render();
+  try {
+    view.data = await request(`/api/projects/${current.id}/${tool}`, { signal: AbortSignal.timeout(12000) });
+    view.error = undefined;
+    if (tool === 'checks' && current === toolsView) {
+      const field = $('check-command');
+      const previous = field.value;
+      field.replaceChildren(...view.data.checks.map(({ id }) => {
+        const option = document.createElement('option');
+        option.value = id;
+        setText(option, checkLabel(id));
+        return option;
+      }));
+      if (view.data.checks.some(check => check.id === previous)) field.value = previous;
+    }
+  } catch (error) {
+    view.data = undefined;
+    view.error = error.message;
+  } finally {
+    view.loading = false;
+    if (current === toolsView) render();
+  }
+}
+
 function renderRows() {
   const filter = $('project-search').value.trim().toLowerCase();
   const list = $('project-list');
@@ -215,6 +299,12 @@ function render() {
   renderPorts(project, busy || unavailable);
   renderDependencies(project, busy, unavailable);
   renderDatabase(project, busy, unavailable);
+  if (toolsView?.id !== project.id) {
+    toolsView = { id: project.id, checks: {}, git: {} };
+    $('check-command').replaceChildren();
+  }
+  renderChecks(project, busy, unavailable);
+  renderGit();
   const action = $('runtime-action');
   action.dataset.action = running ? 'stop' : 'start';
   action.className = running || project.status === 'stopping' ? 'secondary' : 'primary';
@@ -253,6 +343,8 @@ async function refresh() {
     render();
     if (selected && selected !== requested) { refresh(); return; }
     loadDatabase();
+    loadProjectTool('checks');
+    loadProjectTool('git');
   } catch {
     if (version !== revision) return;
     $('project-connection').hidden = false;
@@ -280,7 +372,7 @@ async function act(id, action, body = {}) {
       const project = projects.find(item => item.id === id);
       if (project) project.ports = runtime.ports;
       portMessage = { id, message: 'Development ports saved.' };
-    } else if (['install', 'install-cancel', 'database-start', 'database-stop'].includes(action)) {
+    } else if (['install', 'install-cancel', 'database-start', 'database-stop', 'run-check', 'check-cancel'].includes(action)) {
       const project = projects.find(item => item.id === id);
       if (project) Object.assign(project, runtime);
     } else {
@@ -361,6 +453,13 @@ $('project-database').addEventListener('toggle', () => loadDatabase());
 $('database-start').addEventListener('click', () => act(selected, 'database-start'));
 $('database-stop').addEventListener('click', () => act(selected, 'database-stop'));
 $('database-logs').addEventListener('click', () => loadDatabase(true));
+for (const tool of ['checks', 'git']) $('project-' + tool).addEventListener('toggle', () => loadProjectTool(tool, true));
+$('git-refresh').addEventListener('click', () => loadProjectTool('git', true));
+$('check-form').addEventListener('submit', event => {
+  event.preventDefault();
+  act(selected, 'run-check', { check: $('check-command').value });
+});
+$('check-cancel').addEventListener('click', () => act(selected, 'check-cancel'));
 $('project-delete').addEventListener('click', () => {
   const project = projects.find(item => item.id === selected);
   if (!project || pending) return;

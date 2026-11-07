@@ -315,9 +315,27 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 #project-database .project-operation-heading { margin-top: 10px; }
 .project-operation-actions .secondary { margin-top: 6px; }
 .project-operation-error { color: var(--negative); overflow-wrap: anywhere; }
+.project-check-status { margin-inline-start: 8px; color: var(--muted); font-weight: 400; }
+.project-check-status[data-status="failed"] { color: var(--negative); }
+.project-check-status[data-status="succeeded"] { color: var(--positive); }
+.project-check-form { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.project-check-field { flex: 1 1 185px; min-width: 0; font-size: 13px; }
+.project-check-field select { display: block; width: 100%; min-height: 36px; margin-top: 4px; padding: 5px 8px; color: var(--text); background: var(--surface); border: 1px solid var(--control); border-radius: 6px; }
+.project-check-form .secondary { margin: 0; }
+#check-message:empty, #git-message:empty { display: none; }
+.project-git-summary { margin: 8px 0; }
+.project-git-summary div { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 3fr); gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+.project-git-summary dt { color: var(--muted); font-size: 13px; }
+.project-git-summary dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+#git-comparison { display: block; }
+@media (max-width: 600px) {
+  .project-check-field { flex-basis: 100%; }
+  .project-check-field select, .project-check-form .secondary, #git-refresh { min-height: 44px; }
+  .project-check-field select { font-size: 16px; }
+}
 #dependency-log { margin-top: 8px; }
 #dependency-log summary { cursor: pointer; }
-#dependency-output, #database-output, #database-container-log { max-height: 270px; overflow: auto; margin: 8px 0 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+#dependency-output, #database-output, #database-container-log, #check-output { max-height: 270px; overflow: auto; margin: 8px 0 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 .project-empty, .project-connection { padding: 20px 0; border-top: 1px solid var(--border); }
 .project-empty p, .project-connection { color: var(--muted); }
 .project-feedback { padding: 8px 0 16px; color: var(--positive); }
