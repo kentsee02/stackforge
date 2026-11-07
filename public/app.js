@@ -18,12 +18,13 @@ let templates = [];
 let pickingDirectory = false;
 let directoryWrites = Promise.resolve();
 const statusNames = { running: '执行中', cancelling: '停止中', cancelled: '已取消', failed: '未完成', complete: '已完成' };
-const presets = { java: ['vue', 'spring', 'mysql'], node: ['react', 'express', 'postgres'], web: ['vue', 'none', 'none'] };
+const presets = { java: ['vue', 'spring', 'mysql'], node: ['react', 'express', 'postgres'], nest: ['react', 'nestjs', 'postgres'], web: ['vue', 'none', 'none'] };
 const choiceIcons = {
   vue: '<path d="M3 5h4l5 8 5-8h4L12 21zM7 5h3l2 3 2-3h3"/>',
   react: '<circle cx="12" cy="12" r="2"/><ellipse cx="12" cy="12" rx="10" ry="4"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(120 12 12)"/>',
   spring: '<path d="M20 3c2 10-3 18-10 17C3 19 2 12 7 8c4-3 8-1 13-5ZM5 21l12-12"/>',
   express: '<path d="m8 7-5 5 5 5m8-10 5 5-5 5M14 4l-4 16"/>',
+  nestjs: '<path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Zm0 9 8-4.5M12 12 4 7.5M12 12v9"/>',
   mysql: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/>',
   postgres: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/>',
   none: '<path d="M5 5l14 14M19 5 5 19"/>'
@@ -78,6 +79,7 @@ function updatePreview() {
   if (options.frontend !== 'none') nodes.push(['frontend/', [`src/App.${options.frontend === 'vue' ? 'vue' : 'tsx'}`, `src/main.${options.frontend === 'vue' ? 'ts' : 'tsx'}`, 'vite.config.ts', 'package.json']]);
   if (backend === 'spring') nodes.push(['backend/', ['src/main/java/', 'src/main/resources/', 'pom.xml', 'mvnw · mvnw.cmd']]);
   if (backend === 'express') nodes.push(['backend/', ['src/server.js', 'package.json']]);
+  if (backend === 'nestjs') nodes.push(['backend/', ['src/main.ts', 'src/app.module.ts', 'src/health.controller.ts', ...(options.database !== 'none' ? ['src/database.service.ts'] : []), 'nest-cli.json', 'tsconfig.json', 'package.json']]);
   if (options.database !== 'none') nodes.push(['compose.yaml'], ['.env · .env.example']);
   nodes.push(['scripts/dev.mjs'], ['package.json'], ['README.md'], ['stackforge.json']);
   if (options.git) nodes.push(['.git/']);

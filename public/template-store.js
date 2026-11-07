@@ -1,6 +1,6 @@
 // Portable presets deliberately exclude paths, project names, commit identities
 // and remote publication: applying a template never opts into sharing code.
-const allowed = { frontend: ['vue', 'react', 'none'], backend: ['spring', 'express', 'none'], database: ['mysql', 'postgres', 'none'] };
+const allowed = { frontend: ['vue', 'react', 'none'], backend: ['spring', 'express', 'nestjs', 'none'], database: ['mysql', 'postgres', 'none'] };
 export function normalizeTemplate(input) {
   if (!input || typeof input !== 'object' || typeof input.name !== 'string' || !input.name.trim() || input.name.length > 40) throw new Error('模板名称需为 1–40 字。');
   const config = input.config;

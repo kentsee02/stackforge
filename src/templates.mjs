@@ -1,3 +1,5 @@
+import { hasNodeBackend } from './catalog.mjs';
+
 export const json = value => JSON.stringify(value, null, 2) + '\n';
 
 export function frontendFiles(options, versions) {
@@ -21,15 +23,120 @@ export function frontendFiles(options, versions) {
   };
 }
 
+function nodeDatabase(database) {
+  if (database === 'none') return;
+  const mysql = database === 'mysql';
+  const driver = mysql ? 'mysql2' : 'pg';
+  const source = mysql ? "import mysql from 'mysql2/promise';" : "import pg from 'pg';";
+  const factory = mysql ? 'mysql.createPool' : 'new pg.Pool';
+  const pool = `${factory}({
+  host: process.env.DB_HOST || '127.0.0.1',
+  port: Number(process.env.DB_PORT || ${mysql ? 3306 : 5432}),
+  user: process.env.DB_USER || 'app',
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME || 'app',
+})`;
+  return { driver, source, pool };
+}
+
 export function expressFiles(options, versions) {
   const db = options.database;
-  const driver = db === 'mysql' ? 'mysql2' : 'pg';
-  const databaseCode = db === 'none' ? '' : db === 'mysql'
-    ? `import mysql from 'mysql2/promise';\nconst pool = mysql.createPool({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: process.env.DB_USER || 'app', password: process.env.DB_PASSWORD, database: process.env.DB_NAME || 'app' });\n`
-    : `import pg from 'pg';\nconst pool = new pg.Pool({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 5432), user: process.env.DB_USER || 'app', password: process.env.DB_PASSWORD, database: process.env.DB_NAME || 'app' });\n`;
+  const database = nodeDatabase(db);
+  const databaseCode = database ? `${database.source}\nconst pool = ${database.pool};\n` : '';
   return {
-    'backend/package.json': json({ name: `${options.name}-api`, private: true, version: '0.1.0', type: 'module', scripts: { dev: 'node --watch src/server.js', start: 'node src/server.js' }, dependencies: { express: versions.express, ...(db !== 'none' && { [driver]: versions[driver] }) } }),
+    'backend/package.json': json({ name: `${options.name}-api`, private: true, version: '0.1.0', type: 'module', scripts: { dev: 'node --watch src/server.js', start: 'node src/server.js' }, dependencies: { express: versions.express, ...(database && { [database.driver]: versions[database.driver] }) } }),
     'backend/src/server.js': `import express from 'express';\n${databaseCode}\nconst app = express();\napp.use(express.json());\napp.get('/api/health', (req, res) => res.json({ status: 'ok', message: 'Hello, ${options.name}! The frontend and backend are connected.' }));\n${db === 'none' ? '' : `app.get('/api/db', async (req, res) => {\n  try { await pool.query('SELECT 1'); res.json({ status: 'ok', database: '${db}' }); }\n  catch { res.status(503).json({ status: 'unavailable', message: 'Check the database container and environment variables.' }); }\n});\n`}const port = Number(process.env.STACKFORGE_BACKEND_PORT || 8080);\nconst server = app.listen(port, '127.0.0.1', () => console.log('API: http://127.0.0.1:' + port + '/api/health'));\nasync function shutdown() { server.close(); ${db === 'none' ? '' : 'await pool.end();'} process.exit(0); }\nprocess.on('SIGINT', shutdown);\nprocess.on('SIGTERM', shutdown);\n`
+  };
+}
+
+export function nestFiles(options, versions) {
+  const database = nodeDatabase(options.database);
+  const dependencies = ['@nestjs/common', '@nestjs/core', '@nestjs/platform-express', 'reflect-metadata', 'rxjs'];
+  const devDependencies = ['@nestjs/cli', '@types/node', 'typescript'];
+  if (database) dependencies.push(database.driver);
+  if (options.database === 'postgres') devDependencies.push('@types/pg');
+  const resolved = names => Object.fromEntries(names.map(name => [name, versions[name]]));
+
+  return {
+    'backend/package.json': json({
+      name: `${options.name}-api`, private: true, version: '0.1.0', type: 'module',
+      scripts: { dev: 'nest start --watch', build: 'nest build', start: 'node dist/main.js' },
+      dependencies: resolved(dependencies), devDependencies: resolved(devDependencies)
+    }),
+    'backend/nest-cli.json': json({ sourceRoot: 'src', compilerOptions: { tsConfigPath: 'tsconfig.json', deleteOutDir: true } }),
+    'backend/tsconfig.json': json({
+      compilerOptions: {
+        target: 'ES2022', module: 'NodeNext', rootDir: 'src', outDir: 'dist', types: ['node'],
+        experimentalDecorators: true, emitDecoratorMetadata: true, strict: true, skipLibCheck: true, sourceMap: true
+      },
+      include: ['src/**/*.ts']
+    }),
+    'backend/src/main.ts': `import 'reflect-metadata';
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module.js';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.enableShutdownHooks();
+  const port = Number(process.env.STACKFORGE_BACKEND_PORT || 8080);
+  await app.listen(port, '127.0.0.1');
+  console.log('API: http://127.0.0.1:' + port + '/api/health');
+}
+
+void bootstrap();
+`,
+    'backend/src/app.module.ts': `import { Module } from '@nestjs/common';
+import { HealthController } from './health.controller.js';
+${database ? "import { DatabaseService } from './database.service.js';\n" : ''}
+@Module({
+  controllers: [HealthController],${database ? '\n  providers: [DatabaseService],' : ''}
+})
+export class AppModule {}
+`,
+    'backend/src/health.controller.ts': `import { Controller, Get${database ? ', ServiceUnavailableException' : ''} } from '@nestjs/common';
+${database ? "import { DatabaseService } from './database.service.js';\n" : ''}
+@Controller('api')
+export class HealthController {
+${database ? '  constructor(private readonly database: DatabaseService) {}\n\n' : ''}  @Get('health')
+  health() {
+    return { status: 'ok', message: 'Hello, ${options.name}! The frontend and backend are connected.' };
+  }${database ? `
+
+  @Get('db')
+  async databaseHealth() {
+    try {
+      await this.database.check();
+      return { status: 'ok', database: '${options.database}' };
+    } catch {
+      throw new ServiceUnavailableException({
+        status: 'unavailable',
+        message: 'Check the database container and environment variables.',
+      });
+    }
+  }` : ''}
+}
+`,
+    ...(database && { 'backend/src/database.service.ts': `import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
+${database.source}
+
+@Injectable()
+export class DatabaseService implements OnApplicationShutdown {
+  private readonly pool = ${database.pool.replaceAll('\n', '\n  ')};
+${options.database === 'postgres' ? `
+  constructor() {
+    this.pool.on('error', error => console.error('Idle database connection failed:', error.message));
+  }
+` : ''}
+
+  async check() {
+    await this.pool.query('SELECT 1');
+  }
+
+  async onApplicationShutdown() {
+    await this.pool.end();
+  }
+}
+` })
   };
 }
 
@@ -46,7 +153,7 @@ export function databaseFiles(options, password, rootPassword, databaseId) {
 }
 
 export function devScript(options) {
-  return `import { spawn } from 'node:child_process';\nimport { readFileSync, existsSync } from 'node:fs';\nimport { parseEnv } from 'node:util';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\nconst root = dirname(dirname(fileURLToPath(import.meta.url)));\nconst managedPorts = Object.fromEntries(['STACKFORGE_FRONTEND_PORT', 'STACKFORGE_BACKEND_PORT', 'STACKFORGE_DATABASE_PORT'].filter(key => process.env[key]).map(key => [key, process.env[key]]));\nif (existsSync(join(root, '.env'))) Object.assign(process.env, parseEnv(readFileSync(join(root, '.env'), 'utf8')), managedPorts);\nif (process.env.STACKFORGE_DATABASE_PORT) process.env.DB_PORT = process.env.STACKFORGE_DATABASE_PORT;\nconst npmCli = [process.env.npm_execpath, join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')].find(p => p?.endsWith('npm-cli.js') && existsSync(p));\nif (!npmCli) throw new Error('Start with npm run dev, or install the official Node.js distribution including npm.');\nconst children = [];\nlet stopping = false;\nfunction stop(code = 0) {\n  if (stopping) return; stopping = true;\n  for (const child of children) { if (!child.pid) continue; if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); else { try { process.kill(-child.pid, 'SIGTERM'); } catch {} } }\n  setTimeout(() => process.exit(code), 500);\n}\nfunction launch(command, args, folder = root) {\n  const child = spawn(command, args, { cwd: folder, env: process.env, stdio: 'inherit', windowsHide: true, detached: process.platform !== 'win32' });\n  children.push(child);\n  child.on('error', error => { console.error(error.message); stop(1); });\n  child.on('exit', code => { if (!stopping) stop(code ?? 1); });\n  return child;\n}\nprocess.on('SIGINT', () => stop()); process.on('SIGTERM', () => stop());\n${options.database === 'none' ? '' : `console.log('Starting the database and waiting until it is ready…');\nawait new Promise((resolve, reject) => { const child = spawn('docker', ['compose', 'up', '-d', '--wait'], { cwd: root, stdio: 'inherit', windowsHide: true }); child.on('error', reject); child.on('exit', code => code === 0 ? resolve() : reject(new Error('Database startup failed. Ensure Docker Desktop is running, then check .env and ports.'))); });\n`}${options.frontend === 'none' ? '' : `launch(process.execPath, [npmCli, 'run', 'dev'], join(root, 'frontend'));\n`}${options.backend === 'express' ? `launch(process.execPath, [npmCli, 'run', 'dev'], join(root, 'backend'));\n` : options.backend === 'spring' ? `if (process.platform === 'win32') launch(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'mvnw.cmd spring-boot:run'], join(root, 'backend'));\nelse launch('./mvnw', ['spring-boot:run'], join(root, 'backend'));\n` : ''}`;
+  return `import { spawn } from 'node:child_process';\nimport { readFileSync, existsSync } from 'node:fs';\nimport { parseEnv } from 'node:util';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\nconst root = dirname(dirname(fileURLToPath(import.meta.url)));\nconst managedPorts = Object.fromEntries(['STACKFORGE_FRONTEND_PORT', 'STACKFORGE_BACKEND_PORT', 'STACKFORGE_DATABASE_PORT'].filter(key => process.env[key]).map(key => [key, process.env[key]]));\nif (existsSync(join(root, '.env'))) Object.assign(process.env, parseEnv(readFileSync(join(root, '.env'), 'utf8')), managedPorts);\nif (process.env.STACKFORGE_DATABASE_PORT) process.env.DB_PORT = process.env.STACKFORGE_DATABASE_PORT;\nconst npmCli = [process.env.npm_execpath, join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')].find(p => p?.endsWith('npm-cli.js') && existsSync(p));\nif (!npmCli) throw new Error('Start with npm run dev, or install the official Node.js distribution including npm.');\nconst children = [];\nlet stopping = false;\nfunction stop(code = 0) {\n  if (stopping) return; stopping = true;\n  for (const child of children) { if (!child.pid) continue; if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); else { try { process.kill(-child.pid, 'SIGTERM'); } catch {} } }\n  setTimeout(() => process.exit(code), 500);\n}\nfunction launch(command, args, folder = root) {\n  const child = spawn(command, args, { cwd: folder, env: process.env, stdio: 'inherit', windowsHide: true, detached: process.platform !== 'win32' });\n  children.push(child);\n  child.on('error', error => { console.error(error.message); stop(1); });\n  child.on('exit', code => { if (!stopping) stop(code ?? 1); });\n  return child;\n}\nprocess.on('SIGINT', () => stop()); process.on('SIGTERM', () => stop());\n${options.database === 'none' ? '' : `console.log('Starting the database and waiting until it is ready…');\nawait new Promise((resolve, reject) => { const child = spawn('docker', ['compose', 'up', '-d', '--wait'], { cwd: root, stdio: 'inherit', windowsHide: true }); child.on('error', reject); child.on('exit', code => code === 0 ? resolve() : reject(new Error('Database startup failed. Ensure Docker Desktop is running, then check .env and ports.'))); });\n`}${options.frontend === 'none' ? '' : `launch(process.execPath, [npmCli, 'run', 'dev'], join(root, 'frontend'));\n`}${hasNodeBackend(options.backend) ? `launch(process.execPath, [npmCli, 'run', 'dev'], join(root, 'backend'));\n` : options.backend === 'spring' ? `if (process.platform === 'win32') launch(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'mvnw.cmd spring-boot:run'], join(root, 'backend'));\nelse launch('./mvnw', ['spring-boot:run'], join(root, 'backend'));\n` : ''}`;
 }
 
 export function generatedReadme(options) {
@@ -69,7 +176,8 @@ export function generatedReadme(options) {
     ...(options.database !== 'none' ? ['- compose.yaml: Database service and persistent data volume'] : []),
     '- scripts/dev.mjs: Cross-platform development launcher', '- stackforge.json: Generator options and resolved versions', '',
     '## Next steps', '',
-    ...(options.frontend !== 'none' ? ['Run npm run build to check the frontend production build.', ''] : []),
+    ...(options.backend === 'nestjs' ? [`Run npm run build to build the NestJS backend${options.frontend === 'none' ? '' : ' and the frontend'}.`, ''] :
+      options.frontend !== 'none' ? ['Run npm run build to check the frontend production build.', ''] : []),
     ...(options.backend === 'spring' ? ['Run ./mvnw test in backend/ (mvnw.cmd test on Windows) to test the backend.', ''] : []),
     'This is a development starter. Add business logic, authentication, and deployment configuration for your project.', ''
   ];

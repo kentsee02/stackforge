@@ -34,7 +34,7 @@ export function startupDiagnostic(project, output) {
     if (/cannot connect to the docker daemon|is the docker daemon running|dockerDesktopLinuxEngine|docker_engine.*(?:cannot|not find|denied)|spawn docker ENOENT|docker[^\r\n]*(?:not recognized|command not found|不是内部或外部命令)/i.test(output)) return 'docker';
     if (/Database startup failed/i.test(output)) return 'database';
   }
-  if (/Cannot find package ['"](?:vite|vue|react|express|mysql2|pg|@vitejs\/[^'"]+)['"]|vite['"]?[^\r\n]{0,32}(?:not recognized|not found|不是内部或外部命令)|failed to load config[^\r\n]*\n[^\r\n]*Cannot find package/i.test(output)) return 'dependencies';
+  if (/Cannot find (?:package|module) ['"](?:vite|vue|react|express|mysql2|pg|@vitejs\/[^'"]+|@nestjs\/[^'"]+)['"]|(?:vite|\bnest)['"]?[^\r\n]{0,32}(?:not recognized|not found|不是内部或外部命令)|failed to load config[^\r\n]*\n[^\r\n]*Cannot find package/i.test(output)) return 'dependencies';
 }
 
 export async function readProjectFolder(path) {

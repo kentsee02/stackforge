@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { translate, normalizeLocale } from '../public/i18n.js';
 import { messages } from '../public/messages.js';
 import { catalog } from '../src/catalog.mjs';
-import { generatedReadme, frontendFiles, expressFiles, devScript } from '../src/templates.mjs';
+import { generatedReadme, frontendFiles, expressFiles, nestFiles, devScript } from '../src/templates.mjs';
 
 test('English is the default; unsupported or missing language preferences fall back to English', () => {
   for (const value of [undefined, null, '', 'en', 'fr', 'zh-TW', '<script>']) assert.equal(normalizeLocale(value), 'en');
@@ -42,12 +42,13 @@ test('runtime diagnostics and legacy task logs translate while retaining names, 
 });
 
 test('generated documentation, starter code and development messages are English', () => {
-  for (const frontend of ['vue', 'react', 'none']) for (const backend of ['spring', 'express', 'none']) for (const database of ['mysql', 'postgres', 'none']) {
+  for (const frontend of ['vue', 'react', 'none']) for (const backend of ['spring', 'express', 'nestjs', 'none']) for (const database of ['mysql', 'postgres', 'none']) {
     if (frontend === 'none' && backend === 'none' || backend === 'none' && database !== 'none') continue;
     const options = { name: 'english-starter', frontend, backend, database };
     const readme = generatedReadme(options);
     assert.match(readme, /## Start developing/);
-    assert.equal(/\p{Script=Han}/u.test(readme + JSON.stringify(frontendFiles(options, {})) + JSON.stringify(expressFiles(options, {})) + devScript(options)), false);
+    const starter = backend === 'nestjs' ? nestFiles(options, {}) : expressFiles(options, {});
+    assert.equal(/\p{Script=Han}/u.test(readme + JSON.stringify(frontendFiles(options, {})) + JSON.stringify(starter) + devScript(options)), false);
     if (database !== 'none') assert.match(readme, /retaining the data volume/);
   }
 });

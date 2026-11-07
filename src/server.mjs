@@ -17,7 +17,7 @@ import { ProjectConfig, defaultPorts, validatePorts, importedProject, projectPat
 import { ProjectOperations } from './project-operations.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const identity = { application: 'stackforge-local', version: '0.12.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
+export const identity = { application: 'stackforge-local', version: '0.13.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
 const staticFiles = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/messages.js': ['messages.js', 'text/javascript; charset=utf-8'], '/template-store.js': ['template-store.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'], '/plex-regular.ttf': ['plex-regular.ttf', 'font/ttf'], '/plex-semibold.ttf': ['plex-semibold.ttf', 'font/ttf'] };
 staticFiles['/projects'] = ['projects.html', 'text/html; charset=utf-8'];
 staticFiles['/projects.js'] = ['projects.js', 'text/javascript; charset=utf-8'];

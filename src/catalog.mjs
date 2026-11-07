@@ -7,6 +7,7 @@ export const catalog = {
   backend: [
     { id: 'spring', name: 'Spring Boot', detail: 'Java 21 · Maven Wrapper' },
     { id: 'express', name: 'Express', detail: 'Node.js · REST API' },
+    { id: 'nestjs', name: 'NestJS', detail: 'Node.js · TypeScript · Modules' },
     { id: 'none', name: '不需要后端', detail: '仅生成前端应用' }
   ],
   database: [
@@ -15,6 +16,8 @@ export const catalog = {
     { id: 'none', name: '不需要数据库', detail: '不生成数据库服务' }
   ]
 };
+
+export const hasNodeBackend = backend => backend === 'express' || backend === 'nestjs';
 
 export function validateOptions(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('项目配置必须是对象。');

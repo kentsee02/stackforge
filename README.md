@@ -4,7 +4,7 @@ English | [华文](README.zh-CN.md)
 
 A local, open-source full-stack project generator. Choose a frontend, backend, and database, then create a connected project in one step.
 
-**Vue / React + Spring Boot / Express + MySQL / PostgreSQL**, with frontend-only and backend-only options. Includes dependency installation, environment checks, reusable templates, Git setup, optional GitHub publishing, and resumable tasks. The generator has **zero third-party runtime dependencies**.
+**Vue / React + Spring Boot / Express / NestJS + MySQL / PostgreSQL**, with frontend-only and backend-only options. Includes dependency installation, environment checks, reusable templates, Git setup, optional GitHub publishing, and resumable tasks. The generator has **zero third-party runtime dependencies**.
 
 The Projects workspace lets you run local development sessions, manage databases, run build and test commands, and check Git status.
 
@@ -18,7 +18,7 @@ English is the default, with Chinese (华文) available from the top bar. Your c
 
 The launcher opens your browser and uses port 4310 by default. Keep the terminal open while using StackForge. StackForge itself requires no `npm install`. Install Git if you want to clone the repository or use Git features.
 
-To run from a Git checkout, clone the repository and launch it.
+To try the latest development changes, clone the repository and launch it.
 
 ```sh
 git clone https://github.com/kentsee02/stackforge.git
@@ -69,6 +69,7 @@ Open **Projects** to find projects created by this StackForge checkout, includin
 - Vue 3 or React with Vite and TypeScript. Frontend `/api` requests proxy to the backend, which defaults to port 8080.
 - Spring Boot from the official Spring Initializr service, using a stable release, Java 21, Maven Wrapper, a health endpoint, and optional JDBC connectivity.
 - Express with a health endpoint and optional mysql2 / pg connection pool and database check endpoint.
+- NestJS with TypeScript, a module and health controller, a development watcher, and optional MySQL or PostgreSQL connectivity. The NestJS full-stack preset pairs React with PostgreSQL.
 - MySQL 8.4 or PostgreSQL 17 with Docker Compose, health checks, persistent volumes, and random local credentials.
 - npm workspaces for the frontend and Node backend, plus a development launcher that starts the database when needed.
 - English README, .gitignore, stackforge.json, and optional Git repository on the main branch.
@@ -134,9 +135,9 @@ For real frontend/backend/database integration:
 npm run test:integration
 ```
 
-Requires Git, Java 21, a running Docker engine, network access, and free ports 5173 / 8080. Creates Vue + Express + PostgreSQL and React + Spring Boot + MySQL projects under `work/integration/`, installs and builds them, starts development services, performs real database queries through the frontend proxy, and writes `report.json`. Test services and containers stop afterward; projects and database volumes remain.
+Requires Git, a running Docker engine, network access, and free ports 5173 / 8080. The Spring Boot case also requires Java 21. Creates Vue + Express + PostgreSQL, React + Spring Boot + MySQL, and React + NestJS + PostgreSQL projects under `work/integration/`, installs and builds them, starts development services, performs real database queries through the frontend proxy, and writes `report.json`. Test services and containers stop afterward. Generated projects and their data volumes are kept for inspection.
 
-Use `--only=node` or `--only=java` to check one stack. The explicit command below also creates and pushes a **new private GitHub repository** under the current authenticated account and verifies its remote commit. The repository is retained; it is not archived or deleted. Default integration tests do not operate on GitHub.
+Use `--only=node`, `--only=java`, or `--only=nest` to check one stack. The explicit command below also creates and pushes a **new private GitHub repository** under the current authenticated account and verifies its remote commit. The repository is retained; it is not archived or deleted. Default integration tests do not operate on GitHub.
 
 ```sh
 npm run test:integration -- --only=node --github --repo-name=your-test-repository
@@ -146,7 +147,7 @@ Main modules: `src/generator.mjs` (creation), `src/checkpoint.mjs` (recovery), `
 
 ## Scope
 
-Supports npm, Java 21 / Maven, Vue / React, Express / Spring Boot, and MySQL / PostgreSQL. Global runtime installation, desktop installers, other package managers, and remote deployment are outside the current scope. Generated projects are development starters: add business logic, authentication, and production configuration as needed.
+Supports npm, Java 21 / Maven, Vue / React, Express / Spring Boot / NestJS, and MySQL / PostgreSQL. Global runtime installation, desktop installers, other package managers, and remote deployment are outside the current scope. Generated projects are development starters: add business logic, authentication, and production configuration as needed.
 
 ## Credits and license
 

@@ -1,16 +1,16 @@
 import { mkdir, writeFile, mkdtemp, rename, rm, access, chmod, open, readFile, lstat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { validateOptions } from './catalog.mjs';
+import { hasNodeBackend, validateOptions } from './catalog.mjs';
 import { extractZip } from './zip.mjs';
 import { installMavenDependencies, installNodeDependencies, npm, run, throwIfCancelled } from './process.mjs';
 import { initializeGit, publishProject } from './git.mjs';
 import { createSteps, verifyStaging, wasPromoted, writeOwnedFiles } from './checkpoint.mjs';
-import { json, frontendFiles, expressFiles, databaseFiles, devScript, generatedReadme } from './templates.mjs';
+import { json, frontendFiles, expressFiles, nestFiles, databaseFiles, devScript, generatedReadme } from './templates.mjs';
 
 export async function download(url, { fetchImpl = fetch, binary = false, signal } = {}) {
   throwIfCancelled(signal);
-  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.12.0' } });
+  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.13.0' } });
   if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）：${new URL(url).hostname}`);
   if (binary) {
     const reader = response.body.getReader();
@@ -31,6 +31,8 @@ export async function download(url, { fetchImpl = fetch, binary = false, signal 
 
 export async function generateProject(input, report = () => {}, services = {}) {
   const options = validateOptions(input);
+  const nodeBackend = hasNodeBackend(options.backend);
+  const nest = options.backend === 'nestjs';
   const signal = services.signal;
   throwIfCancelled(signal);
   if (!isAbsolute(options.parentDir)) throw new Error('保存目录必须使用绝对路径。');
@@ -71,7 +73,14 @@ export async function generateProject(input, report = () => {}, services = {}) {
     await steps('versions', '解析技术栈与依赖版本', 8, async () => {
     const packages = [];
     if (options.frontend !== 'none') packages.push('vite', 'typescript', ...(options.frontend === 'vue' ? ['vue', '@vitejs/plugin-vue'] : ['react', 'react-dom', '@vitejs/plugin-react', '@types/react', '@types/react-dom']));
-    if (options.backend === 'express') packages.push('express', ...(options.database === 'none' ? [] : [options.database === 'mysql' ? 'mysql2' : 'pg']));
+    if (options.backend === 'express') packages.push('express');
+    if (nest) {
+      // Keep the compiler that emits the decorator metadata used for Nest injection.
+      versions.typescript ??= '6.0.3';
+      packages.push('@nestjs/core', '@nestjs/cli', 'reflect-metadata', 'rxjs', '@types/node');
+      if (options.database === 'postgres') packages.push('@types/pg');
+    }
+    if (nodeBackend && options.database !== 'none') packages.push(options.database === 'mysql' ? 'mysql2' : 'pg');
     const fetched = await Promise.allSettled(packages.filter(name => !versions[name]).map(async name => {
       const metadata = await download(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`, { ...services, signal });
       if (typeof metadata.version !== 'string' || !/^\d+\.\d+\.\d+([+-][a-zA-Z0-9.-]+)?$/.test(metadata.version)) throw new Error(`无法解析 ${name} 的版本。`);
@@ -80,6 +89,10 @@ export async function generateProject(input, report = () => {}, services = {}) {
     }));
     const failure = fetched.find(item => item.status === 'rejected');
     if (failure) throw failure.reason;
+    if (nest) {
+      versions['@nestjs/common'] = versions['@nestjs/core'];
+      versions['@nestjs/platform-express'] = versions['@nestjs/core'];
+    }
     });
     if (options.frontend !== 'none') await steps('frontend', '生成 TypeScript 前端与 API 代理', 22, async () => {
       await put(staging, frontendFiles(options, versions));
@@ -132,23 +145,25 @@ export async function generateProject(input, report = () => {}, services = {}) {
         [path]: `package ${packageName};\n\nimport java.util.Map;\nimport org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.RestController;\n${options.database === 'none' ? '' : 'import org.springframework.jdbc.core.JdbcTemplate;\nimport org.springframework.http.ResponseEntity;\n'}\n@RestController\npublic class HealthController {\n${options.database === 'none' ? '' : '    private final JdbcTemplate jdbc;\n    public HealthController(JdbcTemplate jdbc) { this.jdbc = jdbc; }\n'}    @GetMapping("/api/health")\n    public Map<String, String> health() { return Map.of("status", "ok", "message", "Hello, ${options.name}! The frontend and backend are connected."); }\n${options.database === 'none' ? '' : `    @GetMapping("/api/db")\n    public ResponseEntity<Map<String, String>> database() {\n        try { jdbc.queryForObject("SELECT 1", Integer.class); return ResponseEntity.ok(Map.of("status", "ok", "database", "${options.database}")); }\n        catch (Exception ex) { return ResponseEntity.status(503).body(Map.of("status", "unavailable")); }\n    }\n`}}\n`
       });
     } else if (options.backend === 'express') await put(staging, expressFiles(options, versions));
+    else if (nest) await put(staging, nestFiles(options, versions));
     checkpoint.configurableBackend = true;
     });
     await steps('files', '生成环境变量、开发脚本与说明', 52, async () => {
     const databaseId = options.database === 'none' ? undefined : randomBytes(12).toString('hex');
     if (databaseId) await put(staging, databaseFiles(options, randomBytes(24).toString('hex'), randomBytes(24).toString('hex'), databaseId));
-    const workspaces = [...(options.frontend !== 'none' ? ['frontend'] : []), ...(options.backend === 'express' ? ['backend'] : [])];
+    const workspaces = [...(options.frontend !== 'none' ? ['frontend'] : []), ...(nodeBackend ? ['backend'] : [])];
+    const buildWorkspaces = workspaces.filter(workspace => workspace === 'frontend' || nest);
     const configurablePorts = (options.frontend === 'none' || checkpoint.configurableFrontend) && (options.backend === 'none' || checkpoint.configurableBackend);
     await put(staging, {
-      'package.json': json({ name: options.name, private: true, version: '0.1.0', type: 'module', engines: { node: '>=22.12.0' }, ...(workspaces.length > 0 && { workspaces }), scripts: { dev: 'node scripts/dev.mjs', ...(options.frontend !== 'none' && { build: 'npm run build --workspace frontend' }), ...(options.database !== 'none' && { 'db:up': 'docker compose up -d --wait', 'db:down': 'docker compose down' }) } }),
+      'package.json': json({ name: options.name, private: true, version: '0.1.0', type: 'module', engines: { node: '>=22.12.0' }, ...(workspaces.length > 0 && { workspaces }), scripts: { dev: 'node scripts/dev.mjs', ...(buildWorkspaces.length > 0 && { build: 'npm run build ' + buildWorkspaces.map(workspace => '--workspace ' + workspace).join(' ') }), ...(options.database !== 'none' && { 'db:up': 'docker compose up -d --wait', 'db:down': 'docker compose down' }) } }),
       '.gitignore': 'node_modules/\ndist/\ntarget/\n.env\n.env.*\n!.env.example\n.stackforge-owner\n.stackforge-cache/\n*.log\n.idea/\n.vscode/\n.DS_Store\n',
       'scripts/dev.mjs': devScript(options),
       'README.md': generatedReadme(options),
-      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.12.0', ...(configurablePorts && { portConfig: 1 }), databaseId, createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
+      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.13.0', ...(configurablePorts && { portConfig: 1 }), databaseId, createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
     });
     });
     if (options.install) {
-      if (options.frontend !== 'none' || options.backend === 'express') await steps('npm', '安装 npm 依赖（可取消，失败后可继续）', 64, () => installNodeDependencies({ cwd: staging, log }, install));
+      if (options.frontend !== 'none' || nodeBackend) await steps('npm', '安装 npm 依赖（可取消，失败后可继续）', 64, () => installNodeDependencies({ cwd: staging, log }, install));
       if (options.backend === 'spring') {
         await steps('maven', '通过 Maven Wrapper 预下载 Java 依赖', 78, () => installMavenDependencies({ cwd: join(staging, 'backend'), log }, command));
       }

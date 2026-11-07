@@ -1,5 +1,7 @@
 // [Chinese source, English translation]. {name} slots preserve runtime values.
 export const messages = [
+  ['NestJS 全栈', 'NestJS full stack'],
+  ['Node.js · TypeScript · 模块', 'Node.js · TypeScript · Modules'],
   ['构建、测试与代码检查', 'Build, test & lint'],
   ['执行命令', 'Command'],
   ['运行检查', 'Run check'],

@@ -40,6 +40,9 @@ test('missing prerequisites block only operations that need them during creation
   for (const id of ['java', 'docker', 'docker-engine', 'port-5173', 'port-8080', 'port-3306']) assert.equal(onlyFiles.checks.find(item => item.id === id).status, 'warning');
   const installing = await checkEnvironment({ ...base, git: false, backend: 'spring', install: true }, offline);
   assert.equal(installing.checks.find(item => item.id === 'java').status, 'error');
+  const nestOnly = await checkEnvironment({ ...base, frontend: 'none', backend: 'nestjs', git: false, install: true }, healthy);
+  for (const id of ['npm', 'npm-network']) assert.equal(nestOnly.checks.find(item => item.id === id).status, 'ok');
+  assert.equal(nestOnly.checks.some(item => item.id === 'java'), false);
   const gitRequired = await checkEnvironment(base, offline);
   assert.equal(gitRequired.checks.find(item => item.id === 'git').status, 'error');
   const tooOld = await checkEnvironment(base, { ...healthy, nodeVersion: '22.11.0' });
@@ -72,7 +75,7 @@ test('validates Git step dependencies and command-sensitive identity input', () 
 });
 
 test('portable templates whitelist configuration and strip paths, identities and publication authority', () => {
-  const item = normalizeTemplate({ name: '我的模板', config: { ...base, groupId: 'com.example', commit: true, publish: true, parentDir: '/secret', authorEmail: 'private@example.com', token: 'secret' } });
+  const item = normalizeTemplate({ name: '我的模板', config: { ...base, backend: 'nestjs', groupId: 'com.example', commit: true, publish: true, parentDir: '/secret', authorEmail: 'private@example.com', token: 'secret' } });
   assert.deepEqual(Object.keys(item.config).sort(), ['backend', 'commit', 'database', 'frontend', 'git', 'groupId', 'install'].sort());
   const text = JSON.stringify({ format: 'stackforge-presets', version: 1, templates: [item] });
   assert.deepEqual(parseTemplateFile(text), [item]);

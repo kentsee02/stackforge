@@ -31,20 +31,39 @@ const services = {
 };
 const base = { name: 'sample-app', frontend: 'vue', backend: 'spring', database: 'mysql', install: false, git: false };
 
-test('all 20 supported stack combinations produce connected, parseable projects', async t => {
+test('all 29 supported stack combinations produce connected, parseable projects', async t => {
   const parent = await mkdtemp(join(tmpdir(), 'stackforge-test-'));
   t.after(() => rm(parent, { recursive: true, force: true }));
   let count = 0;
+  let nestOnlyInstalls = 0;
   const databaseIds = new Set();
-  for (const frontend of ['vue', 'react', 'none']) for (const backend of ['spring', 'express', 'none']) for (const database of ['mysql', 'postgres', 'none']) {
+  for (const frontend of ['vue', 'react', 'none']) for (const backend of ['spring', 'express', 'nestjs', 'none']) for (const database of ['mysql', 'postgres', 'none']) {
     if (frontend === 'none' && backend === 'none' || backend === 'none' && database !== 'none') continue;
     const name = `project-${count++}`;
-    const result = await generateProject({ ...base, parentDir: parent, name, frontend, backend, database }, () => {}, services);
+    const install = frontend === 'none' && backend === 'nestjs';
+    const result = await generateProject({ ...base, parentDir: parent, name, frontend, backend, database, install }, () => {}, {
+      ...services, npm: async args => { assert.equal(args[0], 'install'); nestOnlyInstalls++; }
+    });
     const pkg = JSON.parse(await readFile(join(result.path, 'package.json'), 'utf8'));
     assert.equal(pkg.name, name);
     const manifest = JSON.parse(await readFile(join(result.path, 'stackforge.json'), 'utf8'));
     assert.equal(manifest.options.parentDir, undefined);
     if (backend === 'spring') assert.equal(manifest.versions.springBoot, '3.5.0');
+    if (backend === 'nestjs') {
+      assert.ok(pkg.workspaces.includes('backend'));
+      assert.match(pkg.scripts.build, /--workspace backend/);
+      const nest = JSON.parse(await readFile(join(result.path, 'backend/package.json'), 'utf8'));
+      assert.equal(nest.dependencies['@nestjs/common'], nest.dependencies['@nestjs/core']);
+      assert.equal(nest.dependencies['@nestjs/platform-express'], nest.dependencies['@nestjs/core']);
+      assert.equal(nest.devDependencies.typescript, manifest.versions.typescript);
+      assert.equal(Boolean(nest.dependencies.pg), database === 'postgres');
+      assert.equal(Boolean(nest.dependencies.mysql2), database === 'mysql');
+      assert.equal(Boolean(nest.devDependencies['@types/pg']), database === 'postgres');
+      assert.match(await readFile(join(result.path, 'scripts/dev.mjs'), 'utf8'), /launch\(process\.execPath, \[npmCli, 'run', 'dev'\], join\(root, 'backend'\)\)/);
+      const controller = await readFile(join(result.path, 'backend/src/health.controller.ts'), 'utf8');
+      assert.equal(controller.includes("@Get('db')"), database !== 'none');
+      if (database !== 'none') assert.match(await readFile(join(result.path, 'backend/src/database.service.ts'), 'utf8'), /SELECT 1/);
+    }
     if (database !== 'none') {
       const env = await readFile(join(result.path, '.env'), 'utf8');
       assert.match(env, /DB_PASSWORD=[0-9a-f]{48}/);
@@ -62,7 +81,8 @@ test('all 20 supported stack combinations produce connected, parseable projects'
       assert.equal(config.includes('proxy:'), backend !== 'none');
     }
   }
-  assert.equal(count, 20);
+  assert.equal(count, 29);
+  assert.equal(nestOnlyInstalls, 3);
 });
 
 test('rejects unsafe project inputs and invalid combinations', () => {

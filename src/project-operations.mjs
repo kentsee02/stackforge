@@ -1,6 +1,7 @@
 import { lstat, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
+import { hasNodeBackend } from './catalog.mjs';
 import { installMavenDependencies, installNodeDependencies, maven, npm, run, throwIfCancelled } from './process.mjs';
 import { projectPathKey } from './project-config.mjs';
 import { inspectRecordedProject, startupDiagnostic } from './project-runtime.mjs';
@@ -113,7 +114,7 @@ export class ProjectOperations {
   async installDependencies(project, task, options) {
     const { directory } = await inspectRecordedProject(project);
     throwIfCancelled(options.signal);
-    if (project.frontend !== 'none' || project.backend === 'express') {
+    if (project.frontend !== 'none' || hasNodeBackend(project.backend)) {
       task.phase = 'npm';
       const manifest = await lstat(join(directory, 'package.json')).catch(() => null);
       if (!manifest?.isFile()) throw new Error('The project is missing its package.json file.');

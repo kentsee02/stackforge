@@ -2,7 +2,7 @@
 
 A local tool for developers who repeatedly initialize full-stack projects. A browser interface turns frontend, backend, and database choices into an independent project directory. English is the default; English and Chinese (华文) can be switched without reloading, including during creation. Language preference is stored in the current browser.
 
-Supports Vue / React / no frontend, Spring Boot / Express / no backend, and MySQL / PostgreSQL / no database. Generates real code, an API proxy, database drivers, Compose, random local credentials, Maven Wrapper, English documentation, optional dependency installation, and optional local Git initialization. Uses Node.js with no third-party runtime dependencies and is MIT licensed.
+Supports Vue / React / no frontend, Spring Boot / Express / NestJS / no backend, and MySQL / PostgreSQL / no database. Generates real code, an API proxy, database drivers, Compose, random local credentials, Maven Wrapper, English documentation, optional dependency installation, and optional local Git initialization. Uses Node.js with no third-party runtime dependencies and is MIT licensed.
 
 The server listens only on loopback. Users install Node.js, Java, and Docker themselves. Database images are pulled when the generated development launcher first starts them. Existing project directories cannot be overwritten.
 

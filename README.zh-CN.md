@@ -4,7 +4,7 @@
 
 一个本地运行的全栈项目生成器。选择前端、后端和数据库，一键创建可以继续开发的项目。
 
-支持 **Vue / React + Spring Boot / Express + MySQL / PostgreSQL**，也可以只创建前端或后端。英文 / 华文界面（默认英文）、真实目录预览、依赖自动安装、执行日志和 Git 初始化。
+支持 **Vue / React + Spring Boot / Express / NestJS + MySQL / PostgreSQL**，也可以只创建前端或后端。英文 / 华文界面（默认英文）、真实目录预览、依赖自动安装、执行日志和 Git 初始化。
 
 在项目管理页可以启停本地项目、管理数据库、运行构建和测试，以及查看 Git 状态。
 
@@ -18,7 +18,7 @@
 
 启动器会打开浏览器，默认使用 4310 端口。使用时请保持终端打开。StackForge 本身无需运行 `npm install`。如需克隆仓库或使用 Git 功能，请安装 Git。
 
-也可以通过 Git 克隆仓库后启动。
+如需试用最新开发版，可通过 Git 克隆仓库后启动。
 
 ```sh
 git clone https://github.com/kentsee02/stackforge.git
@@ -73,6 +73,7 @@ Windows PowerShell：`$env:PORT=4311; npm start`。
 - Vue 3 或 React，搭配 Vite 与 TypeScript。前端 `/api` 会代理到后端，默认端口为 8080。
 - Spring Boot：从官方 Spring Initializr 下载稳定版本，包含 Java 21、Maven Wrapper、健康检查 API 和可选 JDBC 驱动。
 - Express：健康检查 API，可选 mysql2 / pg 连接池和数据库检查接口。
+- NestJS 提供 TypeScript 模块、健康检查控制器、开发热重载和可选的 MySQL 或 PostgreSQL 连接。NestJS 全栈预设搭配 React 和 PostgreSQL。
 - MySQL 8.4 或 PostgreSQL 17：Compose、持久化数据卷、健康检查，以及随机生成的本地密码。
 - npm workspaces 管理前端与 Node 后端；统一开发脚本在需要时自动启动数据库。
 - README、.gitignore、stackforge.json、可选 Git main 分支。
@@ -132,15 +133,15 @@ npm start
 
 代码分为 `src/generator.mjs`（创建流程）、`src/checkpoint.mjs`（步骤恢复）、`src/jobs.mjs` 与 `src/job-store.mjs`（任务和持久化）、`src/templates.mjs`（技术栈模板）、`src/environment.mjs`（环境检查）、`src/git.mjs`（Git 和 GitHub）、`src/server.mjs`（本机 API）及 `public/`（界面）。测试使用 Node.js 自带运行器，覆盖技术栈、环境诊断、模板过滤、真实本地提交、子进程取消、重启恢复、目录归属、启动器和 API 写入保护。`npm test` 中的 GitHub 发布测试使用模拟 API，不创建远程仓库。
 
-真实联调可执行 `npm run test:integration`。需要 Node.js、Git、Java 21、可用的 Docker 引擎及网络，并保持 5173 / 8080 端口空闲。它在 `work/integration/` 生成 Vue + Express + PostgreSQL 和 React + Spring Boot + MySQL，安装并构建，启动开发服务，通过前端代理执行真实数据库查询，并保存 `report.json`。结束后停止测试服务和容器，保留生成项目与数据库数据卷。
+真实联调可执行 `npm run test:integration`。需要 Node.js、Git、可用的 Docker 引擎及网络，并保持 5173 / 8080 端口空闲。Spring Boot 联调还需要 Java 21。脚本会在 `work/integration/` 生成 Vue + Express + PostgreSQL、React + Spring Boot + MySQL 和 React + NestJS + PostgreSQL，安装依赖并构建，启动开发服务，通过前端代理执行真实数据库查询，并保存 `report.json`。结束后会停止测试服务和容器，保留生成项目与数据库数据卷以便检查。
 
-可选参数 `--only=node` / `--only=java` 只验证一组。显式执行 `npm run test:integration -- --only=node --github --repo-name=你的测试仓库名` 会使用当前已认证的 GitHub 账号创建并推送**新的私有仓库**，校验远程提交；仓库会保留，不归档或删除。默认联调不操作 GitHub。
+可选参数 `--only=node`、`--only=java` 或 `--only=nest` 可只验证一组。显式执行 `npm run test:integration -- --only=node --github --repo-name=你的测试仓库名` 会使用当前已认证的 GitHub 账号创建并推送**新的私有仓库**，校验远程提交；仓库会保留，不归档或删除。默认联调不操作 GitHub。
 
 欢迎通过 Issue 或 PR 添加框架和模板。说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 当前范围
 
-第一版提供 npm、Java 21 / Maven、Vue / React、Express / Spring Boot、MySQL / PostgreSQL。暂不提供全局运行环境安装、桌面安装包、更多包管理器或远程部署。生成的是开发骨架，业务功能、身份验证和生产部署配置需要按需求添加。
+支持 npm、Java 21 / Maven、Vue / React、Express / Spring Boot / NestJS、MySQL / PostgreSQL。暂不提供全局运行环境安装、桌面安装包、更多包管理器或远程部署。生成的是开发骨架，业务功能、身份验证和生产部署配置需要按需求添加。
 
 ## 致谢与许可
 

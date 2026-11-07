@@ -42,9 +42,10 @@ async function waitFor(url, accept, child, logs) {
 
 const variants = [
   { id: 'node', frontend: 'vue', backend: 'express', database: 'postgres' },
-  { id: 'java', frontend: 'react', backend: 'spring', database: 'mysql' }
+  { id: 'java', frontend: 'react', backend: 'spring', database: 'mysql' },
+  { id: 'nest', frontend: 'react', backend: 'nestjs', database: 'postgres' }
 ].filter(variant => !only || only === variant.id);
-if (!variants.length) throw new Error('--only 仅支持 node 或 java。');
+if (!variants.length) throw new Error('--only 仅支持 node、java 或 nest。');
 
 try {
   for (const variant of variants) {
@@ -56,7 +57,8 @@ try {
     report.results.push(record);
     let child;
     let tail = '';
-    const env = { ...process.env, COMPOSE_PROJECT_NAME: name };
+    const env = { ...process.env };
+    delete env.COMPOSE_PROJECT_NAME;
     try {
       if (options.publish) {
         assert.equal(result.remote?.status, 'published', result.remote?.error);
@@ -74,6 +76,10 @@ try {
       record.checks.push('secrets-and-recovery-files-excluded');
       await npm(['run', 'build'], { cwd: result.path });
       record.checks.push('frontend-production-build');
+      if (variant.backend === 'nestjs') {
+        await readFile(join(result.path, 'backend', 'dist', 'main.js'));
+        record.checks.push('nestjs-production-build');
+      }
       if (variant.backend === 'spring') {
         if (process.platform === 'win32') await run(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'mvnw.cmd -B test'], { cwd: join(result.path, 'backend') });
         else await run('./mvnw', ['-B', 'test'], { cwd: join(result.path, 'backend') });
@@ -90,6 +96,15 @@ try {
       record.checks.push('frontend-proxy-to-backend');
       await waitFor('http://127.0.0.1:5173/api/db', data => data.status === 'ok' && data.database === variant.database, child, () => tail);
       record.checks.push('real-database-query-through-frontend-proxy');
+      if (variant.backend === 'nestjs') {
+        await run('docker', ['compose', 'stop', 'db'], { cwd: result.path, env, timeout: 30000 });
+        const unavailable = await fetch('http://127.0.0.1:5173/api/db', { signal: AbortSignal.timeout(6000) });
+        assert.equal(unavailable.status, 503);
+        assert.equal((await unavailable.json()).status, 'unavailable');
+        await run('docker', ['compose', 'up', '-d', '--wait', '--no-deps', 'db'], { cwd: result.path, env, timeout: 120000 });
+        await waitFor('http://127.0.0.1:5173/api/db', data => data.status === 'ok' && data.database === variant.database, child, () => tail);
+        record.checks.push('database-reconnect-after-restart');
+      }
       const page = await fetch('http://127.0.0.1:5173');
       assert.match(await page.text(), /id="app"/);
       record.checks.push('frontend-html');

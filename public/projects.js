@@ -4,7 +4,7 @@ setupI18n();
 
 const $ = id => document.getElementById(id);
 const stateLabels = { stopped: '已停止', starting: '正在启动…', running: '运行中', stopping: '正在停止…', failed: '启动失败或异常退出' };
-const stackNames = { vue: 'Vue', react: 'React', express: 'Express', spring: 'Spring Boot', mysql: 'MySQL', postgres: 'PostgreSQL' };
+const stackNames = { vue: 'Vue', react: 'React', express: 'Express', nestjs: 'NestJS', spring: 'Spring Boot', mysql: 'MySQL', postgres: 'PostgreSQL' };
 const diagnosticMessages = {
   port: 'Free the occupied port, or choose a different one under Development ports if this project supports it.',
   java: 'Set JAVA_HOME and PATH to a JDK that supports Java 21, then restart StackForge and try again.',

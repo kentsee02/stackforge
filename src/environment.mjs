@@ -2,7 +2,7 @@ import { access, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { createServer } from 'node:net';
-import { validateOptions } from './catalog.mjs';
+import { hasNodeBackend, validateOptions } from './catalog.mjs';
 import { run, npm as runNpm, throwIfCancelled } from './process.mjs';
 import { gitIdentity, githubAccount } from './git.mjs';
 
@@ -43,7 +43,7 @@ export async function checkEnvironment(input, services = {}) {
   const tasks = [];
   const [major, minor] = (services.nodeVersion ?? process.versions.node).split('.').map(Number);
   add('node', 'Node.js', major > 22 || major === 22 && minor >= 12 ? 'ok' : 'error', services.nodeVersion ?? process.version, '安装 Node.js 22.12+，推荐 24 LTS。', help.node);
-  const usesNpm = options.frontend !== 'none' || options.backend === 'express';
+  const usesNpm = options.frontend !== 'none' || hasNodeBackend(options.backend);
   if (usesNpm) tasks.push(executable('npm', 'npm', () => npm(['--version'], { timeout: 8000 }), options.install, '重新安装含 npm 的官方 Node.js。'));
   if (options.backend === 'spring') tasks.push(executable('java', 'Java JDK 21+', () => command('javac', ['-version'], { timeout: 8000 }), options.install, '安装 JDK 21+，并将 JAVA_HOME 和 JDK bin 加入环境变量。', version => version >= 21));
   if (options.git) tasks.push(executable('git', 'Git 2.28+', () => command('git', ['--version'], { timeout: 8000 }), true, '安装 Git 2.28+，然后重启工具；初始化本地仓库不需要登录。', (major, minor) => major > 2 || major === 2 && minor >= 28));
