@@ -41,6 +41,8 @@ Open **Projects** to find projects created by this StackForge checkout, includin
 
 **Stop project** stops development processes started from this page. A normal StackForge shutdown also stops them. Docker databases run separately and can be stopped with the generated project's `npm run db:down` command. Logs are kept in memory for the latest run of each project and cleared when StackForge restarts.
 
+**Delete project** shows the folder path before moving the entire local folder to the system trash. Stop the project in StackForge first. Restore the folder to its original location to see it in Projects again. GitHub repositories and Docker volumes stay intact. Linux requires `gio` for this action, and the drive must support the system trash.
+
 ## Generated projects
 
 - Vue 3 or React with Vite and TypeScript. Frontend `/api` requests proxy to the backend on port 8080.

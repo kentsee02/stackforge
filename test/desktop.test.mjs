@@ -118,6 +118,24 @@ test('macOS and Linux desktop branches pass paths as data and Linux picker cance
   assert.match(last[1][1], /quoted form/);
 });
 
+test('recycle adapters pass only the recorded path and reject roots, symlinks and unsupported systems', async () => {
+  const calls = [];
+  const command = async (...args) => calls.push(args);
+  const path = "/home/dev/研发 & O'Brien/demo";
+  await windows({ command }).trashProject(windowsPath);
+  assert.equal(calls[0][2].env.STACKFORGE_TRASH_PATH, windowsPath);
+  assert.equal(Buffer.from(calls[0][1].at(-1), 'base64').toString('utf16le').includes(windowsPath), false);
+  await assert.rejects(windows({ command }).trashProject('C:\\'), /safely recycled/);
+  const options = { env: { PATH: '/usr/bin' }, fileExists: async file => file === '/usr/bin/gio', lstatDirectory: async () => directoryInfo, command };
+  await createDesktop({ ...options, platform: 'linux' }).trashProject(path);
+  assert.deepEqual(calls[1][1], ['trash', '--', path]);
+  await createDesktop({ ...options, platform: 'darwin' }).trashProject(path);
+  assert.equal(calls[2][1].at(-1), path);
+  await assert.rejects(createDesktop({ ...options, platform: 'linux', lstatDirectory: async () => ({ ...directoryInfo, isSymbolicLink: () => true }) }).trashProject(path), /safely recycled/);
+  await assert.rejects(createDesktop({ ...options, platform: 'linux', fileExists: async () => false }).trashProject(path), /system trash did not accept/);
+  assert.equal(calls.length, 3);
+});
+
 test('desktop and preference APIs require authorization and open only the project recorded by the completed task', async t => {
   const parentDir = resolve(tmpdir(), 'desktop-api-parent'), expected = join(parentDir, 'desktop-api-app');
   const opened = [], picked = [];

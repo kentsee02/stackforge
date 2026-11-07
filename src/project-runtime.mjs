@@ -8,7 +8,7 @@ const logLimit = 64 * 1024;
 const active = new Set(['starting', 'running', 'stopping']);
 const pathKey = path => process.platform === 'win32' ? path.toLowerCase() : path;
 
-async function projectEntry(project) {
+export async function recordedProjectDirectory(project) {
   try {
     const root = await lstat(project.path);
     if (!root.isDirectory() || root.isSymbolicLink()) throw new Error();
@@ -17,12 +17,10 @@ async function projectEntry(project) {
     const manifestInfo = await lstat(manifestFile);
     if (!manifestInfo.isFile() || manifestInfo.size > 64 * 1024) throw new Error();
     const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
-    const script = join(directory, 'scripts', 'dev.mjs');
-    if (manifest.generator !== 'StackForge' || manifest.options?.name !== project.name ||
-        !(await lstat(script)).isFile() || pathKey(await realpath(script)) !== pathKey(script)) throw new Error();
-    return { directory, script };
+    if (manifest.generator !== 'StackForge' || ['name', 'frontend', 'backend', 'database'].some(key => manifest.options?.[key] !== project[key])) throw new Error();
+    return directory;
   } catch {
-    throw new Error('The recorded StackForge project or its development script is missing or has moved.');
+    throw new Error('The recorded StackForge project is missing, has moved, or no longer matches its record.');
   }
 }
 
@@ -73,7 +71,11 @@ export class ProjectRuntime {
   }
 
   async launch(project, entry) {
-    const { directory, script } = await projectEntry(project);
+    const directory = await recordedProjectDirectory(project);
+    const script = join(directory, 'scripts', 'dev.mjs');
+    try {
+      if (!(await lstat(script)).isFile() || pathKey(await realpath(script)) !== pathKey(script)) throw new Error();
+    } catch { throw new Error('The recorded StackForge project or its development script is missing or has moved.'); }
     if (entry.status === 'stopping') return;
     for (const port of entry.ports) if (!await this.probePort(port)) throw new Error(`Development port ${port} is already in use.`);
     if (entry.status === 'stopping') return;

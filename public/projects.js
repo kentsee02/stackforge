@@ -9,6 +9,7 @@ const rows = new Map();
 let projects = [];
 let selected;
 let pending;
+let confirming;
 let actionError;
 let timer;
 let revision = 0;
@@ -68,15 +69,20 @@ function render() {
   if ($('selected-project-path').textContent !== project.path) $('selected-project-path').textContent = project.path;
   showState($('selected-project-state'), project.status);
   const running = project.status === 'running' || project.status === 'starting';
+  const busy = running || project.status === 'stopping';
+  const deleting = project.deleting || (pending?.id === project.id && pending.action === 'trash');
   const action = $('runtime-action');
   action.dataset.action = running ? 'stop' : 'start';
   action.className = running || project.status === 'stopping' ? 'secondary' : 'primary';
-  action.disabled = Boolean(pending) || project.status === 'stopping';
+  action.disabled = Boolean(pending) || deleting || project.status === 'stopping';
   setText(action.firstElementChild, project.status === 'stopping' ? 'Stopping…' : running ? 'Stop project' : 'Start project');
   const error = actionError?.id === project.id ? actionError.message : project.error;
   $('runtime-error').hidden = !error;
   setText($('runtime-error'), error || '');
   $('runtime-database').hidden = project.database === 'none';
+  $('project-delete').disabled = Boolean(pending) || busy || deleting;
+  $('project-delete-hint').hidden = !busy && !deleting;
+  setText($('project-delete-hint'), deleting ? 'Moving to trash…' : 'Stop the project first.');
   const output = $('runtime-output');
   const log = project.log ?? '';
   const follow = output.dataset.project !== project.id || output.scrollHeight - output.scrollTop - output.clientHeight < 32;
@@ -108,23 +114,54 @@ async function refresh() {
   }
 }
 
-$('project-search').addEventListener('input', renderRows);
-$('runtime-action').addEventListener('click', async event => {
-  if (!selected || pending) return;
-  const id = selected;
-  const action = event.currentTarget.dataset.action;
-  pending = id;
+async function act(id, action) {
+  if (!id || pending) return;
+  pending = { id, action };
   actionError = undefined;
+  $('project-feedback').dataset.status = 'ok';
+  setText($('project-feedback'), '');
   render();
   try {
     const { token } = await request('/api/state');
     const runtime = await request(`/api/projects/${id}/${action}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, body: '{}'
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token },
+      ...(action === 'trash' && { signal: AbortSignal.timeout(30000) }),
+      body: action === 'trash' ? '{"confirm":true}' : '{}'
     });
-    const project = projects.find(item => item.id === id);
-    if (project) Object.assign(project, { status: runtime.status, error: runtime.error });
-  } catch (error) { actionError = { id, message: error.message }; }
-  finally { pending = undefined; render(); refresh(); }
+    if (action === 'trash') {
+      projects = projects.filter(item => item.id !== id);
+      if (selected === id) selected = projects[0]?.id;
+      setText($('project-feedback'), 'Project moved to the system trash.');
+    } else {
+      const project = projects.find(item => item.id === id);
+      if (project) Object.assign(project, { status: runtime.status, error: runtime.error });
+    }
+  } catch (error) {
+    if (action === 'trash') {
+      $('project-feedback').dataset.status = 'error';
+      setText($('project-feedback'), error.message);
+    } else actionError = { id, message: error.message };
+  }
+  finally {
+    pending = undefined;
+    render();
+    if (action === 'trash') $('project-feedback').focus();
+    refresh();
+  }
+}
+
+$('project-search').addEventListener('input', renderRows);
+$('runtime-action').addEventListener('click', event => act(selected, event.currentTarget.dataset.action));
+$('project-delete').addEventListener('click', () => {
+  const project = projects.find(item => item.id === selected);
+  if (!project || pending) return;
+  confirming = project.id;
+  $('project-trash-path').textContent = project.path;
+  $('project-trash-dialog').showModal();
+});
+$('project-trash-confirm').addEventListener('click', () => {
+  $('project-trash-dialog').close();
+  act(confirming, 'trash');
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else refresh(); });
 refresh();

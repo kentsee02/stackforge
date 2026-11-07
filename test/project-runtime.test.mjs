@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, rename, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ProjectRuntime } from '../src/project-runtime.mjs';
 import { createApp } from '../src/server.mjs';
+import { createDesktop } from '../src/desktop.mjs';
 
 const childScript = `import { spawn } from 'node:child_process';
 const program = "const server = require('node:net').createServer(); server.listen(0, '127.0.0.1', () => console.log('ready', server.address().port));";
@@ -23,10 +24,11 @@ async function workspace(t) {
 
 async function createProject(parent, name, script) {
   const path = join(parent, name);
+  const options = { name, frontend: 'vue', backend: 'none', database: 'none' };
   await mkdir(join(path, 'scripts'), { recursive: true });
-  await writeFile(join(path, 'stackforge.json'), JSON.stringify({ generator: 'StackForge', options: { name } }));
+  await writeFile(join(path, 'stackforge.json'), JSON.stringify({ generator: 'StackForge', options }));
   await writeFile(join(path, 'scripts', 'dev.mjs'), script);
-  return { name, path, frontend: 'vue', backend: 'none', database: 'none' };
+  return { ...options, path };
 }
 
 async function until(check) {
@@ -82,18 +84,23 @@ test('stopping during startup prevents execution and a failed run retains bounde
   assert.match(result.log, / END$/);
   runtime.start({ ...project, name: 'changed-name' });
   await until(() => runtime.status(project).status === 'failed');
-  assert.match(runtime.status(project).error, /missing or has moved/);
+  assert.match(runtime.status(project).error, /no longer matches its record/);
   assert.equal(runtime.status(project, true).log, '');
 });
 
-test('project API exposes completed records and protects start and stop from foreign requests and supplied paths', async t => {
+test('project API protects runtime and recycling actions, locks moves, and rediscovers restored projects', { timeout: 15000 }, async t => {
   const parent = await workspace(t);
   const project = await createProject(parent, 'recorded-app', "console.log('recorded launcher'); setInterval(() => {}, 1000);");
-  const server = createApp({ stateDir: false, runtime: new ProjectRuntime({ probePort: async () => true }),
+  const trash = join(parent, 'recycled');
+  let allowMove, moveStarted;
+  const moving = new Promise(resolve => { moveStarted = resolve; });
+  const canMove = new Promise(resolve => { allowMove = resolve; });
+  const desktop = { ...createDesktop(), async trashProject(path) { moveStarted(); await canMove; await rename(path, trash); } };
+  const server = createApp({ stateDir: false, desktop, runtime: new ProjectRuntime({ probePort: async () => true }),
     check: async () => ({ canCreate: true }), generate: async () => ({ path: project.path, commands: [] }) });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  t.after(async () => { await server.shutdownTasks(); await new Promise(resolve => server.close(resolve)); });
+  t.after(async () => { allowMove(); await server.shutdownTasks(); await new Promise(resolve => server.close(resolve)); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const get = path => fetch(base + path).then(response => response.json());
   const { token } = await get('/api/state');
@@ -106,7 +113,7 @@ test('project API exposes completed records and protects start and stop from for
   const listed = await until(async () => (await get('/api/projects')).projects[0]);
   assert.equal(listed.id, id);
   assert.equal(listed.path, project.path);
-  const start = `/api/projects/${id}/start`, stop = `/api/projects/${id}/stop`;
+  const start = `/api/projects/${id}/start`, stop = `/api/projects/${id}/stop`, remove = `/api/projects/${id}/trash`;
   assert.equal((await post(start, {}, { Origin: 'https://example.com' })).status, 403);
   assert.equal((await post(stop, {}, { 'X-StackForge-Token': 'invalid' })).status, 403);
   assert.equal((await post('/api/projects/unknown/start')).status, 404);
@@ -114,6 +121,27 @@ test('project API exposes completed records and protects start and stop from for
   const detail = () => get(`/api/projects?logs=${id}`).then(data => data.projects[0]);
   await until(async () => (await detail()).log.includes('recorded launcher'));
   assert.equal((await get('/api/projects')).projects[0].log, undefined);
+  assert.equal((await post(remove, { confirm: true })).status, 409);
   assert.equal((await post(stop)).status, 202);
   await until(async () => (await detail()).status === 'stopped');
+  assert.equal((await post(remove, { confirm: true }, { Origin: 'https://example.com' })).status, 403);
+  assert.equal((await post(remove)).status, 400);
+  const manifest = join(project.path, 'stackforge.json');
+  const original = await readFile(manifest, 'utf8');
+  await writeFile(manifest, '{}');
+  assert.equal((await post(remove, { confirm: true })).status, 409);
+  await writeFile(manifest, original);
+  const removal = post(remove, { confirm: true, path: join(parent, 'spoofed') });
+  assert.equal(await Promise.race([moving.then(() => true), removal.then(() => false)]), true);
+  try {
+    assert.equal((await detail()).deleting, true);
+    assert.equal((await post(start)).status, 409);
+    assert.equal((await post(remove, { confirm: true })).status, 409);
+  } finally { allowMove(); }
+  assert.equal((await removal).status, 200);
+  assert.deepEqual((await get('/api/projects')).projects, []);
+  assert.equal((await get(`/api/jobs/${id}`)).status, 'complete');
+  assert.equal(await readFile(join(trash, 'stackforge.json'), 'utf8'), original);
+  await rename(trash, project.path);
+  assert.equal((await detail()).id, id);
 });

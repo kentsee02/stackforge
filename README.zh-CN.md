@@ -45,6 +45,8 @@ Windows PowerShell：`$env:PORT=4311; npm start`。
 
 「停止项目」会停止从这个页面启动的开发进程。正常关闭 StackForge 时，也会停止这些进程。Docker 数据库独立运行，可在项目目录用 `npm run db:down` 停止。每个项目最近一次运行的日志保存在内存中，重启 StackForge 后会清空。
 
+「删除项目」会先显示完整路径，确认后将整个本地项目文件夹移到系统回收站。请先停止项目。在系统回收站把文件夹恢复到原位后，它会重新出现在项目管理页。GitHub 仓库和 Docker 数据卷会保留。Linux 上此操作需要 `gio`，所在磁盘须支持系统回收站。
+
 ## 生成内容
 
 - Vue 3 或 React，搭配 Vite 与 TypeScript；前端 `/api` 代理到本机 8080。

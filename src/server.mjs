@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
@@ -12,18 +12,25 @@ import { Jobs } from './jobs.mjs';
 import { absoluteDirectory, defaultProjectsDirectory } from './paths.mjs';
 import { Settings } from './settings.mjs';
 import { createDesktop } from './desktop.mjs';
-import { ProjectRuntime } from './project-runtime.mjs';
+import { ProjectRuntime, recordedProjectDirectory } from './project-runtime.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const identity = { application: 'stackforge-local', version: '0.7.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
+export const identity = { application: 'stackforge-local', version: '0.8.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
 const staticFiles = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/messages.js': ['messages.js', 'text/javascript; charset=utf-8'], '/template-store.js': ['template-store.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'], '/plex-regular.ttf': ['plex-regular.ttf', 'font/ttf'], '/plex-semibold.ttf': ['plex-semibold.ttf', 'font/ttf'] };
 staticFiles['/projects'] = ['projects.html', 'text/html; charset=utf-8'];
 staticFiles['/projects.js'] = ['projects.js', 'text/javascript; charset=utf-8'];
+
+async function locationExists(path) {
+  try { await lstat(path); return true; }
+  catch (error) { return !['ENOENT', 'ENOTDIR'].includes(error.code); }
+}
 
 export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime() } = {}) {
   const token = randomBytes(32).toString('hex');
   const jobs = new Jobs({ directory: stateDir, generate, check, publish });
   const settings = new Settings(settingsFile);
+  const removals = new Map();
+  let closing = false;
   function send(res, status, value) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(value));
@@ -41,14 +48,19 @@ export function createApp({ generate = generateProject, check = checkEnvironment
       if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, { catalog, token, defaultDir, node: process.version, platform: process.platform, version: identity.version, jobs: jobs.list(), preferences: settings.value, desktop: await desktop.capabilities() });
       if (req.method === 'GET' && url.pathname === '/api/projects') {
         const selected = url.searchParams.get('logs');
-        return send(res, 200, { projects: jobs.projects().map(project => ({ ...project, ...runtime.status(project, project.id === selected) })) });
+        const projects = await Promise.all(jobs.projects().map(async project => {
+          const deleting = removals.has(project.path);
+          const session = runtime.status(project, project.id === selected);
+          if (deleting || ['starting', 'running', 'stopping'].includes(session.status) || await locationExists(project.path)) return { ...project, ...session, deleting };
+        }));
+        return send(res, 200, { projects: projects.filter(Boolean) });
       }
       if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, jobs.list());
       if (req.method === 'GET' && url.pathname.startsWith('/api/jobs/')) {
         const job = jobs.view(url.pathname.slice('/api/jobs/'.length));
         return send(res, job ? 200 : 404, job ?? { error: '找不到这个创建任务。' });
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop)$/.exec(url.pathname);
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|trash)$/.exec(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         const origin = req.headers.origin;
         if ((origin && origin !== `http://${req.headers.host}`) || req.headers['x-stackforge-token'] !== token || req.headers['content-type']?.split(';')[0] !== 'application/json') return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
@@ -59,10 +71,26 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         let payload;
         try { payload = JSON.parse(body); if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error(); }
         catch { return send(res, 400, { error: 'Invalid JSON request.' }); }
+        if (removals.size && (url.pathname === '/api/projects' || /\/api\/jobs\/[^/]+\/(publish|retry|open)$/.test(url.pathname))) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
         if (projectAction) {
           const [, id, action] = projectAction;
           const project = jobs.projects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
+          if (removals.has(project.path)) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
+          if (action === 'trash') {
+            if (payload.confirm !== true) return send(res, 400, { error: 'Confirm moving this project to the trash.' });
+            if (closing || jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
+            if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before moving it to the trash.' });
+            const moving = (async () => {
+              const directory = await recordedProjectDirectory(project);
+              await desktop.trashProject(directory);
+              if (await locationExists(project.path)) throw new Error('The project is still at its original location. Check the system trash before retrying.');
+            })();
+            removals.set(project.path, moving);
+            try { await moving; return send(res, 200, { trashed: true }); }
+            catch (error) { return send(res, 409, { error: error.message }); }
+            finally { removals.delete(project.path); }
+          }
           try {
             runtime[action](project);
             return send(res, 202, runtime.status(project));
@@ -116,7 +144,11 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     } catch (error) { return send(res, 500, { error: error.message }); }
   });
   server.requestTimeout = 30_000;
-  server.shutdownTasks = async () => { desktop.shutdown(); await Promise.allSettled([jobs.shutdown(), settings.pending, runtime.shutdown()]); };
+  server.shutdownTasks = async () => {
+    closing = true;
+    desktop.shutdown();
+    await Promise.allSettled([jobs.shutdown(), settings.pending, runtime.shutdown(), ...removals.values()]);
+  };
   server.jobs = jobs;
   return server;
 }

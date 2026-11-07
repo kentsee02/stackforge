@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { stat, lstat } from 'node:fs/promises';
 import { posix, win32 } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { run, throwIfCancelled } from './process.mjs';
 import { absoluteDirectory } from './paths.mjs';
 
@@ -29,6 +30,12 @@ try {
 const terminalScript = "$ErrorActionPreference='Stop'; Set-Location -LiteralPath $env:STACKFORGE_OPEN_PATH; $host.UI.RawUI.WindowTitle='StackForge - ' + (Split-Path -Leaf $env:STACKFORGE_OPEN_PATH)";
 const macPicker = 'on run argv\ntry\nset chosen to choose folder with prompt (item 2 of argv) default location (POSIX file (item 1 of argv))\nreturn POSIX path of chosen\non error number -128\nreturn ""\nend try\nend run';
 const macTerminal = 'on run argv\ntell application "Terminal"\nactivate\ndo script "cd -- " & quoted form of (item 1 of argv)\nend tell\nend run';
+const macTrash = `function run(argv) {
+  ObjC.import('Foundation');
+  const url = $.NSURL.fileURLWithPath(argv[0]);
+  if (!$.NSFileManager.defaultManager.trashItemAtURLResultingItemURLError(url, null, null)) throw Error('Trash rejected the folder.');
+}`;
+const windowsTrash = "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; Add-Type -Path $env:STACKFORGE_RECYCLE_SOURCE; [StackForgeRecycle]::Move($env:STACKFORGE_TRASH_PATH)";
 const encoded = value => Buffer.from(value, 'utf16le').toString('base64');
 // A detached Node child has no Windows console. Start a visible one from PowerShell.
 const startTerminalScript = `Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoLogo', '-NoProfile', '-NoExit', '-EncodedCommand', '${encoded(terminalScript)}') -WindowStyle Normal -ErrorAction Stop`;
@@ -124,6 +131,25 @@ export function createDesktop({ platform = process.platform, env = process.env, 
         const name = paths.basename(available.terminal);
         await launch(available.terminal, name === 'gnome-terminal' || name === 'xfce4-terminal' ? ['--working-directory', path] : name === 'konsole' ? ['--workdir', path] : [], config);
       }
+    },
+    async trashProject(path) {
+      path = absoluteDirectory(path, platform);
+      const info = await lstatDirectory(path);
+      if (!info.isDirectory() || info.isSymbolicLink() || paths.parse(path).root === path) throw new Error('The project folder cannot be safely recycled.');
+      const config = { timeout: 25000, env };
+      try {
+        if (platform === 'win32') {
+          const shell = (await tools()).picker;
+          if (!shell) throw new Error();
+          await command(shell, ['-NoLogo', '-NoProfile', '-STA', '-EncodedCommand', encoded(windowsTrash)], { ...config, env: { ...env, STACKFORGE_TRASH_PATH: path, STACKFORGE_RECYCLE_SOURCE: fileURLToPath(new URL('./recycle-windows.cs', import.meta.url)) } });
+        } else if (platform === 'darwin') {
+          await command('/usr/bin/osascript', ['-l', 'JavaScript', '-e', macTrash, '--', path], config);
+        } else {
+          const gio = platform === 'linux' && await find('gio');
+          if (!gio) throw new Error();
+          await command(gio, ['trash', '--', path], config);
+        }
+      } catch { throw new Error('The system trash did not accept this folder. Check the drive and close any apps using the project.'); }
     },
     shutdown() { pickerController?.abort(); }
   };
