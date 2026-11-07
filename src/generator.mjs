@@ -1,6 +1,7 @@
 import { mkdir, writeFile, mkdtemp, rename, rm, access, chmod, open, readFile, lstat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import metadata from '../package.json' with { type: 'json' };
 import { hasNodeBackend, validateOptions } from './catalog.mjs';
 import { extractZip } from './zip.mjs';
 import { installMavenDependencies, installNodeDependencies, npm, run, throwIfCancelled } from './process.mjs';
@@ -10,7 +11,7 @@ import { json, frontendFiles, expressFiles, nestFiles, databaseFiles, devScript,
 
 export async function download(url, { fetchImpl = fetch, binary = false, signal } = {}) {
   throwIfCancelled(signal);
-  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.16.0' } });
+  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': `StackForge/${metadata.version}` } });
   if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）：${new URL(url).hostname}`);
   if (binary) {
     const reader = response.body.getReader();
@@ -159,7 +160,7 @@ export async function generateProject(input, report = () => {}, services = {}) {
       '.gitignore': 'node_modules/\ndist/\ntarget/\n.env\n.env.*\n!.env.example\n.stackforge-owner\n.stackforge-cache/\n*.log\n.idea/\n.vscode/\n.DS_Store\n',
       'scripts/dev.mjs': devScript(options),
       'README.md': generatedReadme(options),
-      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.16.0', ...(configurablePorts && { portConfig: 1 }), databaseId, createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
+      'stackforge.json': json({ generator: 'StackForge', generatorVersion: metadata.version, ...(configurablePorts && { portConfig: 1 }), databaseId, createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
     });
     });
     if (options.install) {

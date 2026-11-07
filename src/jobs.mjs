@@ -65,6 +65,8 @@ export class Jobs {
     const record = this.records.get(id);
     const controller = this.controllers.get(id);
     if (!record || !controller) throw new Error('这个任务没有在执行。');
+    if (record.job.status === 'cancelling') return;
+    if (record.job.status !== 'running') throw new Error('这个任务没有在执行。');
     record.job.status = 'cancelling'; record.job.step = '正在停止下载与安装进程…';
     controller.abort();
     await this.persist(record);
@@ -77,10 +79,14 @@ export class Jobs {
     job.status = 'running'; job.error = undefined; job.environment = undefined;
     job.retryKind = publicationOnly ? 'publish' : 'create';
     job.step = publicationOnly ? '重试 GitHub 发布' : record.checkpoint.staging ? '继续未完成的创建步骤' : '创建前检查';
-    try { await this.persist(record); }
-    catch (error) { this.controllers.delete(job.id); job.status = 'failed'; job.error = error.message; throw error; }
-    const execution = this.execute(record, controller, publicationOnly);
+    const saved = this.persist(record);
+    const execution = saved.then(() => this.execute(record, controller, publicationOnly), error => {
+      job.status = 'failed'; job.error = error.message;
+      this.controllers.delete(job.id);
+      this.executions.delete(job.id);
+    });
     this.executions.set(job.id, execution);
+    await saved;
   }
 
   async execute(record, controller, publicationOnly) {
@@ -92,6 +98,7 @@ export class Jobs {
       if (job.logs.length > 300) job.logs.shift();
     };
     try {
+      throwIfCancelled(signal);
       if (publicationOnly) {
         job.result.remote = await this.publish(job.result.path, options, report, { signal });
       } else {
@@ -117,7 +124,7 @@ export class Jobs {
       } else {
         job.status = 'failed'; job.error = error.message; job.step = '创建未完成，可从失败步骤重试';
       }
-      if (checkpoint.result) job.result = checkpoint.result;
+      if (!publicationOnly && checkpoint.result) job.result = checkpoint.result;
     } finally {
       try { await this.persist(record); }
       catch (error) { job.logs.push('无法保存任务记录：' + error.message); }
