@@ -6,6 +6,8 @@ import { projectPathKey } from './project-config.mjs';
 import { inspectRecordedProject, startupDiagnostic } from './project-runtime.mjs';
 
 const logLimit = 64 * 1024;
+const databaseLabel = 'io.stackforge.database-id';
+const unverifiedDatabase = 'The database volume could not be verified as belonging to this project.';
 const composeStatusFormat = [
   '{{json (index .Config.Labels "com.docker.compose.project.working_dir")}}',
   '{{index .Config.Labels "com.docker.compose.service"}}',
@@ -13,9 +15,9 @@ const composeStatusFormat = [
   '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
 ].join('\t');
 
-async function databaseOptions(project, ports) {
+async function databaseOptions(project, ports, info) {
   if (project.database === 'none') throw new Error('This project has no database.');
-  const { directory, manifest } = await inspectRecordedProject(project);
+  const { directory, manifest } = info ?? await inspectRecordedProject(project);
   const file = await lstat(join(directory, 'compose.yaml')).catch(() => null);
   if (!file?.isFile()) throw new Error('The project is missing its compose.yaml file.');
   const env = { ...process.env, STACKFORGE_DATABASE_PORT: '' };
@@ -97,12 +99,13 @@ export class ProjectOperations {
     }
   }
 
-  async databaseState(config) {
+  async databaseContainers(config, includeMounts = false) {
     const options = { ...config, stdoutOnly: true, timeout: 3000 };
     const ids = (await this.command('docker', ['compose', 'ps', '--all', '--format', '{{.ID}}'], options)).trim().split(/\r?\n/).filter(Boolean);
-    if (!ids.length) return { status: 'absent' };
+    if (!ids.length) return [];
     if (!ids.every(id => /^[a-f0-9]{12,64}$/.test(id))) throw new Error('Docker returned an unexpected container identifier.');
-    const details = await this.command('docker', ['inspect', '--type', 'container', '--format', composeStatusFormat, ...ids], options);
+    const format = includeMounts ? composeStatusFormat + '\t{{json .Mounts}}' : composeStatusFormat;
+    const details = await this.command('docker', ['inspect', '--type', 'container', '--format', format, ...ids], options);
     const containers = details.trimEnd().split(/\r?\n/).map(line => line.split('\t'));
     if (containers.length !== ids.length) throw new Error('Docker returned an unexpected container identifier.');
     for (const [label] of containers) {
@@ -110,8 +113,15 @@ export class ProjectOperations {
       const owner = path && await realpath(path).catch(() => path);
       if (!owner || projectPathKey(owner) !== projectPathKey(config.cwd)) throw new Error('This Compose database belongs to another project folder.');
     }
-    const states = containers.filter(([, service]) => service === 'db')
-      .map(([, , state, health]) => state === 'running' && ['unhealthy', 'starting'].includes(health) ? health : state);
+    return containers.flatMap(([, service, state, health, mounts], index) => service === 'db' ? [{
+      id: ids[index],
+      status: state === 'running' && ['unhealthy', 'starting'].includes(health) ? health : state,
+      mounts: includeMounts ? JSON.parse(mounts) ?? [] : []
+    }] : []);
+  }
+
+  async databaseState(config) {
+    const states = (await this.databaseContainers(config)).map(container => container.status);
     if (!states.length) return { status: 'absent' };
     const status = ['unhealthy', 'restarting', 'starting', 'running', 'paused'].find(state => states.includes(state)) ?? 'stopped';
     return { status };
@@ -137,6 +147,61 @@ export class ProjectOperations {
     if (action === 'database-stop' && state.status === 'absent') return;
     const args = action === 'database-start' ? ['up', '-d', '--wait', '--no-deps', 'db'] : ['stop', 'db'];
     await this.command('docker', ['compose', ...args], { ...config, ...options });
+  }
+
+  async removeDatabase(project, ports, info) {
+    const config = await databaseOptions(project, ports, info);
+    const docker = async (args, timeout = 5000) => {
+      try {
+        return await this.command('docker', args, { ...config, timeout, stdoutOnly: true, stdoutLimit: 128 * 1024 });
+      } catch {
+        throw new Error('Docker could not finish deleting the database. Check that Docker is running and retry.');
+      }
+    };
+    let model;
+    try { model = JSON.parse(await docker(['compose', 'config', '--format', 'json'])); }
+    catch { throw new Error('The database Compose configuration could not be read. Check compose.yaml and .env before retrying.'); }
+    const mounts = model.services?.db?.volumes ?? [];
+    const [mount] = mounts;
+    const volume = model.volumes?.[mount?.source];
+    const name = volume?.name;
+    if (mounts.length !== 1 || mount?.type !== 'volume' || volume?.external || volume?.driver_opts ||
+        (volume?.driver && volume.driver !== 'local') || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/.test(name ?? '')) {
+      throw new Error('Only a dedicated, Compose-managed database volume can be deleted with a project.');
+    }
+    for (const [service, options] of Object.entries(model.services)) {
+      if (service !== 'db' && options.volumes?.some(item => item.type === 'volume' && model.volumes?.[item.source]?.name === name)) {
+        throw new Error('The database volume is shared with another container.');
+      }
+    }
+    const containers = await this.databaseContainers(config, true);
+    if (containers.some(container => container.mounts.length !== 1 ||
+        !container.mounts.some(item => item.Type === 'volume' && item.Name === name && item.Destination === mount.target))) {
+      throw new Error(unverifiedDatabase);
+    }
+    const names = (await docker(['volume', 'ls', '--filter', `name=${name}`, '--format', '{{.Name}}'])).trim().split(/\r?\n/);
+    if (!names.includes(name)) {
+      if (containers.length) throw new Error(unverifiedDatabase);
+      return false;
+    }
+    const details = await docker(['volume', 'inspect', '--format', '{{json .CreatedAt}}\t{{json .Labels}}', name]);
+    const [createdAt, labels] = details.trim().split('\t').map(value => JSON.parse(value));
+    if (labels?.['com.docker.compose.project'] !== model.name || labels?.['com.docker.compose.volume'] !== mount.source) {
+      throw new Error(unverifiedDatabase);
+    }
+    const databaseId = info.manifest.databaseId;
+    const projectCreated = Math.floor(Date.parse(info.manifest.createdAt) / 1000) * 1000;
+    const matchesLegacyProject = !labels[databaseLabel] && containers.length && Date.parse(createdAt) >= projectCreated;
+    if (databaseId ? labels[databaseLabel] !== databaseId : !matchesLegacyProject) {
+      throw new Error(unverifiedDatabase);
+    }
+    const users = (await docker(['ps', '--all', '--quiet', '--no-trunc', '--filter', `volume=${name}`])).trim().split(/\r?\n/).filter(Boolean);
+    if (users.some(id => !containers.some(container => id.startsWith(container.id)))) {
+      throw new Error('The database volume is shared with another container.');
+    }
+    if (containers.length) await docker(['container', 'rm', '--force', ...containers.map(container => container.id)], 15000);
+    await docker(['volume', 'rm', name]);
+    return true;
   }
 
   async shutdown() {

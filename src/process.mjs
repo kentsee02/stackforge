@@ -26,7 +26,7 @@ export async function terminateTree(child) {
   }
 }
 
-export function run(command, args, { cwd, env = process.env, log = () => {}, timeout = 600_000, signal, stdoutOnly = false } = {}) {
+export function run(command, args, { cwd, env = process.env, log = () => {}, timeout = 600_000, signal, stdoutOnly = false, stdoutLimit = 4000 } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(cancelled()); return; }
     const child = spawn(command, args, { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -40,7 +40,7 @@ export function run(command, args, { cwd, env = process.env, log = () => {}, tim
       log(value);
     };
     child.stdout.setEncoding('utf8').on('data', chunk => {
-      if (stdoutOnly) stdout = (stdout + chunk).slice(-4000);
+      if (stdoutOnly) stdout = (stdout + chunk).slice(-stdoutLimit);
       collect(chunk);
     });
     child.stderr.setEncoding('utf8').on('data', collect);

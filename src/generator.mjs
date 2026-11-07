@@ -10,7 +10,7 @@ import { json, frontendFiles, expressFiles, databaseFiles, devScript, generatedR
 
 export async function download(url, { fetchImpl = fetch, binary = false, signal } = {}) {
   throwIfCancelled(signal);
-  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.10.0' } });
+  const response = await fetchImpl(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000), headers: { Accept: binary ? 'application/zip' : 'application/json', 'User-Agent': 'StackForge/0.11.0' } });
   if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）：${new URL(url).hostname}`);
   if (binary) {
     const reader = response.body.getReader();
@@ -135,7 +135,8 @@ export async function generateProject(input, report = () => {}, services = {}) {
     checkpoint.configurableBackend = true;
     });
     await steps('files', '生成环境变量、开发脚本与说明', 52, async () => {
-    if (options.database !== 'none') await put(staging, databaseFiles(options, randomBytes(24).toString('hex'), randomBytes(24).toString('hex')));
+    const databaseId = options.database === 'none' ? undefined : randomBytes(12).toString('hex');
+    if (databaseId) await put(staging, databaseFiles(options, randomBytes(24).toString('hex'), randomBytes(24).toString('hex'), databaseId));
     const workspaces = [...(options.frontend !== 'none' ? ['frontend'] : []), ...(options.backend === 'express' ? ['backend'] : [])];
     const configurablePorts = (options.frontend === 'none' || checkpoint.configurableFrontend) && (options.backend === 'none' || checkpoint.configurableBackend);
     await put(staging, {
@@ -143,7 +144,7 @@ export async function generateProject(input, report = () => {}, services = {}) {
       '.gitignore': 'node_modules/\ndist/\ntarget/\n.env\n.env.*\n!.env.example\n.stackforge-owner\n.stackforge-cache/\n*.log\n.idea/\n.vscode/\n.DS_Store\n',
       'scripts/dev.mjs': devScript(options),
       'README.md': generatedReadme(options),
-      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.10.0', ...(configurablePorts && { portConfig: 1 }), createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
+      'stackforge.json': json({ generator: 'StackForge', generatorVersion: '0.11.0', ...(configurablePorts && { portConfig: 1 }), databaseId, createdAt: new Date().toISOString(), options: { ...options, parentDir: undefined }, versions })
     });
     });
     if (options.install) {

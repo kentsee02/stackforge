@@ -50,7 +50,7 @@ Open **Projects** to find projects created by this StackForge checkout, includin
 
 **Stop project** stops the development processes started from this page. A normal StackForge shutdown also stops them. Development and installation logs are held in memory until StackForge restarts.
 
-**Delete project** shows the folder path before moving the entire local folder to the system trash. Stop the project in StackForge first. Restore the folder to its original location to see it in Projects again. GitHub repositories and Docker volumes stay intact. Linux requires `gio` for this action, and the drive must support the system trash.
+**Delete project** shows the folder path and asks you to type the exact project name. Stop the project in StackForge first. Project files go to the system trash and can be restored to their original location. Deletion also permanently removes the project's local Docker database container and its dedicated data volume. Docker must be running for projects with a database. StackForge blocks deletion when volume ownership is unclear, including older volumes with no matching container. On Linux, moving files to the system trash requires `gio` and a drive that supports it.
 
 ## Generated projects
 

@@ -35,6 +35,7 @@ test('all 20 supported stack combinations produce connected, parseable projects'
   const parent = await mkdtemp(join(tmpdir(), 'stackforge-test-'));
   t.after(() => rm(parent, { recursive: true, force: true }));
   let count = 0;
+  const databaseIds = new Set();
   for (const frontend of ['vue', 'react', 'none']) for (const backend of ['spring', 'express', 'none']) for (const database of ['mysql', 'postgres', 'none']) {
     if (frontend === 'none' && backend === 'none' || backend === 'none' && database !== 'none') continue;
     const name = `project-${count++}`;
@@ -47,7 +48,13 @@ test('all 20 supported stack combinations produce connected, parseable projects'
     if (database !== 'none') {
       const env = await readFile(join(result.path, '.env'), 'utf8');
       assert.match(env, /DB_PASSWORD=[0-9a-f]{48}/);
-      assert.match(await readFile(join(result.path, 'compose.yaml'), 'utf8'), /127.0.0.1:\$\{DB_PORT/);
+      const compose = await readFile(join(result.path, 'compose.yaml'), 'utf8');
+      assert.match(compose, /127.0.0.1:\$\{DB_PORT/);
+      assert.match(manifest.databaseId, /^[a-f0-9]{24}$/);
+      assert.match(env, new RegExp(`^COMPOSE_PROJECT_NAME=${name}-${manifest.databaseId}$`, 'm'));
+      assert.match(compose, new RegExp(`io.stackforge.database-id: "${manifest.databaseId}"`));
+      assert.equal(databaseIds.has(manifest.databaseId), false);
+      databaseIds.add(manifest.databaseId);
       assert.match(await readFile(join(result.path, '.gitignore'), 'utf8'), /^\.env$/m);
     }
     if (frontend !== 'none') {

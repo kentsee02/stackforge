@@ -271,11 +271,11 @@ async function act(id, action, body = {}) {
   render();
   try {
     const { token } = await request('/api/state');
-    const runtime = await post(`/api/projects/${id}/${action}`, token, action === 'trash' ? { confirm: true } : body, action === 'trash' ? 30000 : 5000);
+    const runtime = await post(`/api/projects/${id}/${action}`, token, body, action === 'trash' ? 90000 : 5000);
     if (action === 'trash') {
       projects = projects.filter(item => item.id !== id);
       if (selected === id) selected = projects[0]?.id;
-      setText($('project-feedback'), 'Project moved to the system trash.');
+      setText($('project-feedback'), runtime.databaseDeleted ? 'Project moved to the system trash and its database was deleted.' : 'Project moved to the system trash.');
     } else if (action === 'ports') {
       const project = projects.find(item => item.id === id);
       if (project) project.ports = runtime.ports;
@@ -364,13 +364,26 @@ $('database-logs').addEventListener('click', () => loadDatabase(true));
 $('project-delete').addEventListener('click', () => {
   const project = projects.find(item => item.id === selected);
   if (!project || pending) return;
-  confirming = project.id;
+  confirming = project;
   $('project-trash-path').textContent = project.path;
+  $('project-trash-expected').textContent = project.name;
+  $('project-trash-name').value = '';
+  $('project-trash-confirm').disabled = true;
+  setText($('project-trash-description'), project.database !== 'none'
+    ? 'The project folder will move to the system trash. Its local database and data volume will be permanently deleted.'
+    : 'The entire local project folder will move to the system trash. You can restore it from there.');
   $('project-trash-dialog').showModal();
 });
-$('project-trash-confirm').addEventListener('click', () => {
+$('project-trash-cancel').addEventListener('click', () => $('project-trash-dialog').close());
+$('project-trash-name').addEventListener('input', event => {
+  $('project-trash-confirm').disabled = event.target.value !== confirming?.name;
+});
+$('project-trash-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const confirmName = $('project-trash-name').value;
+  if (!confirming || confirmName !== confirming.name) return;
   $('project-trash-dialog').close();
-  act(confirming, 'trash');
+  act(confirming.id, 'trash', { confirmName });
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else refresh(); });
 refresh();

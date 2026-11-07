@@ -203,6 +203,7 @@ test('project API protects runtime and recycling actions, locks moves, and redis
   assert.equal(listed.id, id);
   assert.equal(listed.path, project.path);
   const start = `/api/projects/${id}/start`, stop = `/api/projects/${id}/stop`, remove = `/api/projects/${id}/trash`;
+  const confirmation = { confirmName: project.name };
   assert.equal((await post(start, {}, { Origin: 'https://example.com' })).status, 403);
   assert.equal((await post(stop, {}, { 'X-StackForge-Token': 'invalid' })).status, 403);
   assert.equal((await post('/api/projects/unknown/start')).status, 404);
@@ -210,22 +211,25 @@ test('project API protects runtime and recycling actions, locks moves, and redis
   const detail = () => get(`/api/projects?logs=${id}`).then(data => data.projects[0]);
   await until(async () => (await detail()).log.includes('recorded launcher'));
   assert.equal((await get('/api/projects')).projects[0].log, undefined);
-  assert.equal((await post(remove, { confirm: true })).status, 409);
+  assert.equal((await post(remove, confirmation)).status, 409);
   assert.equal((await post(stop)).status, 202);
   await until(async () => (await detail()).status === 'stopped');
-  assert.equal((await post(remove, { confirm: true }, { Origin: 'https://example.com' })).status, 403);
+  assert.equal((await post(remove, confirmation, { Origin: 'https://example.com' })).status, 403);
   assert.equal((await post(remove)).status, 400);
+  assert.equal((await post(remove, { confirm: true })).status, 400);
+  assert.equal((await post(remove, { confirmName: project.name.toUpperCase() })).status, 400);
+  assert.equal((await post(remove, { confirmName: project.name + ' ' })).status, 400);
   const manifest = join(project.path, 'stackforge.json');
   const original = await readFile(manifest, 'utf8');
   await writeFile(manifest, '{}');
-  assert.equal((await post(remove, { confirm: true })).status, 409);
+  assert.equal((await post(remove, confirmation)).status, 409);
   await writeFile(manifest, original);
-  const removal = post(remove, { confirm: true, path: join(parent, 'spoofed') });
+  const removal = post(remove, { ...confirmation, path: join(parent, 'spoofed') });
   assert.equal(await Promise.race([moving.then(() => true), removal.then(() => false)]), true);
   try {
     assert.equal((await detail()).deleting, true);
     assert.equal((await post(start)).status, 409);
-    assert.equal((await post(remove, { confirm: true })).status, 409);
+    assert.equal((await post(remove, confirmation)).status, 409);
   } finally { allowMove(); }
   assert.equal((await removal).status, 200);
   assert.deepEqual((await get('/api/projects')).projects, []);
@@ -311,4 +315,87 @@ test('project operations cancel and retry installation, manage the configured da
   await until(async () => (await detail()).databaseTask.status === 'succeeded');
   assert.equal((await get(`${route}/database`)).status, 'stopped');
   assert.deepEqual(databaseWrites, [['compose', 'up', '-d', '--wait', '--no-deps', 'db'], ['compose', 'stop', 'db']]);
+});
+
+test('project deletion verifies Docker volume ownership before removing data and can retry a failed recycle', async t => {
+  const parent = await workspace(t);
+  const project = await createProject(parent, 'database-app', '', { backend: 'express', database: 'postgres' });
+  const directory = await realpath(project.path);
+  const databaseId = '1234567890abcdef12345678';
+  const name = 'database-app_db_data';
+  const target = '/var/lib/postgresql/data';
+  const containerId = 'a'.repeat(64);
+  const manifestPath = join(directory, 'stackforge.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.createdAt = '2026-01-02T00:00:00.001Z';
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const model = { name: project.name, services: { db: { volumes: [{ type: 'volume', source: 'db_data', target }] } }, volumes: { db_data: { name } } };
+  await writeFile(join(directory, 'compose.yaml'), '');
+  let attached = false, volumeExists = true, shared = false, rejectRecycle = true;
+  let volumeCreated = '2026-01-02T00:00:00Z';
+  const writes = [];
+  const operations = new ProjectOperations({ command: async (_, args) => {
+    const [resource, action] = args;
+    if (resource === 'compose' && action === 'config') return JSON.stringify(model);
+    if (resource === 'compose' && action === 'ps') return attached ? containerId : '';
+    if (resource === 'inspect') return `${JSON.stringify(directory)}\tdb\texited\t\t${JSON.stringify([{ Type: 'volume', Name: name, Destination: target }])}`;
+    if (resource === 'volume' && action === 'ls') return volumeExists ? name : '';
+    if (resource === 'volume' && action === 'inspect') {
+      const labels = { 'com.docker.compose.project': project.name, 'com.docker.compose.volume': 'db_data', 'io.stackforge.database-id': manifest.databaseId };
+      return `${JSON.stringify(volumeCreated)}\t${JSON.stringify(labels)}`;
+    }
+    if (resource === 'ps') return [attached && containerId, shared && 'b'.repeat(64)].filter(Boolean).join('\n');
+    writes.push(args);
+    if (resource === 'container') attached = false;
+    if (resource === 'volume') volumeExists = false;
+    return '';
+  } });
+  const desktop = { ...createDesktop(), async trashProject(path) {
+    assert.equal(path, directory);
+    if (rejectRecycle) throw new Error('Recycle failed');
+    await rename(path, join(parent, 'recycled'));
+  } };
+  const server = createApp({ stateDir: false, operations, desktop });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(async () => { await server.shutdownTasks(); await new Promise(resolve => server.close(resolve)); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const { token } = await fetch(base + '/api/state').then(response => response.json());
+  const post = (route, body) => fetch(base + route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, body: JSON.stringify(body) });
+  const { id } = await post('/api/projects/import', { path: directory }).then(response => response.json());
+  const remove = () => post(`/api/projects/${id}/trash`, { confirmName: project.name });
+  const conflict = async pattern => {
+    const response = await remove();
+    assert.equal(response.status, 409);
+    assert.match((await response.json()).error, pattern);
+  };
+  await conflict(/could not be verified/);
+  attached = true;
+  volumeCreated = '2026-01-01T00:00:00Z';
+  await conflict(/could not be verified/);
+  volumeCreated = '2026-01-02T00:00:00Z';
+  attached = shared = true;
+  await conflict(/shared with another container/);
+  model.volumes.db_data.external = true;
+  await conflict(/dedicated, Compose-managed/);
+  delete model.volumes.db_data.external;
+  assert.deepEqual(writes, []);
+
+  shared = false;
+  await conflict(/database was deleted, but the project folder/);
+  assert.deepEqual(writes, [['container', 'rm', '--force', containerId], ['volume', 'rm', name]]);
+  assert.ok(await readFile(manifestPath, 'utf8'));
+
+  rejectRecycle = false;
+  const retried = await remove();
+  assert.equal(retried.status, 200);
+  assert.deepEqual(await retried.json(), { trashed: true, databaseDeleted: false });
+  await rename(join(parent, 'recycled'), directory);
+  manifest.databaseId = databaseId;
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  volumeExists = true;
+  const removed = await remove();
+  assert.equal(removed.status, 200);
+  assert.deepEqual(await removed.json(), { trashed: true, databaseDeleted: true });
+  assert.deepEqual(writes.slice(2), [['volume', 'rm', name]]);
 });

@@ -17,7 +17,7 @@ import { ProjectConfig, defaultPorts, validatePorts, importedProject, projectPat
 import { ProjectOperations } from './project-operations.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const identity = { application: 'stackforge-local', version: '0.10.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
+export const identity = { application: 'stackforge-local', version: '0.11.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
 const staticFiles = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/messages.js': ['messages.js', 'text/javascript; charset=utf-8'], '/template-store.js': ['template-store.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'], '/plex-regular.ttf': ['plex-regular.ttf', 'font/ttf'], '/plex-semibold.ttf': ['plex-semibold.ttf', 'font/ttf'] };
 staticFiles['/projects'] = ['projects.html', 'text/html; charset=utf-8'];
 staticFiles['/projects.js'] = ['projects.js', 'text/javascript; charset=utf-8'];
@@ -147,16 +147,23 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             finally { portWrites.delete(project.path); }
           }
           if (action === 'trash') {
-            if (payload.confirm !== true) return send(res, 400, { error: 'Confirm moving this project to the trash.' });
+            if (payload.confirmName !== project.name) return send(res, 400, { error: 'Enter the exact project name to confirm deletion.' });
             if (closing || jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
             if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before moving it to the trash.' });
             const moving = (async () => {
-              const { directory } = await inspectRecordedProject(project);
-              await desktop.trashProject(directory);
-              if (await locationExists(project.path)) throw new Error('The project is still at its original location. Check the system trash before retrying.');
+              const info = await inspectRecordedProject(project);
+              const databaseDeleted = project.database !== 'none' && await operations.removeDatabase(project, projectConfig.ports(project), info);
+              try {
+                await desktop.trashProject(info.directory);
+                if (await locationExists(project.path)) throw new Error('The project is still at its original location. Check the system trash before retrying.');
+              } catch (error) {
+                if (databaseDeleted) throw new Error('The database was deleted, but the project folder could not be moved to the trash.');
+                throw error;
+              }
+              return { trashed: true, databaseDeleted };
             })();
             removals.set(project.path, moving);
-            try { await moving; return send(res, 200, { trashed: true }); }
+            try { return send(res, 200, await moving); }
             catch (error) { return send(res, 409, { error: error.message }); }
             finally { removals.delete(project.path); }
           }

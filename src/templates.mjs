@@ -33,13 +33,15 @@ export function expressFiles(options, versions) {
   };
 }
 
-export function databaseFiles(options, password, rootPassword) {
+export function databaseFiles(options, password, rootPassword, databaseId) {
   const mysql = options.database === 'mysql';
   const port = mysql ? 3306 : 5432;
+  const composeName = `${options.name.slice(0, 35)}-${databaseId}`;
+  const volume = `\nvolumes:\n  db_data:\n    labels:\n      io.stackforge.database-id: "${databaseId}"\n`;
   return {
-    '.env': `DB_HOST=127.0.0.1\nDB_PORT=${port}\nDB_NAME=app\nDB_USER=app\nDB_PASSWORD=${password}\n${mysql ? `DB_ROOT_PASSWORD=${rootPassword}\n` : ''}`,
-    '.env.example': `DB_HOST=127.0.0.1\nDB_PORT=${port}\nDB_NAME=app\nDB_USER=app\nDB_PASSWORD=replace-with-a-local-password\n${mysql ? 'DB_ROOT_PASSWORD=replace-with-a-root-password\n' : ''}`,
-    'compose.yaml': mysql ? `services:\n  db:\n    image: mysql:8.4\n    environment:\n      MYSQL_DATABASE: \${DB_NAME:?DB_NAME required}\n      MYSQL_USER: \${DB_USER:?DB_USER required}\n      MYSQL_PASSWORD: \${DB_PASSWORD:?DB_PASSWORD required}\n      MYSQL_ROOT_PASSWORD: \${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD required}\n    ports:\n      - "127.0.0.1:\${DB_PORT:-3306}:3306"\n    volumes:\n      - db_data:/var/lib/mysql\n    healthcheck:\n      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -u root --silent"]\n      interval: 5s\n      timeout: 5s\n      retries: 30\nvolumes:\n  db_data:\n` : `services:\n  db:\n    image: postgres:17\n    environment:\n      POSTGRES_DB: \${DB_NAME:?DB_NAME required}\n      POSTGRES_USER: \${DB_USER:?DB_USER required}\n      POSTGRES_PASSWORD: \${DB_PASSWORD:?DB_PASSWORD required}\n    ports:\n      - "127.0.0.1:\${DB_PORT:-5432}:5432"\n    volumes:\n      - db_data:/var/lib/postgresql/data\n    healthcheck:\n      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]\n      interval: 5s\n      timeout: 5s\n      retries: 20\nvolumes:\n  db_data:\n`
+    '.env': `COMPOSE_PROJECT_NAME=${composeName}\nDB_HOST=127.0.0.1\nDB_PORT=${port}\nDB_NAME=app\nDB_USER=app\nDB_PASSWORD=${password}\n${mysql ? `DB_ROOT_PASSWORD=${rootPassword}\n` : ''}`,
+    '.env.example': `# COMPOSE_PROJECT_NAME=unique-local-project-name\nDB_HOST=127.0.0.1\nDB_PORT=${port}\nDB_NAME=app\nDB_USER=app\nDB_PASSWORD=replace-with-a-local-password\n${mysql ? 'DB_ROOT_PASSWORD=replace-with-a-root-password\n' : ''}`,
+    'compose.yaml': mysql ? `services:\n  db:\n    image: mysql:8.4\n    environment:\n      MYSQL_DATABASE: \${DB_NAME:?DB_NAME required}\n      MYSQL_USER: \${DB_USER:?DB_USER required}\n      MYSQL_PASSWORD: \${DB_PASSWORD:?DB_PASSWORD required}\n      MYSQL_ROOT_PASSWORD: \${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD required}\n    ports:\n      - "127.0.0.1:\${DB_PORT:-3306}:3306"\n    volumes:\n      - db_data:/var/lib/mysql\n    healthcheck:\n      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -u root --silent"]\n      interval: 5s\n      timeout: 5s\n      retries: 30${volume}` : `services:\n  db:\n    image: postgres:17\n    environment:\n      POSTGRES_DB: \${DB_NAME:?DB_NAME required}\n      POSTGRES_USER: \${DB_USER:?DB_USER required}\n      POSTGRES_PASSWORD: \${DB_PASSWORD:?DB_PASSWORD required}\n    ports:\n      - "127.0.0.1:\${DB_PORT:-5432}:5432"\n    volumes:\n      - db_data:/var/lib/postgresql/data\n    healthcheck:\n      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]\n      interval: 5s\n      timeout: 5s\n      retries: 20${volume}`
   };
 }
 
