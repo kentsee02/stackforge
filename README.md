@@ -49,12 +49,15 @@ Open **Projects** to find projects created by this StackForge checkout, includin
 
 - **Open app** and **Open API** appear as their local checks pass. The backend check verifies `/api/health`.
 - **Development ports** saves frontend, backend, and database port overrides per project for the next start. The frontend proxy follows the backend port. Projects generated with an older fixed-port launcher continue using their original ports.
-- **Import project** adds a moved or cloned StackForge project using its `stackforge.json` and development script. Imports register the existing folder and start only when you click **Start project**.
+- **Import project** accepts an existing Git repository or a folder with a supported project file, such as `package.json`, `pom.xml`, or `pyproject.toml`. Projects with a valid StackForge manifest and launcher support managed startup, dependencies, ports, and database controls. External projects support Git status and detected npm checks. Removing an external project removes its registration and keeps its files.
+- **Clone from GitHub** takes a repository HTTPS URL and a destination parent folder. It requires Git and uses your existing Git credentials for private repositories. A successful clone is added to Projects. Installation and development scripts run only when you request them.
 - Startup diagnostics highlight common port, dependency, Java, and Docker problems alongside the development log.
 
 **Install dependencies** runs npm, downloads Maven dependencies through the project's Maven Wrapper, or does both for a mixed stack. The installation log shows progress and errors. You can cancel an installation and retry it later.
 
 **Database controls** shows the Docker Compose database status and the last 100 lines of container output. It uses the project's saved database port and can start or stop the database separately. Stopping the database keeps its data volume.
+
+**Download backup** exports a running StackForge database as a PostgreSQL custom archive or a MySQL SQL dump. You can also download a backup from the project deletion dialog. MySQL exports table definitions, data, views, and triggers. **Restore backup** accepts a trusted file from the same database engine up to 64 MiB. Stop the application, start an empty project database, and type the exact project name to confirm. A failed MySQL restore can leave partially restored objects.
 
 **Build, test & lint** runs the `build`, `test`, and `lint` scripts declared in the project's root, frontend, or backend package. Spring Boot projects also offer Maven Wrapper `package` and `test`. Stop the development server before running a check. The panel shows live output, the latest result, and a cancel button during execution.
 

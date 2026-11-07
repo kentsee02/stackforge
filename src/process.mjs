@@ -26,10 +26,10 @@ export async function terminateTree(child) {
   }
 }
 
-export function run(command, args, { cwd, env = process.env, log = () => {}, timeout = 600_000, signal, stdoutOnly = false, stdoutLimit = 4000 } = {}) {
+export function run(command, args, { cwd, env = process.env, log = () => {}, timeout = 600_000, signal, stdoutOnly = false, stdoutLimit = 4000, input, binaryLimit } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(cancelled()); return; }
-    const child = spawn(command, args, { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     let tail = '';
     let stdout = '';
     let stopped;
@@ -39,16 +39,32 @@ export function run(command, args, { cwd, env = process.env, log = () => {}, tim
       tail = (tail + value).slice(-4000);
       log(value);
     };
-    child.stdout.setEncoding('utf8').on('data', chunk => {
-      if (stdoutOnly) stdout = (stdout + chunk).slice(-stdoutLimit);
-      collect(chunk);
-    });
-    child.stderr.setEncoding('utf8').on('data', collect);
     const stop = error => {
       if (stopped) return;
       stopped = error;
       killing = terminateTree(child);
     };
+    const binary = [];
+    let size = 0;
+    if (binaryLimit) {
+      child.stdout.on('data', chunk => {
+        if (stopped) return;
+        size += chunk.length;
+        if (size > binaryLimit) stop(Object.assign(new Error('The database backup exceeds the 64 MiB limit.'), { code: 'OUTPUT_LIMIT' }));
+        else binary.push(chunk);
+      });
+    } else {
+      child.stdout.setEncoding('utf8').on('data', chunk => {
+        if (stdoutOnly) stdout = (stdout + chunk).slice(-stdoutLimit);
+        collect(chunk);
+      });
+    }
+    child.stderr.setEncoding('utf8').on('data', collect);
+    let inputError;
+    if (input) {
+      child.stdin.once('error', error => { inputError = error; });
+      child.stdin.end(input);
+    }
     const abort = () => stop(cancelled());
     const timer = setTimeout(() => stop(new Error(`${command} 执行超时，请检查网络后重试。`)), timeout);
     signal?.addEventListener('abort', abort, { once: true });
@@ -58,7 +74,8 @@ export function run(command, args, { cwd, env = process.env, log = () => {}, tim
       clean();
       if (killing) await killing;
       if (stopped) reject(stopped);
-      else if (code === 0) resolve(stdoutOnly ? stdout : tail);
+      else if (code === 0 && inputError) reject(inputError);
+      else if (code === 0) resolve(binaryLimit ? Buffer.concat(binary, size) : stdoutOnly ? stdout : tail);
       else reject(Object.assign(new Error(`${command} 退出码 ${code}\n${tail}`), { exitCode: code }));
     });
     if (signal?.aborted) abort();

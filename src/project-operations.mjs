@@ -6,6 +6,7 @@ import { installMavenDependencies, installNodeDependencies, maven, npm, run, thr
 import { projectPathKey } from './project-config.mjs';
 import { inspectRecordedProject, startupDiagnostic } from './project-runtime.mjs';
 import { projectChecks, projectGitStatus } from './project-tools.mjs';
+import { transferDatabase } from './database-backup.mjs';
 
 const logLimit = 64 * 1024;
 const databaseLabel = 'io.stackforge.database-id';
@@ -177,6 +178,16 @@ export class ProjectOperations {
     if (action === 'database-stop' && state.status === 'absent') return;
     const args = action === 'database-start' ? ['up', '-d', '--wait', '--no-deps', 'db'] : ['stop', 'db'];
     await this.command('docker', ['compose', ...args], { ...config, ...options });
+  }
+
+  async databaseBackup(project, ports, file, signal) {
+    const config = await databaseOptions(project, ports);
+    const containers = await this.databaseContainers({ ...config, signal });
+    if (containers.length !== 1 || containers[0].status !== 'running') {
+      throw new Error('Start the project database before backing it up or restoring it.');
+    }
+    return transferDatabase({ engine: project.database, project: project.name, container: containers[0].id,
+      config, command: this.command, file, signal });
   }
 
   async removeDatabase(project, ports, info) {

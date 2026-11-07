@@ -13,7 +13,7 @@
   <a class="skip-link" href="#main" data-i18n="跳到主要内容">Skip to content</a>
   <aside class="sidebar">
     <a class="brand" href="/" aria-label="StackForge home" data-i18n-aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
-    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.13</span></div>
+    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.14</span></div>
     <a class="side-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a>
     <a class="side-link" href="/#activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg><span data-i18n="任务记录">Task history</span></a>
     <a class="side-active projects-nav" href="/projects" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2h7v2"/></svg><span data-i18n="项目管理">Projects</span></a>
@@ -24,12 +24,20 @@
     <main class="sheet projects-sheet" id="main">
       <div class="title-row projects-title"><div><h1 data-i18n="项目管理">Projects</h1><p data-i18n="启动、停止或查看 StackForge 项目的开发日志。">Start, stop, and inspect your StackForge development sessions.</p></div><div class="project-title-actions"><button id="project-import-toggle" class="secondary" type="button" aria-expanded="false" aria-controls="project-import" data-i18n="导入项目">Import project</button><a class="secondary project-create-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a></div></div>
       <section id="project-import" class="project-import" aria-labelledby="project-import-title" hidden>
-        <h2 id="project-import-title" data-i18n="导入 StackForge 项目">Import a StackForge project</h2>
-        <p class="hint" data-i18n="选择包含 stackforge.json 的文件夹。启动时会运行该项目的开发脚本。">Choose a folder with stackforge.json. Starting the project will run its development script.</p>
+        <h2 id="project-import-title" data-i18n="导入本地项目">Import a local project</h2>
+        <p class="hint" data-i18n="选择项目文件夹，例如 Git 仓库或包含 package.json 的目录。">Choose a project folder, such as a Git repository or a directory with package.json.</p>
         <form id="project-import-form">
           <label for="project-import-path" data-i18n="项目文件夹路径">Project folder path</label>
           <div class="project-import-fields"><input id="project-import-path" required spellcheck="false" autocomplete="off" placeholder="Absolute folder path" data-i18n-placeholder="文件夹的绝对路径"><button id="project-import-browse" type="button" class="secondary" data-i18n="选择文件夹…">Browse…</button><button id="project-import-submit" type="submit" class="secondary" data-i18n="加入项目列表">Add to Projects</button></div>
           <p id="project-import-message" class="hint" role="status"></p>
+        </form>
+        <form id="project-clone-form" class="project-clone-form">
+          <h2 data-i18n="从 GitHub 克隆">Clone from GitHub</h2>
+          <label for="project-clone-url" data-i18n="GitHub 仓库地址">GitHub repository URL</label>
+          <div class="project-import-fields"><input id="project-clone-url" type="url" required spellcheck="false" autocomplete="off" placeholder="https://github.com/owner/project"></div>
+          <label for="project-clone-parent" data-i18n="保存父目录">Destination parent folder</label>
+          <div class="project-import-fields"><input id="project-clone-parent" required spellcheck="false" autocomplete="off" placeholder="Absolute folder path" data-i18n-placeholder="文件夹的绝对路径"><button id="project-clone-browse" type="button" class="secondary" data-i18n="选择文件夹…">Browse…</button><button id="project-clone-submit" type="submit" class="secondary" data-i18n="克隆并导入">Clone and import</button></div>
+          <p id="project-clone-message" class="hint" role="status"></p>
         </form>
       </section>
       <p id="project-connection" class="project-connection" role="status" data-i18n="正在加载本地项目…">Loading local projects…</p>
@@ -53,9 +61,10 @@
               <a id="runtime-backend" class="secondary" target="_blank" rel="noopener noreferrer" data-i18n="打开 API" hidden>Open API</a>
             </div>
           </div>
+          <p id="external-project-note" class="runtime-error small" data-i18n="外部项目可查看 Git 状态和运行可识别的检查。请使用项目自己的启动命令。" hidden>External projects support Git status and detected checks. Use the project's own startup commands.</p>
           <p id="runtime-error" class="runtime-error" role="status" hidden></p>
           <p id="runtime-diagnostic" class="runtime-diagnostic" role="status" hidden></p>
-          <section class="project-operation" aria-labelledby="project-dependencies-title">
+          <section id="project-dependencies" class="project-operation" aria-labelledby="project-dependencies-title">
             <div class="project-operation-heading"><h3 id="project-dependencies-title" data-i18n="依赖安装">Dependencies</h3><span id="dependency-status" class="small" role="status"></span></div>
             <div class="project-operation-actions">
               <button id="install-dependencies" type="button" class="secondary" data-i18n="安装依赖">Install dependencies</button>
@@ -87,7 +96,7 @@
             <p id="git-message" class="hint" role="status"></p>
             <button id="git-refresh" type="button" class="secondary" data-i18n="刷新 Git 状态">Refresh Git status</button>
           </details>
-          <div class="runtime-log">
+          <div id="project-runtime-log" class="runtime-log">
             <h3 id="runtime-log-title" data-i18n="开发日志">Development log</h3>
             <p id="runtime-log-truncated" class="hint" data-i18n="仅显示最近的日志。" hidden>Showing the most recent output.</p>
             <p id="runtime-log-empty" data-i18n="启动项目后，输出会显示在这里。">Output will appear here after you start the project.</p>
@@ -100,7 +109,10 @@
               <button id="database-start" type="button" class="secondary" data-i18n="启动数据库">Start database</button>
               <button id="database-stop" type="button" class="secondary" data-i18n="停止数据库">Stop database</button>
               <button id="database-logs" type="button" class="secondary" data-i18n="查看数据库日志">View database logs</button>
+              <button id="database-backup" type="button" class="secondary" data-i18n="下载备份">Download backup</button>
+              <button id="database-restore" type="button" class="secondary" data-i18n="恢复备份">Restore backup</button>
             </div>
+            <p id="database-transfer-message" class="hint" role="status" hidden></p>
             <p class="hint" data-i18n="停止数据库会保留数据卷。">Stopping the database keeps its data volume.</p>
             <p id="database-transition" class="hint" data-i18n="请等待项目就绪，或先停止项目。" hidden>Wait for the project to become ready or stop it first.</p>
             <p id="database-error" class="hint project-operation-error" role="status" hidden></p>
@@ -136,13 +148,34 @@
     <code id="project-trash-path"></code>
     <form id="project-trash-form" method="dialog">
       <label class="inline-field project-trash-field" for="project-trash-name">
-        <span data-i18n="输入下方项目名以确认删除。">Type the project name below to confirm deletion.</span>
+        <span id="project-trash-instruction" data-i18n="输入下方项目名以确认删除。">Type the project name below to confirm deletion.</span>
         <strong id="project-trash-expected"></strong>
         <input id="project-trash-name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required autofocus>
       </label>
       <div class="project-trash-actions">
+        <button type="button" id="project-trash-backup" class="secondary" data-i18n="下载备份" hidden>Download backup</button>
         <button type="button" id="project-trash-cancel" class="secondary" data-i18n="返回">Go back</button>
         <button type="submit" id="project-trash-confirm" class="project-trash-confirm" data-i18n="删除项目" disabled>Delete project</button>
+      </div>
+      <p id="project-trash-backup-message" class="hint" role="status" hidden></p>
+    </form>
+  </dialog>
+  <dialog id="database-restore-dialog" class="project-trash-dialog" aria-labelledby="database-restore-title" aria-describedby="database-restore-description">
+    <h2 id="database-restore-title" data-i18n="恢复数据库备份">Restore database backup</h2>
+    <p id="database-restore-description" data-i18n="请选择同一种数据库的可信备份，最大 64 MiB。恢复要求项目已停止、数据库正在运行且为空。">Choose a trusted backup from the same database engine, up to 64 MiB. Stop the project and start an empty database before restoring.</p>
+    <form id="database-restore-form" method="dialog">
+      <label class="inline-field project-trash-field" for="database-restore-file">
+        <span data-i18n="备份文件">Backup file</span>
+        <input id="database-restore-file" type="file" required>
+      </label>
+      <label class="inline-field project-trash-field" for="database-restore-name">
+        <span data-i18n="输入下方项目名以确认恢复。">Type the project name below to confirm restoration.</span>
+        <strong id="database-restore-expected"></strong>
+        <input id="database-restore-name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+      </label>
+      <div class="project-trash-actions">
+        <button type="button" id="database-restore-cancel" class="secondary" data-i18n="返回">Go back</button>
+        <button type="submit" id="database-restore-submit" class="secondary" data-i18n="恢复备份" disabled>Restore backup</button>
       </div>
     </form>
   </dialog>

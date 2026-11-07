@@ -12,12 +12,14 @@ import { Jobs } from './jobs.mjs';
 import { absoluteDirectory, defaultProjectsDirectory } from './paths.mjs';
 import { Settings } from './settings.mjs';
 import { createDesktop } from './desktop.mjs';
-import { ProjectRuntime, inspectRecordedProject, readProjectFolder, developmentScript, startupDiagnostic } from './project-runtime.mjs';
+import { ProjectRuntime, inspectRecordedProject, projectDirectory, readProjectFolder, developmentScript, startupDiagnostic } from './project-runtime.mjs';
 import { ProjectConfig, defaultPorts, validatePorts, importedProject, projectPathKey } from './project-config.mjs';
 import { ProjectOperations } from './project-operations.mjs';
+import { cloneGithub } from './project-clone.mjs';
+import { backupLimit } from './database-backup.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const identity = { application: 'stackforge-local', version: '0.13.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
+export const identity = { application: 'stackforge-local', version: '0.14.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
 const staticFiles = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/messages.js': ['messages.js', 'text/javascript; charset=utf-8'], '/template-store.js': ['template-store.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'], '/plex-regular.ttf': ['plex-regular.ttf', 'font/ttf'], '/plex-semibold.ttf': ['plex-semibold.ttf', 'font/ttf'] };
 staticFiles['/projects'] = ['projects.html', 'text/html; charset=utf-8'];
 staticFiles['/projects.js'] = ['projects.js', 'text/javascript; charset=utf-8'];
@@ -27,13 +29,17 @@ async function locationExists(path) {
   catch (error) { return !['ENOENT', 'ENOTDIR'].includes(error.code); }
 }
 
-export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations() } = {}) {
+const projectMarkers = ['.git', 'package.json', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'pyproject.toml',
+  'requirements.txt', 'Cargo.toml', 'go.mod', 'composer.json', 'Gemfile', 'CMakeLists.txt'];
+
+export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations() } = {}) {
   const token = randomBytes(32).toString('hex');
   const jobs = new Jobs({ directory: stateDir, generate, check, publish });
   const settings = new Settings(settingsFile);
   const projectConfig = new ProjectConfig(stateDir ? join(dirname(stateDir), 'projects.json') : false);
   const removals = new Map();
   const portWrites = new Map();
+  let cloneTask, transfer;
   let closing = false;
   function managedProjects() {
     const created = jobs.projects();
@@ -41,12 +47,21 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     return [...projectConfig.value.imports.filter(project => !paths.has(projectPathKey(project.path))), ...created];
   }
   async function registerProject(path) {
+    const directory = await projectDirectory(absoluteDirectory(path)).catch(() => {
+      throw new Error('Choose an existing project directory.');
+    });
     let project;
     try {
-      const { directory, manifest } = await readProjectFolder(absoluteDirectory(path));
+      const { manifest } = await readProjectFolder(directory);
       await developmentScript(directory);
       project = importedProject(randomUUID(), directory, manifest.options);
-    } catch { throw new Error('Choose a StackForge project folder with a valid stackforge.json and development script.'); }
+    } catch {
+      const markers = await Promise.all(projectMarkers.map(name => lstat(join(directory, name)).catch(() => null)));
+      if (!markers.some((item, index) => item?.isFile() || projectMarkers[index] === '.git' && item?.isDirectory())) {
+        throw new Error('Choose a repository or a folder with a supported project file.');
+      }
+      project = importedProject(randomUUID(), directory, { external: true });
+    }
     const existing = await Promise.all(jobs.projects().map(item => realpath(item.path).catch(() => item.path)));
     if (existing.some(item => projectPathKey(item) === projectPathKey(project.path))) throw new Error('This folder is already in Projects.');
     await projectConfig.addProject(project);
@@ -55,6 +70,11 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   function send(res, status, value) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(value));
+  }
+  function authorized(req, contentType) {
+    const origin = req.headers.origin;
+    return (!origin || origin === `http://${req.headers.host}`) && req.headers['x-stackforge-token'] === token &&
+      req.headers['content-type']?.split(';')[0] === contentType;
   }
   const server = createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -74,6 +94,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const session = runtime.status(project, project.id === selected);
           if (!deleting && !['starting', 'running', 'stopping'].includes(session.status) && !await locationExists(project.path)) return;
           const detail = { ...project, ...session, ...operations.status(project, project.id === selected), deleting };
+          if (transfer?.path === project.path) detail.operation = 'databaseTransfer';
           if (project.id === selected) {
             const info = await inspectRecordedProject(project).catch(() => null);
             Object.assign(detail, { portDefaults: defaultPorts(project), ports: projectConfig.ports(project), canConfigurePorts: info?.manifest.portConfig === 1 });
@@ -100,10 +121,52 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         const job = jobs.view(url.pathname.slice('/api/jobs/'.length));
         return send(res, job ? 200 : 404, job ?? { error: '找不到这个创建任务。' });
       }
+      const databaseTransfer = /^\/api\/projects\/([^/]+)\/database-(backup|restore)$/.exec(url.pathname);
+      if (req.method === 'POST' && databaseTransfer) {
+        const [, id, action] = databaseTransfer;
+        const restore = action === 'restore';
+        if (!authorized(req, restore ? 'application/octet-stream' : 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
+        const project = managedProjects().find(item => item.id === id);
+        if (!project || project.database === 'none') return send(res, 404, { error: 'This project has no database.' });
+        if (closing || transfer || removals.has(project.path) || portWrites.has(project.path) || operations.active(project)) {
+          return send(res, 409, { error: 'Wait for the current project operation to finish.' });
+        }
+        const size = Number(req.headers['content-length']);
+        if (restore) {
+          if (req.headers['x-stackforge-confirm-name'] !== project.name) return send(res, 400, { error: 'Enter the exact project name to confirm restoration.' });
+          if (!Number.isSafeInteger(size) || size < 1 || size > backupLimit) return send(res, 413, { error: 'Choose a backup file up to 64 MiB.' });
+          if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before restoring its database.' });
+        }
+        const controller = new AbortController();
+        res.once('close', () => { if (!res.writableFinished) controller.abort(); });
+        const done = (async () => {
+          let file;
+          if (restore) {
+            const chunks = [];
+            const cancelUpload = () => req.destroy();
+            controller.signal.addEventListener('abort', cancelUpload, { once: true });
+            try { for await (const chunk of req) chunks.push(chunk); }
+            finally { controller.signal.removeEventListener('abort', cancelUpload); }
+            file = Buffer.concat(chunks);
+            if (file.length !== size) throw new Error('The backup upload was incomplete.');
+          } else req.resume();
+          return operations.databaseBackup(project, projectConfig.ports(project), file, controller.signal);
+        })();
+        transfer = { path: project.path, done, controller };
+        try {
+          const result = await done;
+          if (restore) return send(res, 200, { restored: true });
+          res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store',
+            'Content-Disposition': `attachment; filename="${result.filename}"`, 'Content-Length': result.data.length });
+          return res.end(result.data);
+        } catch (error) {
+          if (!res.destroyed) return send(res, 409, { error: error.message.split('\n')[0].trim() });
+        } finally { transfer = undefined; }
+        return;
+      }
       const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|trash|ports|install|install-cancel|database-start|database-stop|run-check|check-cancel)$/.exec(url.pathname);
-      if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
-        const origin = req.headers.origin;
-        if ((origin && origin !== `http://${req.headers.host}`) || req.headers['x-stackforge-token'] !== token || req.headers['content-type']?.split(';')[0] !== 'application/json') return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
+      if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
+        if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
         const chunks = []; let size = 0;
         for await (const chunk of req) { size += chunk.length; if (size > 16384) return send(res, 413, { error: '请求内容过大。' }); chunks.push(chunk); }
@@ -111,6 +174,23 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         let payload;
         try { payload = JSON.parse(body); if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error(); }
         catch { return send(res, 400, { error: 'Invalid JSON request.' }); }
+        if (cloneTask && (['/api/projects', '/api/projects/import', '/api/projects/clone'].includes(url.pathname) || /\/api\/jobs\/[^/]+\/retry$/.test(url.pathname))) {
+          return send(res, 409, { error: 'Wait for the GitHub clone to finish.' });
+        }
+        if (url.pathname === '/api/projects/clone') {
+          if (closing || jobs.busy || removals.size) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
+          const controller = new AbortController();
+          res.once('close', () => { if (!res.writableFinished) controller.abort(); });
+          const done = (async () => {
+            const path = await clone(payload.repository, payload.parentDir, { signal: controller.signal });
+            return registerProject(path);
+          })();
+          cloneTask = { done, controller };
+          try { return send(res, 201, await done); }
+          catch (error) { if (!res.destroyed) return send(res, 409, { error: error.message }); }
+          finally { cloneTask = undefined; }
+          return;
+        }
         if (removals.size && (['/api/projects', '/api/projects/import'].includes(url.pathname) || /\/api\/jobs\/[^/]+\/(publish|retry|open)$/.test(url.pathname))) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
         if (url.pathname === '/api/projects/import') {
           if (closing || jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
@@ -121,6 +201,10 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const [, id, action] = projectAction;
           const project = managedProjects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
+          if (transfer?.path === project.path) return send(res, 409, { error: 'Wait for the current project operation to finish.' });
+          if (project.external && !['run-check', 'check-cancel', 'trash'].includes(action)) {
+            return send(res, 409, { error: 'This action requires a StackForge project.' });
+          }
           if (removals.has(project.path)) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
           if (portWrites.has(project.path)) return send(res, 409, { error: 'Wait for the project ports to finish saving.' });
           if (action === 'install-cancel' || action === 'check-cancel') {
@@ -155,6 +239,10 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           }
           if (action === 'trash') {
             if (payload.confirmName !== project.name) return send(res, 400, { error: 'Enter the exact project name to confirm deletion.' });
+            if (project.external) {
+              await projectConfig.removeImport(project.id);
+              return send(res, 200, { removed: true });
+            }
             if (closing || jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
             if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before moving it to the trash.' });
             const moving = (async () => {
@@ -231,7 +319,10 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   server.shutdownTasks = async () => {
     closing = true;
     desktop.shutdown();
-    await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), operations.shutdown(), ...removals.values(), ...portWrites.values()]);
+    cloneTask?.controller.abort();
+    transfer?.controller.abort();
+    await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), operations.shutdown(),
+      cloneTask?.done, transfer?.done, ...removals.values(), ...portWrites.values()]);
   };
   server.jobs = jobs;
   return server;

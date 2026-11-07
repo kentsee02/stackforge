@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { absoluteDirectory } from './paths.mjs';
 import { validateOptions } from './catalog.mjs';
@@ -7,8 +7,12 @@ import { validateOptions } from './catalog.mjs';
 export const projectPathKey = path => process.platform === 'win32' ? path.toLowerCase() : path;
 
 export function importedProject(id, path, source) {
-  if (!/^[a-f0-9-]{36}$/.test(id) || !['name', 'frontend', 'backend', 'database'].every(key => typeof source?.[key] === 'string')) throw new Error('Choose a StackForge project folder with a valid stackforge.json and development script.');
+  if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid project record.');
   path = absoluteDirectory(path);
+  if (source?.external === true) return {
+    id, path, name: basename(path), frontend: 'none', backend: 'none', database: 'none', imported: true, external: true
+  };
+  if (!['name', 'frontend', 'backend', 'database'].every(key => typeof source?.[key] === 'string')) throw new Error('Invalid project record.');
   const { name, frontend, backend, database } = validateOptions({ name: source.name, parentDir: dirname(path), frontend: source.frontend, backend: source.backend, database: source.database, install: false, git: false });
   return { id, path, name, frontend, backend, database, imported: true };
 }
@@ -69,6 +73,10 @@ export class ProjectConfig {
       if (value.imports.some(item => projectPathKey(item.path) === projectPathKey(project.path))) throw new Error('This folder is already in Projects.');
       return { ...value, imports: [project, ...value.imports] };
     });
+  }
+
+  removeImport(id) {
+    return this.update(value => ({ ...value, imports: value.imports.filter(item => item.id !== id) }));
   }
 
   update(change) {

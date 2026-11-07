@@ -18,6 +18,9 @@ let projects = [];
 let selected;
 let pending;
 let confirming;
+let restoring;
+let transferMessage;
+let importing = false;
 let actionError;
 let portMessage;
 let databaseView;
@@ -63,8 +66,8 @@ function renderServices(project) {
 function renderPorts(project, busy) {
   const details = $('project-ports');
   const form = $('project-port-form');
-  details.hidden = !project.portDefaults;
-  if (!project.portDefaults) return;
+  details.hidden = project.external || !project.portDefaults;
+  if (details.hidden) return;
   $('project-ports-legacy').hidden = project.canConfigurePorts;
   form.hidden = !project.canConfigurePorts;
   const saved = JSON.stringify(project.ports);
@@ -136,6 +139,11 @@ function renderDatabase(project, busy, unavailable) {
   $('database-start').disabled = disabled || ['running', 'starting', 'restarting', 'paused'].includes(state);
   $('database-stop').disabled = disabled || ['absent', 'stopped'].includes(state);
   $('database-logs').disabled = view.loading || !view.status || state === 'absent' || Boolean(view.error);
+  $('database-backup').disabled = unavailable || state !== 'running';
+  $('database-restore').disabled = unavailable || busy || state !== 'running';
+  const transfer = transferMessage?.id === project.id ? transferMessage.message : '';
+  showMessage($('database-transfer-message'), transfer);
+  $('database-transfer-message').hidden = !transfer;
   const issue = task?.diagnostic ?? view.diagnostic;
   const hint = issue === 'docker' ? 'Start Docker Desktop or the Docker Engine to manage the database.' : diagnosticMessages[issue];
   const error = actionError?.id === project.id && actionError.action?.startsWith('database-') ? actionError.message : hint ?? task?.error ?? view.error;
@@ -147,6 +155,37 @@ function renderDatabase(project, busy, unavailable) {
   $('database-log-empty').hidden = view.log !== '';
   $('database-container-log').hidden = !view.log;
   renderOutput($('database-container-log'), project.id, view.log);
+}
+
+async function backupAction(project, file) {
+  if (!project || pending) return;
+  pending = { id: project.id, action: file ? 'database-restore' : 'database-backup' };
+  transferMessage = { id: project.id, message: file ? 'Restoring database…' : 'Preparing backup…' };
+  render();
+  try {
+    const { token } = await request('/api/state');
+    const response = await fetch(`/api/projects/${project.id}/${pending.action}`, {
+      method: 'POST', signal: AbortSignal.timeout(610000),
+      headers: { 'X-StackForge-Token': token, 'Content-Type': file ? 'application/octet-stream' : 'application/json',
+        ...(file && { 'X-StackForge-Confirm-Name': project.name }) },
+      body: file ?? '{}'
+    });
+    if (!response.ok) throw new Error((await response.json()).error);
+    if (!file) {
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition'))?.[1] ?? 'database-backup';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    }
+    transferMessage.message = file ? 'Database restored.' : 'Backup download started.';
+  } catch (error) { transferMessage.message = error.message; }
+  finally {
+    pending = undefined;
+    render();
+    refresh();
+  }
 }
 
 async function loadDatabase(logs = false) {
@@ -260,7 +299,8 @@ function renderRows() {
     if (!row) {
       row = $('project-row').content.firstElementChild.cloneNode(true);
       row.querySelector('strong').textContent = project.name;
-      row.querySelector('small').textContent = [project.frontend, project.backend, project.database].map(key => stackNames[key]).filter(Boolean).join(' / ');
+      setText(row.querySelector('small'), project.external ? 'External project' :
+        [project.frontend, project.backend, project.database].map(key => stackNames[key]).filter(Boolean).join(' / '));
       row.firstElementChild.addEventListener('click', () => {
         if (selected !== project.id) actionError = undefined;
         selected = project.id;
@@ -277,17 +317,29 @@ function renderRows() {
     row.hidden = !project.name.toLowerCase().includes(filter) && !project.path.toLowerCase().includes(filter);
     if (!row.hidden) matches++;
     row.firstElementChild.setAttribute('aria-pressed', String(project.id === selected));
-    showState(row.querySelector('.runtime-state'), project.ready ? 'ready' : project.status);
+    const status = row.querySelector('.runtime-state');
+    status.hidden = Boolean(project.external);
+    showState(status, project.ready ? 'ready' : project.status);
   }
   $('project-no-match').hidden = matches > 0;
 }
 
 function render() {
+  if ($('project-trash-dialog').open) {
+    const backingUp = pending?.action === 'database-backup';
+    $('project-trash-backup').disabled = Boolean(pending);
+    $('project-trash-confirm').disabled = backingUp || $('project-trash-name').value !== confirming?.name;
+    const message = confirming?.database !== 'none' && transferMessage?.id === confirming?.id ? transferMessage?.message : '';
+    showMessage($('project-trash-backup-message'), message);
+    $('project-trash-backup-message').hidden = !message;
+  }
   $('project-manager').hidden = !projects.length;
   $('project-empty').hidden = projects.length > 0;
   renderRows();
   const project = projects.find(item => item.id === selected);
   if (!project) return;
+  for (const id of ['runtime-action', 'selected-project-state', 'project-runtime-log', 'project-dependencies']) $(id).hidden = Boolean(project.external);
+  $('external-project-note').hidden = !project.external;
   if ($('selected-project-name').textContent !== project.name) $('selected-project-name').textContent = project.name;
   if ($('selected-project-path').textContent !== project.path) $('selected-project-path').textContent = project.path;
   showState($('selected-project-state'), project.ready ? 'ready' : project.status);
@@ -320,6 +372,7 @@ function render() {
   showMessage(diagnosticField, diagnostic);
   diagnosticField.hidden = !diagnostic;
   $('project-delete').disabled = busy || unavailable;
+  setText($('project-delete').querySelector('span'), project.external ? 'Remove from Projects' : 'Delete project');
   $('project-delete-hint').hidden = !busy && !deleting && !project.operation;
   setText($('project-delete-hint'), deleting ? 'Moving to trash…' : project.operation ? 'Wait for the current project operation to finish.' : 'Stop the project first.');
   const output = $('runtime-output');
@@ -367,7 +420,8 @@ async function act(id, action, body = {}) {
     if (action === 'trash') {
       projects = projects.filter(item => item.id !== id);
       if (selected === id) selected = projects[0]?.id;
-      setText($('project-feedback'), runtime.databaseDeleted ? 'Project moved to the system trash and its database was deleted.' : 'Project moved to the system trash.');
+      setText($('project-feedback'), runtime.removed ? 'Project removed from Projects.' :
+        runtime.databaseDeleted ? 'Project moved to the system trash and its database was deleted.' : 'Project moved to the system trash.');
     } else if (action === 'ports') {
       const project = projects.find(item => item.id === id);
       if (project) project.ports = runtime.ports;
@@ -397,17 +451,21 @@ async function act(id, action, body = {}) {
 function showImport(open) {
   $('project-import').hidden = !open;
   $('project-import-toggle').setAttribute('aria-expanded', String(open));
-  if (open) $('project-import-path').focus();
+  if (open) {
+    $('project-import-path').focus();
+    request('/api/state').then(({ defaultDir }) => { $('project-clone-parent').value ||= defaultDir; }).catch(() => {});
+  }
 }
 
-async function importAction(browse) {
-  const path = $('project-import-path');
-  if (path.readOnly) return;
-  const controls = [$('project-import-toggle'), $('project-import-browse'), $('project-import-submit')];
+async function importAction(browse, clone = false) {
+  if (importing) return;
+  importing = true;
+  const path = $(clone ? 'project-clone-parent' : 'project-import-path');
+  const controls = ['project-import-toggle', 'project-import-browse', 'project-import-submit', 'project-clone-browse', 'project-clone-submit'].map($);
   for (const control of controls) control.disabled = true;
   path.readOnly = true;
-  const message = $('project-import-message');
-  setText(message, browse ? 'Choose a folder in the system dialog.' : 'Adding project…');
+  const message = $(clone ? 'project-clone-message' : 'project-import-message');
+  setText(message, browse ? 'Choose a folder in the system dialog.' : clone ? 'Cloning repository…' : 'Adding project…');
   try {
     const { token, defaultDir } = await request('/api/state');
     if (browse) {
@@ -415,11 +473,13 @@ async function importAction(browse) {
       if (result.path) path.value = result.path;
       setText(message, result.path ? 'Folder selected.' : 'Folder selection cancelled.');
     } else {
-      const project = await post('/api/projects/import', token, { path: path.value.trim() });
+      const project = clone ? await post('/api/projects/clone', token, { repository: $('project-clone-url').value.trim(), parentDir: path.value.trim() }, 190000)
+        : await post('/api/projects/import', token, { path: path.value.trim() });
       selected = project.id;
       projects = [{ ...project, status: 'stopped' }, ...projects.filter(item => item.id !== project.id)];
       $('project-search').value = '';
-      path.value = '';
+      if (clone) $('project-clone-url').value = '';
+      else path.value = '';
       showImport(false);
       setText(message, '');
       $('project-feedback').dataset.status = 'ok';
@@ -430,6 +490,7 @@ async function importAction(browse) {
     }
   } catch (error) { setText(message, error.message); }
   finally {
+    importing = false;
     for (const control of controls) control.disabled = false;
     path.readOnly = false;
   }
@@ -439,6 +500,8 @@ $('project-search').addEventListener('input', renderRows);
 $('project-import-toggle').addEventListener('click', () => showImport($('project-import').hidden));
 $('project-import-browse').addEventListener('click', () => importAction(true));
 $('project-import-form').addEventListener('submit', event => { event.preventDefault(); importAction(false); });
+$('project-clone-browse').addEventListener('click', () => importAction(true, true));
+$('project-clone-form').addEventListener('submit', event => { event.preventDefault(); importAction(false, true); });
 $('project-port-form').addEventListener('submit', event => {
   event.preventDefault();
   const ports = {};
@@ -453,6 +516,28 @@ $('project-database').addEventListener('toggle', () => loadDatabase());
 $('database-start').addEventListener('click', () => act(selected, 'database-start'));
 $('database-stop').addEventListener('click', () => act(selected, 'database-stop'));
 $('database-logs').addEventListener('click', () => loadDatabase(true));
+$('database-backup').addEventListener('click', () => backupAction(projects.find(project => project.id === selected)));
+$('database-restore').addEventListener('click', () => {
+  restoring = projects.find(project => project.id === selected);
+  if (!restoring || pending) return;
+  $('database-restore-form').reset();
+  $('database-restore-file').accept = restoring.database === 'postgres' ? '.dump' : '.sql';
+  $('database-restore-expected').textContent = restoring.name;
+  $('database-restore-submit').disabled = true;
+  $('database-restore-dialog').showModal();
+});
+function validRestore() {
+  const file = $('database-restore-file').files[0];
+  return file?.size > 0 && file.size <= 64 * 1024 * 1024 && $('database-restore-name').value === restoring?.name && !pending;
+}
+$('database-restore-form').addEventListener('input', () => { $('database-restore-submit').disabled = !validRestore(); });
+$('database-restore-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!validRestore()) return;
+  $('database-restore-dialog').close();
+  backupAction(restoring, $('database-restore-file').files[0]);
+});
+$('database-restore-cancel').addEventListener('click', () => $('database-restore-dialog').close());
 for (const tool of ['checks', 'git']) $('project-' + tool).addEventListener('toggle', () => loadProjectTool(tool, true));
 $('git-refresh').addEventListener('click', () => loadProjectTool('git', true));
 $('check-form').addEventListener('submit', event => {
@@ -464,23 +549,30 @@ $('project-delete').addEventListener('click', () => {
   const project = projects.find(item => item.id === selected);
   if (!project || pending) return;
   confirming = project;
+  transferMessage = undefined;
   $('project-trash-path').textContent = project.path;
   $('project-trash-expected').textContent = project.name;
   $('project-trash-name').value = '';
   $('project-trash-confirm').disabled = true;
-  setText($('project-trash-description'), project.database !== 'none'
+  $('project-trash-backup').hidden = project.database === 'none';
+  setText($('project-trash-title'), project.external ? 'Remove project from Projects?' : 'Delete project?');
+  setText($('project-trash-instruction'), project.external ? 'Type the project name below to confirm removal.' : 'Type the project name below to confirm deletion.');
+  setText($('project-trash-confirm'), project.external ? 'Remove from Projects' : 'Delete project');
+  setText($('project-trash-description'), project.external ? 'This removes the entry from the Projects list. Your files stay in this folder.' : project.database !== 'none'
     ? 'The project folder will move to the system trash. Its local database and data volume will be permanently deleted.'
     : 'The entire local project folder will move to the system trash. You can restore it from there.');
   $('project-trash-dialog').showModal();
+  render();
 });
+$('project-trash-backup').addEventListener('click', () => backupAction(confirming));
 $('project-trash-cancel').addEventListener('click', () => $('project-trash-dialog').close());
 $('project-trash-name').addEventListener('input', event => {
-  $('project-trash-confirm').disabled = event.target.value !== confirming?.name;
+  $('project-trash-confirm').disabled = Boolean(pending) || event.target.value !== confirming?.name;
 });
 $('project-trash-form').addEventListener('submit', event => {
   event.preventDefault();
   const confirmName = $('project-trash-name').value;
-  if (!confirming || confirmName !== confirming.name) return;
+  if (!confirming || pending || confirmName !== confirming.name) return;
   $('project-trash-dialog').close();
   act(confirming.id, 'trash', { confirmName });
 });

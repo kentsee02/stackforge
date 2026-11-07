@@ -37,10 +37,14 @@ export function startupDiagnostic(project, output) {
   if (/Cannot find (?:package|module) ['"](?:vite|vue|react|express|mysql2|pg|@vitejs\/[^'"]+|@nestjs\/[^'"]+)['"]|(?:vite|\bnest)['"]?[^\r\n]{0,32}(?:not recognized|not found|不是内部或外部命令)|failed to load config[^\r\n]*\n[^\r\n]*Cannot find package/i.test(output)) return 'dependencies';
 }
 
-export async function readProjectFolder(path) {
+export async function projectDirectory(path) {
   const root = await lstat(path);
   if (!root.isDirectory() || root.isSymbolicLink()) throw new Error();
-  const directory = await realpath(path);
+  return realpath(path);
+}
+
+export async function readProjectFolder(path) {
+  const directory = await projectDirectory(path);
   const manifestFile = join(directory, 'stackforge.json');
   const manifestInfo = await lstat(manifestFile);
   if (!manifestInfo.isFile() || manifestInfo.size > 64 * 1024) throw new Error();
@@ -51,6 +55,11 @@ export async function readProjectFolder(path) {
 
 export async function inspectRecordedProject(project) {
   try {
+    if (project.external) {
+      const directory = await projectDirectory(project.path);
+      if (projectPathKey(directory) !== projectPathKey(project.path)) throw new Error();
+      return { directory, manifest: {} };
+    }
     const info = await readProjectFolder(project.path);
     if (['name', 'frontend', 'backend', 'database'].some(key => info.manifest.options?.[key] !== project[key])) throw new Error();
     return info;
