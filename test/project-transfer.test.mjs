@@ -53,6 +53,8 @@ test('GitHub clone detects frameworks and recycles only a verified cloned direct
   assert.equal(project.external, false);
   assert.equal(project.cloned, true);
   assert.equal(project.cloneId, undefined);
+  assert.equal(project.cloneIdentity, undefined);
+  assert.equal(project.removeOnly, undefined);
   assert.deepEqual(project.frameworks, ['React']);
   assert.equal(project.name, 'Demo');
   assert.equal(commands[0][0], 'git');
@@ -71,6 +73,16 @@ test('GitHub clone detects frameworks and recycles only a verified cloned direct
   assert.equal((await post(route + '/trash', confirm)).status, 409);
   await access(join(project.path, 'package.json'));
   await writeFile(marker, original);
+  const originalDirectory = join(directory, 'original-clone');
+  const replacementDirectory = join(directory, 'replacement-directory');
+  await rename(project.path, originalDirectory);
+  await mkdir(join(project.path, '.git'), { recursive: true });
+  await writeFile(marker, original);
+  await writeFile(join(project.path, 'keep.txt'), 'replacement');
+  assert.equal((await post(route + '/trash', confirm)).status, 409);
+  assert.equal(await readFile(join(project.path, 'keep.txt'), 'utf8'), 'replacement');
+  await rename(project.path, replacementDirectory);
+  await rename(originalDirectory, project.path);
   const deleted = await post(route + '/trash', confirm);
   assert.equal(deleted.status, 200);
   assert.deepEqual(await deleted.json(), { trashed: true, databaseDeleted: false });
@@ -90,6 +102,7 @@ test('unrecognized directories can be imported and old external records acquire 
   const { directory, post } = await fixture(t);
   const folder = join(directory, 'local-folder');
   await mkdir(folder);
+  await writeFile(join(folder, 'package.json'), '{}');
   const local = await post('/api/projects/import', { path: folder });
   assert.equal(local.status, 201);
   const project = await local.json();
@@ -99,14 +112,21 @@ test('unrecognized directories can be imported and old external records acquire 
   const front = join(folder, 'frontend');
   const backend = join(folder, 'backend');
   const workspace = join(folder, 'apps', 'java');
-  await Promise.all([front, backend, workspace].map(path => mkdir(path, { recursive: true })));
+  const nestedWorkspace = join(folder, 'modules', 'dashboard', 'client');
+  const deepWorkspace = join(folder, 'features', 'accounts', 'internal', 'app');
+  const outside = join(directory, 'outside');
+  await Promise.all([front, backend, workspace, nestedWorkspace, deepWorkspace, outside].map(path => mkdir(path, { recursive: true })));
   await Promise.all([
     writeFile(join(front, 'package.json'), '{"dependencies":{"next":"^16","react":"^19"}}'),
     writeFile(join(backend, 'package.json'), '{"dependencies":{"@nestjs/core":"^12","express":"^5"}}'),
+    writeFile(join(folder, 'package.json'), '{"workspaces":{"packages":["modules/*/client","./features/**","../outside"]}}'),
+    writeFile(join(nestedWorkspace, 'package.json'), '{"dependencies":{"vue":"^3"}}'),
+    writeFile(join(deepWorkspace, 'package.json'), '{"dependencies":{"@angular/core":"^21"}}'),
+    writeFile(join(outside, 'package.json'), '{"dependencies":{"hono":"^4"}}'),
     writeFile(join(folder, 'pyproject.toml'), '[project]\ndependencies = [\n  "fastapi",\n  "django[argon2]>=5",\n]\n'),
     writeFile(join(workspace, 'pom.xml'), '<project><parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId></parent></project>')
   ]);
-  const expected = ['Django', 'FastAPI', 'NestJS', 'Next.js', 'Spring Boot'];
+  const expected = ['Angular', 'Django', 'FastAPI', 'NestJS', 'Next.js', 'Spring Boot', 'Vue'];
   assert.deepEqual((await detectFrameworks(folder)).sort(), expected);
   const file = join(directory, 'projects.json');
   await writeFile(file, JSON.stringify({ version: 1, imports: [{ id: project.id, path: folder, external: true }] }));

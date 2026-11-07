@@ -4,6 +4,7 @@ import { posix, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run, throwIfCancelled } from './process.mjs';
 import { absoluteDirectory } from './paths.mjs';
+import { cloneFolderChanged, sameDirectory } from './project-identity.mjs';
 
 const pickerScript = `
 $ErrorActionPreference = 'Stop'
@@ -132,24 +133,34 @@ export function createDesktop({ platform = process.platform, env = process.env, 
         await launch(available.terminal, name === 'gnome-terminal' || name === 'xfce4-terminal' ? ['--working-directory', path] : name === 'konsole' ? ['--workdir', path] : [], config);
       }
     },
-    async trashProject(path) {
+    async trashProject(path, expectedIdentity) {
       path = absoluteDirectory(path, platform);
       const info = await lstatDirectory(path);
       if (!info.isDirectory() || info.isSymbolicLink() || paths.parse(path).root === path) throw new Error('The project folder cannot be safely recycled.');
       const config = { timeout: 25000, env };
       try {
+        let executable, args;
         if (platform === 'win32') {
-          const shell = (await tools()).picker;
-          if (!shell) throw new Error();
-          await command(shell, ['-NoLogo', '-NoProfile', '-STA', '-EncodedCommand', encoded(windowsTrash)], { ...config, env: { ...env, STACKFORGE_TRASH_PATH: path, STACKFORGE_RECYCLE_SOURCE: fileURLToPath(new URL('./recycle-windows.cs', import.meta.url)) } });
+          executable = (await tools()).picker;
+          args = ['-NoLogo', '-NoProfile', '-STA', '-EncodedCommand', encoded(windowsTrash)];
+          config.env = { ...env, STACKFORGE_TRASH_PATH: path, STACKFORGE_RECYCLE_SOURCE: fileURLToPath(new URL('./recycle-windows.cs', import.meta.url)) };
         } else if (platform === 'darwin') {
-          await command('/usr/bin/osascript', ['-l', 'JavaScript', '-e', macTrash, '--', path], config);
+          executable = '/usr/bin/osascript';
+          args = ['-l', 'JavaScript', '-e', macTrash, '--', path];
         } else {
-          const gio = platform === 'linux' && await find('gio');
-          if (!gio) throw new Error();
-          await command(gio, ['trash', '--', path], config);
+          executable = platform === 'linux' && await find('gio');
+          args = ['trash', '--', path];
         }
-      } catch { throw new Error('The system trash did not accept this folder. Check the drive and close any apps using the project.'); }
+        if (!executable) throw new Error();
+        if (expectedIdentity) {
+          const current = await lstatDirectory(path, { bigint: true }).catch(() => null);
+          if (!current || !sameDirectory(current, expectedIdentity)) throw new Error(cloneFolderChanged);
+        }
+        await command(executable, args, config);
+      } catch (error) {
+        if (error.message === cloneFolderChanged) throw error;
+        throw new Error('The system trash did not accept this folder. Check the drive and close any apps using the project.');
+      }
     },
     shutdown() { pickerController?.abort(); }
   };

@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { absoluteDirectory } from './paths.mjs';
 import { run, throwIfCancelled } from './process.mjs';
+import { cloneFolderChanged, directoryIdentity, sameDirectory } from './project-identity.mjs';
 
 function githubRepository(value) {
   const match = typeof value === 'string' ? /^https:\/\/github\.com\/([a-z\d][a-z\d-]{0,38})\/([a-z\d_.-]{1,104})\/?$/i.exec(value.trim()) : null;
@@ -25,13 +26,14 @@ async function cloneMarker(directory) {
   return join(git, 'stackforge-clone');
 }
 
-export async function verifyClone(directory, cloneId) {
+export async function verifyClone(directory, cloneId, identity) {
   try {
+    if (!sameDirectory(await lstat(directory, { bigint: true }), identity)) throw new Error();
     const marker = await cloneMarker(directory);
     const info = await lstat(marker);
     if (info.isFile() && info.size === cloneId.length && await readFile(marker, 'utf8') === cloneId) return;
   } catch { /* The recorded clone could not be verified. */ }
-  throw new Error('The folder could not be verified as the original StackForge clone.');
+  throw new Error(cloneFolderChanged);
 }
 
 export async function cloneGithub(repository, parentDir, { signal, command = run } = {}) {
@@ -57,6 +59,7 @@ export async function cloneGithub(repository, parentDir, { signal, command = run
     throwIfCancelled(signal);
     const cloneId = randomBytes(16).toString('hex');
     await writeFile(await cloneMarker(checkout), cloneId, { flag: 'wx', mode: 0o600 });
+    const cloneIdentity = directoryIdentity(await lstat(checkout, { bigint: true }));
     const lockPath = join(directory, `.${name}.stackforge.lock`);
     const lock = await open(lockPath, 'wx').catch(error => {
       if (error.code === 'EEXIST') throw new Error('Another StackForge task is using this destination.');
@@ -69,7 +72,7 @@ export async function cloneGithub(repository, parentDir, { signal, command = run
       await lock.close();
       await rm(lockPath, { force: true });
     }
-    return { path: target, cloneId };
+    return { path: target, cloneId, cloneIdentity };
   } finally {
     await rm(staging, { recursive: true, force: true });
   }

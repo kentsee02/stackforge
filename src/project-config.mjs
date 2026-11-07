@@ -4,13 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { absoluteDirectory } from './paths.mjs';
 import { validateOptions } from './catalog.mjs';
 import { detectFrameworks, validFrameworks } from './project-detection.mjs';
+import { recordedIdentity } from './project-identity.mjs';
 
 export const projectPathKey = path => process.platform === 'win32' ? path.toLowerCase() : path;
 
 export function importedProject(id, path, source) {
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid project record.');
   path = absoluteDirectory(path);
-  const cloned = /^[a-f0-9]{32}$/.test(source?.cloneId ?? '') ? { cloneId: source.cloneId } : {};
+  const cloned = /^[a-f0-9]{32}$/.test(source?.cloneId ?? '') ? { cloneId: source.cloneId, cloneIdentity: recordedIdentity(source.cloneIdentity) } : {};
   if (source?.unmanaged === true || source?.external === true) return {
     id, path, name: basename(path) || path, frontend: 'none', backend: 'none', database: 'none',
     imported: true, unmanaged: true, frameworks: validFrameworks(source.frameworks), ...cloned
@@ -58,7 +59,7 @@ export class ProjectConfig {
       if (Array.isArray(saved.imports)) for (const project of saved.imports) {
         try {
           const imported = importedProject(project.id, project.path, project);
-          if (imported.unmanaged && !Array.isArray(project.frameworks)) imported.frameworks = await detectFrameworks(imported.path);
+          if (imported.unmanaged) imported.frameworks = await detectFrameworks(imported.path);
           this.value.imports.push(imported);
         }
         catch { /* ignore a single damaged project record */ }

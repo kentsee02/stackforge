@@ -5,7 +5,7 @@ setupI18n();
 const $ = id => document.getElementById(id);
 const stateLabels = { stopped: '已停止', starting: '正在启动…', running: '运行中', stopping: '正在停止…', failed: '启动失败或异常退出' };
 const stackNames = { vue: 'Vue', react: 'React', express: 'Express', nestjs: 'NestJS', spring: 'Spring Boot', mysql: 'MySQL', postgres: 'PostgreSQL' };
-const removesFiles = project => !project.unmanaged || project.cloned;
+const removesFiles = project => !project.removeOnly;
 const diagnosticMessages = {
   port: 'Free the occupied port, or choose a different one under Development ports if this project supports it.',
   java: 'Set JAVA_HOME and PATH to a JDK that supports Java 21, then restart StackForge and try again.',
@@ -555,8 +555,8 @@ $('project-delete').addEventListener('click', () => {
   $('project-trash-expected').textContent = project.name;
   $('project-trash-name').value = '';
   $('project-trash-confirm').disabled = true;
-  $('project-trash-backup').hidden = project.database === 'none';
   const deleteFiles = removesFiles(project);
+  $('project-trash-backup').hidden = !deleteFiles || project.database === 'none';
   setText($('project-trash-title'), deleteFiles ? 'Delete project?' : 'Remove project from Projects?');
   setText($('project-trash-instruction'), deleteFiles ? 'Type the project name below to confirm deletion.' : 'Type the project name below to confirm removal.');
   setText($('project-trash-confirm'), deleteFiles ? 'Delete project' : 'Remove from Projects');

@@ -32,12 +32,16 @@ async function localDirectory(path) {
   return (await lstat(path).catch(() => null))?.isDirectory() === true;
 }
 
+function npmManifest(text) {
+  try { return JSON.parse(text.replace(/^\uFEFF/, '')); }
+  catch { return undefined; }
+}
+
 async function detectIn(folder) {
   const [npm, pom, gradle, gradleKotlin, requirements, pyproject] = await Promise.all(
     ['package.json', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'requirements.txt', 'pyproject.toml'].map(file => localText(folder, file))
   );
-  let manifest;
-  try { manifest = JSON.parse(npm.replace(/^\uFEFF/, '')); } catch { /* No usable npm manifest. */ }
+  const manifest = npmManifest(npm);
   const dependencies = new Set();
   for (const key of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
     const group = manifest?.[key];
@@ -67,25 +71,50 @@ async function detectIn(folder) {
   return frameworks;
 }
 
+const conventional = ['frontend', 'backend', 'client', 'server', 'web', 'api', 'apps/*', 'packages/*'];
+const ignored = name => name.startsWith('.') || name === 'node_modules';
+
+function workspaceSegments(pattern) {
+  if (typeof pattern !== 'string' || pattern.length > 512) return;
+  const segments = pattern.replace(/^\.\//, '').replace(/\/$/, '').split('/');
+  if (segments.length > 8 || segments.some(segment => ignored(segment) || !/^[\p{L}\p{N}@._*-]+$/u.test(segment))) return;
+  return segments;
+}
+
+async function collectWorkspace(directory, segments, folders, budget, depth = 0) {
+  if (budget.left-- <= 0 || folders.size >= 96 || depth > 8) return;
+  if (!segments.length) { folders.add(directory); return; }
+  const [segment, ...rest] = segments;
+  if (!segment.includes('*')) {
+    const child = join(directory, segment);
+    if (await localDirectory(child)) await collectWorkspace(child, rest, folders, budget, depth + 1);
+    return;
+  }
+  const recursive = segment === '**';
+  const match = recursive ? null : new RegExp('^' + segment.replaceAll('.', '\\.').replaceAll('*', '.*') + '$');
+  if (recursive) await collectWorkspace(directory, rest, folders, budget, depth);
+  const entries = await opendir(directory).catch(() => null);
+  if (!entries) return;
+  try {
+    for await (const entry of entries) {
+      if (budget.left-- <= 0 || folders.size >= 96) break;
+      if (entry.isDirectory() && !ignored(entry.name) && (recursive || match.test(entry.name))) {
+        await collectWorkspace(join(directory, entry.name), recursive ? segments : rest, folders, budget, depth + 1);
+      }
+    }
+  } catch { /* Directory contents can change during detection. */ }
+}
+
 export async function detectFrameworks(directory) {
   if (!await localDirectory(directory)) return [];
-  const folders = [directory];
-  for (const name of ['frontend', 'backend', 'client', 'server', 'web', 'api', 'apps', 'packages']) {
-    const path = join(directory, name);
-    if (!await localDirectory(path)) continue;
-    if (name !== 'apps' && name !== 'packages') {
-      folders.push(path);
-      continue;
-    }
-    const entries = await opendir(path).catch(() => null);
-    if (!entries) continue;
-    let scanned = 0;
-    try {
-      for await (const entry of entries) {
-        if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') folders.push(join(path, entry.name));
-        if (++scanned === 12) break;
-      }
-    } catch { /* Directory contents can change during detection. */ }
+  const folders = new Set([directory]);
+  const workspaces = npmManifest(await localText(directory, 'package.json'))?.workspaces;
+  const declared = Array.isArray(workspaces) ? workspaces : workspaces?.packages;
+  const patterns = new Set([...(Array.isArray(declared) ? declared.slice(0, 32) : []), ...conventional]);
+  const budget = { left: 2048 };
+  for (const pattern of patterns) {
+    const segments = workspaceSegments(pattern);
+    if (segments) await collectWorkspace(directory, segments, folders, budget);
   }
-  return validFrameworks((await Promise.all(folders.map(detectIn))).flat());
+  return validFrameworks((await Promise.all([...folders].map(detectIn))).flat());
 }

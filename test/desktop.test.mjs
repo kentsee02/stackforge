@@ -133,6 +133,9 @@ test('recycle adapters pass only the recorded path and reject roots, symlinks an
   assert.equal(calls[2][1].at(-1), path);
   await assert.rejects(createDesktop({ ...options, platform: 'linux', lstatDirectory: async () => ({ ...directoryInfo, isSymbolicLink: () => true }) }).trashProject(path), /safely recycled/);
   await assert.rejects(createDesktop({ ...options, platform: 'linux', fileExists: async () => false }).trashProject(path), /system trash did not accept/);
+  const changed = { ...directoryInfo, dev: 4n, ino: 7n, birthtimeNs: 8n };
+  await assert.rejects(createDesktop({ ...options, platform: 'linux', lstatDirectory: async () => changed })
+    .trashProject(path, { dev: '4', ino: '6', birth: '8' }), /original StackForge clone/);
   assert.equal(calls.length, 3);
 });
 
