@@ -75,7 +75,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .quick-presets button[aria-pressed=true] { border-color: var(--control); background: white; font-weight: 600; }
 .project-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.45fr); gap: 8px 14px; margin-top: 12px; }
 .project-fields label { font-size: 12px; font-weight: 500; min-width: 0; }
-.project-fields label[for=parent-dir] { grid-column: 2; grid-row: 1; }
+.project-fields .directory-field { grid-column: 2; grid-row: 1; }
 #name-hint { grid-column: 1 / -1; grid-row: 2; margin: 0; }
 .project-fields input, .inline-field input, .template-manager input, .template-manager select, .identity-fields input, .publish-fields input, .publish-fields select, .history-field select { display: block; width: 100%; min-width: 0; height: 40px; margin-top: 6px; padding: 7px 11px; border: 1px solid var(--control); border-radius: 6px; background: white; color: var(--text); font-size: 13px; }
 input::placeholder { color: var(--muted); opacity: 1; }
@@ -202,7 +202,7 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 @media (max-width: 1220px) {
   body { grid-template-columns: 190px minmax(0, 1fr); }.sheet { padding: 26px 24px 0; }.editor { grid-template-columns: minmax(0, 1fr) 330px; gap: 24px; }
   .choice { gap: 6px; padding: 10px 8px; }.choice > svg { display: none; }.choice strong { font-size: 12px; }.quick-presets button { padding: 6px; }
-  .project-fields { grid-template-columns: 1fr; }.project-fields label[for=parent-dir] { grid-column: 1; grid-row: 3; }#name-hint { grid-row: 2; }
+  .project-fields { grid-template-columns: 1fr; }.project-fields .directory-field { grid-column: 1; grid-row: 3; }#name-hint { grid-row: 2; }
   .disclosure-caption { display: none; }.topbar { padding: 0 24px; }.local-indicator { display: none; }.setup-grid { grid-template-columns: 1fr; gap: 0; }
 }
 @media (max-width: 1050px) {
@@ -217,7 +217,7 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
   .sheet { margin: 0; padding: 26px 20px 0; border: 0; border-radius: 0; }.title-row { padding-bottom: 24px; }h1 { font-size: 24px; }
   .editor { grid-template-columns: minmax(0, 1fr); gap: 24px; }.right-column { position: static; width: 100%; }.choices { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .choice { min-height: 76px; padding: 12px; }.choice > span { display: block; }.choice strong { font-size: 13px; }.choice small { margin-top: 5px; text-align: left; }.choice > svg { display: block; }
-  .project-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }.project-fields label[for=parent-dir] { grid-column: 2; grid-row: 1; }
+  .project-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }.project-fields .directory-field { grid-column: 2; grid-row: 1; }
   .quick-presets button { padding: 9px 10px; }.quick-presets button > span { font-size: 13px; }.disclosure-caption { display: inline; }
   .create-bar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; padding: 12px 20px max(12px, env(safe-area-inset-bottom)); background: white; }
   .create-note, .shortcut { display: none; }.primary { min-height: 46px; }.sheet-footer > span:last-child { display: none; }
@@ -226,7 +226,7 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 }
 @media (max-width: 480px) {
   .topbar { flex-wrap: wrap; gap: 6px; padding: 10px 16px; }.topbar > span { font-size: 12px; }.topbar-tools { margin-left: auto; }.language-control { font-size: 0; }.language-control select { font-size: 13px; min-height: 44px; }
-  .sheet { padding: 22px 16px 0; }.title-row p { font-size: 13px; }.project-fields { grid-template-columns: 1fr; }.project-fields label[for=parent-dir] { grid-column: 1; grid-row: 3; }
+  .sheet { padding: 22px 16px 0; }.title-row p { font-size: 13px; }.project-fields { grid-template-columns: 1fr; }.project-fields .directory-field { grid-column: 1; grid-row: 3; }
   .project-fields input, .template-manager input, .template-manager select { font-size: 16px; min-height: 44px; }.inline-field input { font-size: 16px; }
   .choices { grid-template-columns: 1fr; }.choice { min-height: 46px; align-items: center; }.choice > span { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }.choice small { margin: 0; text-align: right; }.choice > svg { width: 18px; height: 18px; margin: 0; }
   .quick-presets button { padding: 9px 5px; }.quick-presets button > span { font-size: 12px; }.disclosure-caption { display: none; }
@@ -235,3 +235,21 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
   .secondary, .text-button, .preview-tabs button, .template-manager > summary, .advanced-options > summary, .final-options > label { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
+
+.directory-field { min-width: 0; }
+.directory-input { display: flex; gap: 8px; margin-top: 6px; }
+.directory-input input { flex: 1; margin: 0; }
+.directory-input .secondary { margin: 0; height: 40px; white-space: nowrap; }
+.directory-preferences { grid-column: 1 / -1; grid-row: 3; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; color: var(--muted); font-size: 12px; }
+.directory-preferences label { display: inline-flex; align-items: center; gap: 7px; font-weight: 400; cursor: pointer; }
+.directory-preferences input { display: inline-block; width: 14px; min-width: 14px; height: 14px; margin: 0; }
+#default-directory { margin-left: auto; }
+#directory-message { flex-basis: 100%; font-size: 12px; overflow-wrap: anywhere; }
+#directory-message:empty, #open-help:empty, #open-message:empty { display: none; }
+#directory-message[data-status=error], #open-message[data-status=error] { color: var(--negative); }
+.project-open-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.project-open-actions .secondary { margin: 0; }
+@media(max-width:1220px) { .directory-preferences { grid-row: 4; } }
+@media(min-width:1221px) { .project-fields .directory-field { grid-column: 2; grid-row: 1; } }
+@media(max-width:800px) and (min-width:481px) { .directory-preferences { grid-row: 3; } }
+@media(max-width:480px) { .directory-input .secondary { height: 44px; }.directory-preferences label { min-height: 44px; } }

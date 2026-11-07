@@ -26,20 +26,24 @@ export async function terminateTree(child) {
   }
 }
 
-export function run(command, args, { cwd, env = process.env, log = () => {}, timeout = 600_000, signal } = {}) {
+export function run(command, args, { cwd, env = process.env, log = () => {}, timeout = 600_000, signal, stdoutOnly = false } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(cancelled()); return; }
     const child = spawn(command, args, { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     let tail = '';
+    let stdout = '';
     let stopped;
     let killing;
     const collect = chunk => {
-      const value = chunk.toString().replace(/\x1b\[[0-9;]*m/g, '');
+      const value = chunk.replace(/\x1b\[[0-9;]*m/g, '');
       tail = (tail + value).slice(-4000);
       log(value);
     };
-    child.stdout.on('data', collect);
-    child.stderr.on('data', collect);
+    child.stdout.setEncoding('utf8').on('data', chunk => {
+      if (stdoutOnly) stdout = (stdout + chunk).slice(-4000);
+      collect(chunk);
+    });
+    child.stderr.setEncoding('utf8').on('data', collect);
     const stop = error => {
       if (stopped) return;
       stopped = error;
@@ -54,8 +58,8 @@ export function run(command, args, { cwd, env = process.env, log = () => {}, tim
       clean();
       if (killing) await killing;
       if (stopped) reject(stopped);
-      else if (code === 0) resolve(tail);
-      else reject(new Error(`${command} 退出码 ${code}\n${tail}`));
+      else if (code === 0) resolve(stdoutOnly ? stdout : tail);
+      else reject(Object.assign(new Error(`${command} 退出码 ${code}\n${tail}`), { exitCode: code }));
     });
     if (signal?.aborted) abort();
   });

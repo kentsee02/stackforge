@@ -1,6 +1,14 @@
 import { homedir } from 'node:os';
 import { posix, win32 } from 'node:path';
 
+export function absoluteDirectory(value, platform = process.platform) {
+  const paths = platform === 'win32' ? win32 : posix;
+  if (typeof value !== 'string' || !value.trim() || value.length > 4096 || /[\x00-\x1f\x7f]/.test(value)) throw new Error('Choose a valid absolute directory path.');
+  const path = value.trim();
+  if (!paths.isAbsolute(path) || platform === 'win32' && !/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/]|$))/i.test(path)) throw new Error('Choose a valid absolute directory path.');
+  return paths.normalize(path);
+}
+
 // Keep generated work independent of this tool's checkout and working directory.
 // Resolve a suggestion only; create directories when a project is requested.
 export function defaultProjectsDirectory({ home = homedir(), platform = process.platform, configured = process.env.STACKFORGE_PROJECTS_DIR } = {}) {

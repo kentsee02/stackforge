@@ -9,15 +9,18 @@ import { checkEnvironment } from './environment.mjs';
 import { publishProject } from './git.mjs';
 import { run } from './process.mjs';
 import { Jobs } from './jobs.mjs';
-import { defaultProjectsDirectory } from './paths.mjs';
+import { absoluteDirectory, defaultProjectsDirectory } from './paths.mjs';
+import { Settings } from './settings.mjs';
+import { createDesktop } from './desktop.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const identity = { application: 'stackforge-local', version: '0.5.1', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
+export const identity = { application: 'stackforge-local', version: '0.6.0', project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
 const staticFiles = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/messages.js': ['messages.js', 'text/javascript; charset=utf-8'], '/template-store.js': ['template-store.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'], '/plex-regular.ttf': ['plex-regular.ttf', 'font/ttf'], '/plex-semibold.ttf': ['plex-semibold.ttf', 'font/ttf'] };
 
-export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs') } = {}) {
+export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop() } = {}) {
   const token = randomBytes(32).toString('hex');
   const jobs = new Jobs({ directory: stateDir, generate, check, publish });
+  const settings = new Settings(settingsFile);
   function send(res, status, value) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(value));
@@ -29,22 +32,48 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     const validHosts = [`127.0.0.1:${req.socket.localPort}`, `localhost:${req.socket.localPort}`];
     if (!validHosts.includes(req.headers.host)) return send(res, 403, { error: '只允许从本机地址访问。' });
     try {
-      await jobs.ready;
+      await Promise.all([jobs.ready, settings.ready]);
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (req.method === 'GET' && url.pathname === '/api/identity') return send(res, 200, identity);
-      if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, { catalog, token, defaultDir, node: process.version, platform: process.platform, version: identity.version, jobs: jobs.list() });
+      if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, { catalog, token, defaultDir, node: process.version, platform: process.platform, version: identity.version, jobs: jobs.list(), preferences: settings.value, desktop: await desktop.capabilities() });
       if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, jobs.list());
       if (req.method === 'GET' && url.pathname.startsWith('/api/jobs/')) {
         const job = jobs.view(url.pathname.slice('/api/jobs/'.length));
         return send(res, job ? 200 : 404, job ?? { error: '找不到这个创建任务。' });
       }
-      if (req.method === 'POST' && (['/api/projects', '/api/checks'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel)$/.test(url.pathname))) {
+      if (req.method === 'POST' && (['/api/projects', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         const origin = req.headers.origin;
         if ((origin && origin !== `http://${req.headers.host}`) || req.headers['x-stackforge-token'] !== token || req.headers['content-type']?.split(';')[0] !== 'application/json') return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
-        if (jobs.busy && !['/api/checks'].includes(url.pathname) && !url.pathname.endsWith('/cancel')) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
+        if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
         const chunks = []; let size = 0;
         for await (const chunk of req) { size += chunk.length; if (size > 16384) return send(res, 413, { error: '请求内容过大。' }); chunks.push(chunk); }
         const body = Buffer.concat(chunks).toString('utf8');
+        let payload;
+        try { payload = JSON.parse(body); if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error(); }
+        catch { return send(res, 400, { error: 'Invalid JSON request.' }); }
+        if (url.pathname === '/api/preferences') {
+          try { return send(res, 200, await settings.save(payload)); }
+          catch (error) { return send(res, 400, { error: error.message }); }
+        }
+        if (url.pathname === '/api/desktop/pick-directory') {
+          const controller = new AbortController();
+          res.once('close', () => { if (!res.writableEnded) controller.abort(); });
+          try { return send(res, 200, { path: await desktop.pickDirectory(payload.initialDir || defaultDir, { language: payload.language, signal: controller.signal }) }); }
+          catch (error) { return send(res, 400, { error: error.message }); }
+        }
+        if (url.pathname.endsWith('/open')) {
+          const job = jobs.view(url.pathname.split('/')[3]);
+          if (!job) return send(res, 404, { error: '找不到这个创建任务。' });
+          try {
+            if (job.status !== 'complete' || !job.result?.path) throw new Error('The local project is not ready to open.');
+            const expected = resolve(job.options.parentDir, job.options.name);
+            const actual = absoluteDirectory(job.result.path);
+            const normalized = value => process.platform === 'win32' ? value.toLowerCase() : value;
+            if (normalized(actual) !== normalized(expected)) throw new Error('The recorded project location does not match this task.');
+            await desktop.openProject(expected, payload.action);
+            return send(res, 200, { requested: true });
+          } catch (error) { return send(res, 400, { error: error.message }); }
+        }
         if (/\/(publish|retry|cancel)$/.test(url.pathname)) {
           const id = url.pathname.split('/')[3];
           try {
@@ -54,7 +83,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           } catch (error) { return send(res, 400, { error: error.message }); }
         }
         let input;
-        try { input = validateOptions(JSON.parse(body)); }
+        try { input = validateOptions(payload); }
         catch (error) { return send(res, 400, { error: error.message }); }
         if (url.pathname === '/api/checks') return send(res, 200, await check(input));
         try { return send(res, 202, { id: await jobs.create(input) }); }
@@ -70,7 +99,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     } catch (error) { return send(res, 500, { error: error.message }); }
   });
   server.requestTimeout = 30_000;
-  server.shutdownTasks = () => jobs.shutdown();
+  server.shutdownTasks = async () => { desktop.shutdown(); await Promise.allSettled([jobs.shutdown(), settings.pending]); };
   server.jobs = jobs;
   return server;
 }

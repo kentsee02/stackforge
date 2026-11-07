@@ -60,7 +60,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   } else {
     try {
       const { url, server, reused } = await launch({ port: Number(process.env.PORT || 4310), open: process.env.STACKFORGE_NO_BROWSER === '1' ? false : openBrowser });
-      console.log(`\nStackForge 0.5.1\n${url}\n${reused ? 'Opened the existing service.' : 'Keep this window open. Press Ctrl+C to stop; unfinished tasks can be resumed.'}\n`);
+      console.log(`\nStackForge 0.6.0\n${url}\n${reused ? 'Opened the existing service.' : 'Keep this window open. Press Ctrl+C to stop; unfinished tasks can be resumed.'}\n`);
       if (server) for (const event of ['SIGINT', 'SIGTERM']) process.on(event, async () => { await server.shutdownTasks(); server.close(() => process.exit(0)); });
     } catch (error) { console.error(error.message); process.exitCode = 1; }
   }

@@ -15,6 +15,8 @@ let checkTimer;
 let checkSerial = 0;
 let repoNameEdited = false;
 let templates = [];
+let pickingDirectory = false;
+let directoryWrites = Promise.resolve();
 const statusNames = { running: '执行中', cancelling: '停止中', cancelled: '已取消', failed: '未完成', complete: '已完成' };
 const presets = { java: ['vue', 'spring', 'mysql'], node: ['react', 'express', 'postgres'], web: ['vue', 'none', 'none'] };
 const choiceIcons = {
@@ -183,7 +185,8 @@ function lockForm(value) {
   ++checkSerial;
   for (const input of form.querySelectorAll('input, select, button')) input.disabled = value;
   for (const button of document.querySelectorAll('[data-preset], #check-environment, #retry-publish, #resume-job, #job-history')) button.disabled = value;
-  createButton.disabled = value;
+  createButton.disabled = value || pickingDirectory;
+  $('#browse-directory').disabled = value || pickingDirectory || !state.desktop?.picker;
   setText(createButton.querySelector('span'), value ? '正在创建…' : '创建项目');
   if (!value) { updatePreview(); refreshTemplates($('#saved-template').value); }
 }
@@ -236,6 +239,7 @@ function resetActivity() {
   setText($('#job-message'), '项目会在新文件夹中创建。');
   for (const id of ['result', 'recovery', 'resume-job', 'cancel-job', 'logs-panel', 'progress']) $(`#${id}`).hidden = true;
   $('#job-history').value = '';
+  setText($('#open-message'), '');
 }
 
 function revealTask() {
@@ -283,6 +287,9 @@ async function pollJob() {
       $('#result').hidden = false;
       $('#result-path').textContent = job.result.path;
       $('#result-commands').textContent = job.result.commands.join('\n');
+      $('#open-actions').hidden = job.status !== 'complete';
+      for (const button of document.querySelectorAll('[data-open]')) button.disabled = job.status !== 'complete' || !state.desktop?.[button.dataset.open];
+      setText($('#open-help'), ['folder', 'vscode', 'terminal'].every(action => state.desktop?.[action]) ? '' : 'Some desktop apps were not found. You can copy the project path instead.');
       if (job.status === 'complete') setText($('#job-message'), '文件已生成。进入项目目录，即可开始开发。');
       const remote = job.result.remote;
       $('#remote-link').hidden = remote?.status !== 'published';
@@ -302,24 +309,27 @@ async function pollJob() {
 }
 
 form.addEventListener('input', event => {
-  if (running || ['template-name', 'template-file'].includes(event.target.id)) return;
+  if (running || ['template-name', 'template-file', 'remember-directory'].includes(event.target.id)) return;
   resetActivity();
   if (event.target.id === 'repo-name') repoNameEdited = true;
   if (event.target.id === 'project-name' && !repoNameEdited) $('#repo-name').value = event.target.value;
   syncGit(event.target.id); updatePreview(); scheduleChecks();
 });
 form.addEventListener('change', event => {
+  if (event.target.id === 'remember-directory') { saveDirectory(); return; }
   if (running || ['saved-template', 'template-file'].includes(event.target.id)) return;
   resetActivity();
   syncGit(event.target.id); updatePreview(); scheduleChecks();
+  if (event.target.id === 'parent-dir' && $('#remember-directory').checked) saveDirectory();
 });
 form.addEventListener('submit', async event => {
   event.preventDefault();
-  if (running || !state || !form.reportValidity()) return;
+  if (running || pickingDirectory || !state || !form.reportValidity()) return;
   const options = readOptions();
   currentOptions = options;
   if (options.frontend === 'none' && options.backend === 'none') { showError('至少选择一个前端或后端。'); return; }
   $('#result').hidden = true;
+  setText($('#open-message'), '');
   $('#recovery').hidden = true;
   $('#resume-job').hidden = true;
   setText($('#logs'), '');
@@ -335,6 +345,7 @@ form.addEventListener('submit', async event => {
     const response = await fetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': state.token }, body: JSON.stringify(options) });
     const data = await response.json();
     if (!response.ok) { if (data.environment) renderEnvironment(data.environment); throw new Error(data.error); }
+    if ($('#remember-directory').checked && state.preferences.directory !== options.parentDir) saveDirectory();
     currentJob = data.id;
     revealTask();
     $('#cancel-job').hidden = false; $('#cancel-job').disabled = false;
@@ -424,6 +435,7 @@ $('#job-history').addEventListener('change', async () => {
   const response = await fetch('/api/jobs/' + $('#job-history').value);
   if (!response.ok) return;
   const job = await response.json(); currentJob = job.id; currentOptions = job.options;
+  setText($('#open-message'), '');
   restoreOptions(job.options); clearTimeout(pollTimer);
   $('#logs-panel').hidden = false; revealTask(); pollJob();
 });
@@ -465,6 +477,71 @@ document.addEventListener('keydown', event => {
   }
 });
 
+function renderRecentDirectories(preferences) {
+  state.preferences = preferences;
+  $('#recent-directories').replaceChildren(...preferences.recentDirectories.map(path => {
+    const option = document.createElement('option'); option.value = path; return option;
+  }));
+}
+function directoryMessage(message, error = false) {
+  setText($('#directory-message'), message); $('#directory-message').dataset.status = error ? 'error' : 'ok';
+}
+function saveDirectory() {
+  const preferences = { rememberDirectory: $('#remember-directory').checked, directory: $('#parent-dir').value.trim() };
+  const writing = directoryWrites.catch(() => {}).then(async () => {
+    try {
+      const response = await fetch('/api/preferences', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': state.token }, body: JSON.stringify(preferences) });
+      const data = await response.json(); if (!response.ok) throw new Error(data.error);
+      renderRecentDirectories(data);
+      directoryMessage(data.rememberDirectory ? 'Location saved on this computer.' : 'Location history cleared. This choice will not be remembered.');
+    } catch (error) { directoryMessage('Unable to save this location: ' + error.message, true); }
+  });
+  directoryWrites = writing;
+  return writing;
+}
+$('#default-directory').addEventListener('click', async () => {
+  if (!state || running || pickingDirectory) return;
+  $('#parent-dir').value = state.defaultDir;
+  resetActivity(); updatePreview(); scheduleChecks();
+  if ($('#remember-directory').checked) await saveDirectory();
+  else directoryMessage('Default location restored.');
+});
+$('#browse-directory').addEventListener('click', async () => {
+  if (!state?.desktop?.picker || running || pickingDirectory) return;
+  pickingDirectory = true;
+  for (const id of ['browse-directory', 'remember-directory', 'default-directory', 'create', 'job-history', 'retry-publish', 'resume-job']) $('#' + id).disabled = true;
+  $('#parent-dir').readOnly = true;
+  setText($('#browse-directory'), 'Choosing…'); directoryMessage('Choose a folder in the system dialog.');
+  try {
+    const response = await fetch('/api/desktop/pick-directory', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': state.token }, body: JSON.stringify({ initialDir: $('#parent-dir').value.trim(), language: document.documentElement.lang }) });
+    const data = await response.json(); if (!response.ok) throw new Error(data.error);
+    if (data.path) {
+      $('#parent-dir').value = data.path;
+      resetActivity(); updatePreview(); scheduleChecks();
+      if ($('#remember-directory').checked) await saveDirectory();
+      else directoryMessage('Folder selected.');
+    } else directoryMessage('Folder selection cancelled.');
+  } catch (error) { directoryMessage(error.message, true); }
+  finally {
+    pickingDirectory = false; $('#parent-dir').readOnly = false;
+    for (const id of ['remember-directory', 'default-directory', 'create', 'job-history', 'retry-publish', 'resume-job']) $('#' + id).disabled = running;
+    $('#browse-directory').disabled = running || !state.desktop?.picker;
+    setText($('#browse-directory'), 'Browse…');
+  }
+});
+for (const button of document.querySelectorAll('[data-open]')) button.addEventListener('click', async () => {
+  const id = currentJob, action = button.dataset.open;
+  if (!id || running) return;
+  button.disabled = true; $('#open-message').dataset.status = 'ok';
+  setText($('#open-message'), { folder: 'Opening folder…', vscode: 'Opening VS Code…', terminal: 'Opening terminal…' }[action]);
+  try {
+    const response = await fetch('/api/jobs/' + id + '/open', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': state.token }, body: JSON.stringify({ action }) });
+    const data = await response.json(); if (!response.ok) throw new Error(data.error);
+    if (currentJob === id) setText($('#open-message'), 'Open request sent. Check the desktop window.');
+  } catch (error) { if (currentJob === id) { setText($('#open-message'), error.message); $('#open-message').dataset.status = 'error'; } }
+  finally { if (currentJob === id) button.disabled = !state.desktop?.[action]; }
+});
+
 async function init() {
   try {
     const response = await fetch('/api/state');
@@ -472,7 +549,15 @@ async function init() {
     state = await response.json();
     renderHistory(state.jobs || []);
     ['frontend', 'backend', 'database'].forEach(choices);
-    $('#parent-dir').value = state.defaultDir;
+    const preferencesDirectory = state.preferences || { rememberDirectory: true, recentDirectories: [] };
+    $('#remember-directory').checked = preferencesDirectory.rememberDirectory;
+    $('#parent-dir').value = preferencesDirectory.rememberDirectory && preferencesDirectory.directory || state.defaultDir;
+    renderRecentDirectories(preferencesDirectory);
+    $('#parent-dir').readOnly = false;
+    $('#remember-directory').disabled = false;
+    $('#default-directory').disabled = false;
+    $('#browse-directory').disabled = !state.desktop?.picker;
+    if (!state.desktop?.picker) directoryMessage('No system folder picker is available. Enter an absolute path manually.');
     setText($('#node-version'), `Node.js ${state.node} · 已连接`);
     let preferences;
     try { preferences = JSON.parse(localStorage.getItem('stackforge.preferences') || 'null'); } catch {}

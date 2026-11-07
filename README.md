@@ -24,14 +24,16 @@ The launcher opens your browser, reuses an existing server for this checkout, an
 
 Alternatively, run `npm start` and open [http://127.0.0.1:4310](http://127.0.0.1:4310). Set `PORT` to use another port, for example `$env:PORT=4311; npm start` in PowerShell.
 
-1. Enter a project name and an absolute parent directory.
+1. Enter a project name. Use **Browse…** to pick a parent folder or enter an absolute path in **Save to**.
 2. Choose your stack or apply a preset.
 3. Review preflight checks and select dependency installation and Git operations.
-4. Create the project, enter its directory, and run `npm run dev`.
+4. After creation, open the project in VS Code, your file manager, or a terminal from the result panel. The same actions are available from **Task history** for completed projects.
 
 The default parent folder is **Projects in your user home directory**, such as `C:\Users\your-name\Projects` on Windows, `/Users/your-name/Projects` on macOS, or `/home/your-name/Projects` on Linux. A project named `my-app` is created in `Projects/my-app`. This location is independent of the StackForge installation. The directory is created only when you create a project, and the existing destination checks still apply.
 
-Enter another absolute parent path in **Save to** whenever needed. To configure a different startup default, set `STACKFORGE_PROJECTS_DIR` before launching, for example `$env:STACKFORGE_PROJECTS_DIR='D:\Projects'; npm run launch` in PowerShell. Relative defaults are rejected. Earlier projects and task recovery continue using their original paths.
+**Remember this location** restores your last parent folder when you return and suggests up to five recent folders. This preference is stored locally. Turn it off to clear the suggestions, or click **Use default** to return to your configured default. To set a different default, set `STACKFORGE_PROJECTS_DIR` to an absolute path before launching.
+
+Desktop actions use the applications installed on your computer. On Windows, **Open terminal** starts PowerShell in the project folder. On Linux, **Browse…** requires `zenity` or `kdialog`. You can copy the project path from the result panel at any time.
 
 ## Generated projects
 
