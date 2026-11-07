@@ -24,6 +24,20 @@ export class Jobs {
     return [...this.records.values()].reverse().slice(0, 30).map(({ job, options }) => ({ id: job.id, name: options.name, status: job.status, step: job.step, createdAt: job.createdAt }));
   }
 
+  projects() {
+    const projects = new Map();
+    for (const { job, options } of [...this.records.values()].reverse()) {
+      if (typeof job.result?.path !== 'string' || (job.status !== 'complete' && job.retryKind !== 'publish')) continue;
+      const path = resolve(options.parentDir, options.name);
+      const key = process.platform === 'win32' ? path.toLowerCase() : path;
+      const recorded = process.platform === 'win32' ? job.result.path.toLowerCase() : job.result.path;
+      if (key !== recorded || projects.has(key)) continue;
+      const { name, frontend, backend, database } = options;
+      projects.set(key, { id: job.id, name, path, frontend, backend, database });
+    }
+    return [...projects.values()];
+  }
+
   async persist(record) {
     record.job.updatedAt = new Date().toISOString();
     await this.store.save(record.job, record.options, record.checkpoint);

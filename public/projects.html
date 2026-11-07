@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eef3f3">
+  <title data-i18n="StackForge · 项目管理">StackForge · Projects</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M16 7H7v26h9m8-26h9v26h-9M16 27l8-14' fill='none' stroke='%231b6c80' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/projects.js"></script>
+</head>
+<body class="projects-page">
+  <a class="skip-link" href="#main" data-i18n="跳到主要内容">Skip to content</a>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="StackForge home" data-i18n-aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
+    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.7</span></div>
+    <a class="side-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a>
+    <a class="side-link" href="/#activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg><span data-i18n="任务记录">Task history</span></a>
+    <a class="side-active projects-nav" href="/projects" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2h7v2"/></svg><span data-i18n="项目管理">Projects</span></a>
+    <div class="side-footer"><span data-i18n="MIT 开源">MIT licensed</span><a href="https://github.com/kentsee02/stackforge" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a></div>
+  </aside>
+  <div class="body-shell">
+    <header class="topbar"><span><span data-i18n="工作空间">Workspace</span> <span class="slash">/</span> <span data-i18n="项目管理">Projects</span></span><div class="topbar-tools"><label class="language-control" for="language">Language / 语言<select id="language" aria-label="Language / 语言"><option value="en" lang="en">English</option><option value="zh-CN" lang="zh-CN">华文</option></select></label></div></header>
+    <main class="sheet projects-sheet" id="main">
+      <div class="title-row projects-title"><div><h1 data-i18n="项目管理">Projects</h1><p data-i18n="启动、停止或查看 StackForge 项目的开发日志。">Start, stop, and inspect your StackForge development sessions.</p></div><a class="secondary project-create-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a></div>
+      <p id="project-connection" class="project-connection" role="status" data-i18n="正在加载本地项目…">Loading local projects…</p>
+      <div id="project-empty" class="project-empty" hidden><h2 data-i18n="暂无已创建的项目">No projects yet</h2><p data-i18n="用 StackForge 创建的项目会出现在这里。">Projects you create with StackForge will appear here.</p></div>
+      <div id="project-manager" class="project-manager" hidden>
+        <section class="project-index" aria-labelledby="project-list-title">
+          <h2 id="project-list-title" data-i18n="本地项目">Local projects</h2>
+          <label class="project-search" for="project-search"><span data-i18n="搜索项目">Search projects</span><input type="search" id="project-search" autocomplete="off" placeholder="Name or folder" data-i18n-placeholder="名称或文件夹"></label>
+          <ul id="project-list" class="project-list"></ul>
+          <p id="project-no-match" class="hint" data-i18n="没有匹配的项目。" hidden>No matching projects.</p>
+        </section>
+        <section id="project-detail" class="project-detail" aria-labelledby="selected-project-name">
+          <div class="project-detail-head">
+            <div class="project-detail-name"><h2 id="selected-project-name" tabindex="-1"></h2><span id="selected-project-state" class="runtime-state" role="status"></span></div>
+            <button id="runtime-action" class="primary" type="button"><span></span></button>
+            <code id="selected-project-path"></code>
+          </div>
+          <p id="runtime-error" class="runtime-error" role="status" hidden></p>
+          <div class="runtime-log">
+            <h3 id="runtime-log-title" data-i18n="开发日志">Development log</h3>
+            <p id="runtime-log-truncated" class="hint" data-i18n="仅显示最近的日志。" hidden>Showing the most recent output.</p>
+            <p id="runtime-log-empty" data-i18n="启动项目后，输出会显示在这里。">Output will appear here after you start the project.</p>
+            <pre id="runtime-output" aria-labelledby="runtime-log-title" tabindex="0" hidden></pre>
+          </div>
+          <p id="runtime-database" class="hint" data-i18n="开发进程停止后，Docker 数据库仍可单独使用。" hidden>The Docker database remains available after the development processes stop.</p>
+        </section>
+      </div>
+    </main>
+  </div>
+  <template id="project-row"><li><button type="button" class="project-row" aria-pressed="false"><span class="project-row-copy"><strong></strong><small></small></span><span class="runtime-state"></span></button></li></template>
+</body>
+</html>

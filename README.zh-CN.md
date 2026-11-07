@@ -39,6 +39,12 @@ npm start
 
 Windows PowerShell：`$env:PORT=4311; npm start`。
 
+## 管理本地项目
+
+打开「项目管理」，可以查看当前这份 StackForge 创建过的项目，包括早期版本生成的项目。选中项目后点击「启动项目」，工具会运行它已有的 `scripts/dev.mjs`，并实时显示进程状态和输出。如果创建时跳过了依赖安装，请先安装该项目的依赖。
+
+「停止项目」会停止从这个页面启动的开发进程。正常关闭 StackForge 时，也会停止这些进程。Docker 数据库独立运行，可在项目目录用 `npm run db:down` 停止。每个项目最近一次运行的日志保存在内存中，重启 StackForge 后会清空。
+
 ## 生成内容
 
 - Vue 3 或 React，搭配 Vite 与 TypeScript；前端 `/api` 代理到本机 8080。

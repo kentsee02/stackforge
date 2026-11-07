@@ -13,8 +13,9 @@
 <body><a class="skip-link" href="#main" data-i18n="跳到主要内容">Skip to content</a>
   <aside class="sidebar">
     <a class="brand" href="/" aria-label="StackForge home" data-i18n-aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
-    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.6</span></div>
+    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.7</span></div>
     <a class="side-active" href="#project-form" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a><a class="side-link" href="#activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg><span data-i18n="任务记录">Task history</span></a>
+    <a class="side-link" href="/projects"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2h7v2"/></svg><span data-i18n="项目管理">Projects</span></a>
 
     <section class="requirements" aria-labelledby="requirements-title"><h2 id="requirements-title"><span data-i18n="运行环境">Requirements</span></h2><p id="node-version"><span data-i18n="正在检查 Node.js…">Checking Node.js…</span></p><ul id="requirements"></ul><p class="small"><span data-i18n="生成器会下载项目依赖。Java、Docker 等系统环境需预先安装。">Project dependencies are downloaded automatically. Install system tools such as Java and Docker first.</span></p></section>
     <div class="side-footer"><span><span data-i18n="MIT 开源">MIT licensed</span></span><a href="https://github.com/kentsee02/stackforge" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a></div>
@@ -22,7 +23,7 @@
   <div class="body-shell">
     <header class="topbar"><span><span data-i18n="工作空间">Workspace</span> <span class="slash">/</span> <span data-i18n="项目生成器">Project generator</span></span><div class="topbar-tools"><label class="language-control" for="language">Language / 语言<select id="language" aria-label="Language / 语言"><option value="en" lang="en">English</option><option value="zh-CN" lang="zh-CN">华文</option></select></label><span class="local-indicator"><span data-i18n="本机运行">Running locally</span></span></div></header>
     <main class="sheet" id="main">
-      <div class="title-row"><div><h1><span data-i18n="创建全栈项目">Create a full-stack project</span></h1><p><span data-i18n="选好技术栈，把重复的准备工作交给 StackForge。">Choose your stack. Let StackForge handle the setup.</span></p></div></div>
+      <div class="title-row"><div><h1><span data-i18n="创建全栈项目">Create a full-stack project</span></h1><p><span data-i18n="选好技术栈，把重复的准备工作交给 StackForge。">Choose your stack. Let StackForge handle the setup.</span></p></div><a class="mobile-project-link" href="/projects" data-i18n="项目管理">Projects</a></div>
       <div class="editor">
         <form id="project-form" class="configuration"><section class="quick-presets" aria-labelledby="preset-title"><h2 id="preset-title"><span data-i18n="从常用组合开始">Start with a preset</span></h2>
       <button type="button" data-preset="java"><span><span data-i18n="Java 全栈">Java full stack</span></span><small>Vue + Spring Boot + MySQL</small></button>

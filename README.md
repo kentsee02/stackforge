@@ -35,6 +35,12 @@ The default parent folder is **Projects in your user home directory**, such as `
 
 Desktop actions use the applications installed on your computer. On Windows, **Open terminal** starts PowerShell in the project folder. On Linux, **Browse…** requires `zenity` or `kdialog`. You can copy the project path from the result panel at any time.
 
+## Manage local projects
+
+Open **Projects** to find projects created by this StackForge checkout, including ones from earlier versions. Select a project and click **Start project** to run its existing `scripts/dev.mjs`. The page shows process status and streams the latest development output. Install the project's dependencies first if you skipped them during creation.
+
+**Stop project** stops development processes started from this page. A normal StackForge shutdown also stops them. Docker databases run separately and can be stopped with the generated project's `npm run db:down` command. Logs are kept in memory for the latest run of each project and cleared when StackForge restarts.
+
 ## Generated projects
 
 - Vue 3 or React with Vite and TypeScript. Frontend `/api` requests proxy to the backend on port 8080.

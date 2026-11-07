@@ -13,7 +13,7 @@ export class JobStore {
     let files;
     try { files = await readdir(this.directory); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
     const records = [];
-    for (const file of files.filter(file => file.endsWith('.json') && idPattern.test(file.slice(0, -5))).slice(-200)) {
+    for (const file of files.filter(file => file.endsWith('.json') && idPattern.test(file.slice(0, -5)))) {
       try {
         const record = JSON.parse(await readFile(join(this.directory, file), 'utf8'));
         if (record.version !== 1 || record.job?.id !== file.slice(0, -5) || !record.checkpoint || typeof record.checkpoint !== 'object') continue;

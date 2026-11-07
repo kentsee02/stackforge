@@ -21,10 +21,12 @@ test('message catalog covers static copy and stack choices with matching runtime
     assert.deepEqual([...zh.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort(), [...en.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort());
     if (!zh.includes('{')) assert.equal(translate(zh), en);
   }
-  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
-  assert.match(html, /<html lang="en">/);
-  assert.match(html, /id="language"/);
-  for (const match of html.matchAll(/data-i18n(?:-placeholder|-aria-label|-content)?="([^"]+)"/g)) assert.ok(known.has(match[1]), match[1]);
+  for (const file of ['index.html', 'projects.html']) {
+    const html = await readFile(new URL(`../public/${file}`, import.meta.url), 'utf8');
+    assert.match(html, /<html lang="en">/);
+    assert.match(html, /id="language"/);
+    for (const match of html.matchAll(/data-i18n(?:-placeholder|-aria-label|-content)?="([^"]+)"/g)) assert.ok(known.has(match[1]), match[1]);
+  }
   for (const items of Object.values(catalog)) for (const item of items) for (const field of ['name', 'detail']) assert.equal(/\p{Script=Han}/u.test(translate(item[field])), false);
 });
 
