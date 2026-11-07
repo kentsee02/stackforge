@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
-import { mkdtemp, mkdir, writeFile, rm, rename, readFile, realpath } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, writeFile, rm, rename, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -11,6 +11,7 @@ import { createApp } from '../src/server.mjs';
 import { createDesktop } from '../src/desktop.mjs';
 import { ProjectConfig, validatePorts } from '../src/project-config.mjs';
 import { ProjectOperations } from '../src/project-operations.mjs';
+import { generateProject } from '../src/generator.mjs';
 
 const childScript = `import { spawn } from 'node:child_process';
 const program = "const server = require('node:net').createServer(); server.listen(0, '127.0.0.1', () => console.log('ready', server.address().port));";
@@ -41,6 +42,53 @@ async function until(check) {
   }
   assert.fail('Expected runtime state was not reached');
 }
+
+test('generated and imported managed projects reject a replacement folder with a copied manifest', { timeout: 15000 }, async t => {
+  const parentDir = await workspace(t);
+  let recycled = 0;
+  const desktop = { ...createDesktop(), trashProject: async path => { recycled++; await rename(path, path + '-recycled'); } };
+  const options = { stateDir: join(parentDir, 'jobs'), desktop, check: async () => ({ canCreate: true }),
+    generate: (options, report, services) => generateProject(options, report, {
+      ...services, fetchImpl: async () => new Response('{"version":"1.2.3"}')
+    }) };
+  let app, url, token;
+  const open = async () => {
+    app = createApp(options);
+    await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
+    url = `http://127.0.0.1:${app.address().port}`;
+    ({ token } = await (await fetch(url + '/api/state')).json());
+  };
+  const close = async () => { await app.shutdownTasks(); await new Promise(resolve => app.close(resolve)); };
+  await open();
+  t.after(close);
+  const post = (route, body) => fetch(url + route, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, body: JSON.stringify(body) });
+  const creation = await post('/api/projects', { name: 'generated-project', parentDir, frontend: 'vue', backend: 'none', database: 'none', install: false, git: false });
+  assert.equal(creation.status, 202);
+  const { id } = await creation.json();
+  const generated = await until(async () => {
+    const job = await (await fetch(url + '/api/jobs/' + id)).json();
+    return job.status === 'complete' && { ...job.result, id };
+  });
+  const local = await createProject(parentDir, 'imported-project', '');
+  const imported = await post('/api/projects/import', { path: local.path });
+  assert.equal(imported.status, 201);
+  await close();
+  await open();
+  for (const { id, path, name } of [generated, await imported.json()]) {
+    const original = path + '-original';
+    await rename(path, original);
+    await cp(original, path, { recursive: true });
+    const trash = () => post(`/api/projects/${id}/trash`, { confirmName: name });
+    const refused = await trash();
+    assert.equal(refused.status, 409);
+    assert.match((await refused.json()).error, /no longer matches its record/);
+    await rename(path, path + '-replacement');
+    await rename(original, path);
+    assert.equal((await trash()).status, 200);
+  }
+  assert.equal(recycled, 2);
+});
 
 test('a managed run streams logs, rejects overlapping ports, stops its children, and can restart', async t => {
   const parent = await workspace(t);
@@ -255,6 +303,7 @@ test('project operations cancel and retry installation, manage the configured da
   let owner = directory;
   let container = '';
   let mavenFolder;
+  let minimumDockerProbeTime = 0;
   const databaseWrites = [];
   const operations = new ProjectOperations({
     install: async (args, { log, signal }) => {
@@ -270,6 +319,7 @@ test('project operations cancel and retry installation, manage the configured da
         return;
       }
       assert.equal(config.env.DB_PORT, '15432');
+      if ((args[0] === 'inspect' || args[1] === 'ps') && config.timeout < minimumDockerProbeTime) throw new Error('Docker status probe timed out.');
       if (args[0] === 'inspect') return `${JSON.stringify(owner)}\tdb\t${container}\thealthy\n`;
       if (args[1] === 'ps') return container ? 'abcdef123456\n' : '';
       if (args[1] === 'logs') { config.log('ready to accept connections\n'); return; }
@@ -302,8 +352,13 @@ test('project operations cancel and retry installation, manage the configured da
   assert.match((await detail()).dependencies.log, /npm output\nMaven output/);
 
   assert.equal((await get(`${route}/database`)).status, 'absent');
+  minimumDockerProbeTime = 4000;
   assert.equal((await post(`${route}/database-start`)).status, 202);
-  await until(async () => (await detail()).databaseTask.status === 'succeeded');
+  const started = await until(async () => {
+    const { databaseTask } = await detail();
+    return databaseTask.status !== 'running' && databaseTask;
+  });
+  assert.equal(started.status, 'succeeded', started.error);
   assert.deepEqual(await get(`${route}/database?logs=1`), { status: 'running', log: 'ready to accept connections\n' });
   owner = parent;
   assert.equal((await post(`${route}/database-stop`)).status, 202);

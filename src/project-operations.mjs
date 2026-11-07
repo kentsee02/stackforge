@@ -9,6 +9,8 @@ import { projectChecks, projectGitStatus } from './project-tools.mjs';
 import { transferDatabase } from './database-backup.mjs';
 
 const logLimit = 64 * 1024;
+// Compose probes can take several seconds while Docker Desktop is busy.
+const dockerProbeTimeout = 15_000;
 const databaseLabel = 'io.stackforge.database-id';
 const unverifiedDatabase = 'The database volume could not be verified as belonging to this project.';
 const composeStatusFormat = [
@@ -131,7 +133,7 @@ export class ProjectOperations {
   }
 
   async databaseContainers(config, includeMounts = false) {
-    const options = { ...config, stdoutOnly: true, timeout: 3000 };
+    const options = { ...config, stdoutOnly: true, timeout: dockerProbeTimeout };
     const ids = (await this.command('docker', ['compose', 'ps', '--all', '--format', '{{.ID}}'], options)).trim().split(/\r?\n/).filter(Boolean);
     if (!ids.length) return [];
     if (!ids.every(id => /^[a-f0-9]{12,64}$/.test(id))) throw new Error('Docker returned an unexpected container identifier.');
@@ -164,7 +166,7 @@ export class ProjectOperations {
     if (logs && state.status !== 'absent') {
       let output = '';
       await this.command('docker', ['compose', 'logs', '--no-color', '--tail', '100', 'db'], {
-        ...config, timeout: 3000, log: chunk => { output = (output + chunk).slice(-logLimit); }
+        ...config, timeout: dockerProbeTimeout, log: chunk => { output = (output + chunk).slice(-logLimit); }
       });
       state.log = output;
     }
@@ -192,9 +194,9 @@ export class ProjectOperations {
 
   async removeDatabase(project, ports, info) {
     const config = await databaseOptions(project, ports, info);
-    const docker = async (args, timeout = 5000) => {
+    const docker = async args => {
       try {
-        return await this.command('docker', args, { ...config, timeout, stdoutOnly: true, stdoutLimit: 128 * 1024 });
+        return await this.command('docker', args, { ...config, timeout: dockerProbeTimeout, stdoutOnly: true, stdoutLimit: 128 * 1024 });
       } catch {
         throw new Error('Docker could not finish deleting the database. Check that Docker is running and retry.');
       }
@@ -240,7 +242,7 @@ export class ProjectOperations {
     if (users.some(id => !containers.some(container => id.startsWith(container.id)))) {
       throw new Error('The database volume is shared with another container.');
     }
-    if (containers.length) await docker(['container', 'rm', '--force', ...containers.map(container => container.id)], 15000);
+    if (containers.length) await docker(['container', 'rm', '--force', ...containers.map(container => container.id)]);
     await docker(['volume', 'rm', name]);
     return true;
   }

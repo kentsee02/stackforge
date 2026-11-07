@@ -7,6 +7,7 @@ import { extractZip } from './zip.mjs';
 import { installMavenDependencies, installNodeDependencies, npm, run, throwIfCancelled } from './process.mjs';
 import { initializeGit, publishProject } from './git.mjs';
 import { createSteps, verifyStaging, wasPromoted, writeOwnedFiles } from './checkpoint.mjs';
+import { directoryIdentity, sameDirectory } from './project-identity.mjs';
 import { json, frontendFiles, expressFiles, nestFiles, databaseFiles, devScript, generatedReadme } from './templates.mjs';
 
 export async function download(url, { fetchImpl = fetch, binary = false, signal } = {}) {
@@ -50,18 +51,21 @@ export async function generateProject(input, report = () => {}, services = {}) {
   const put = (root, files) => writeOwnedFiles(root, files, signal);
   if (!checkpoint.promoted && await wasPromoted(target, checkpoint.owner)) { checkpoint.promoted = true; await save(); }
   if (checkpoint.promoted) {
-    const info = await lstat(target);
+    const info = await lstat(target, { bigint: true });
+    const changed = '已创建的项目位置或标识发生变化，已停止恢复。';
+    if (!info.isDirectory() || info.isSymbolicLink() || (checkpoint.folderIdentity && !sameDirectory(info, checkpoint.folderIdentity))) throw new Error(changed);
     const manifest = JSON.parse(await readFile(join(target, 'stackforge.json'), 'utf8'));
-    if (!info.isDirectory() || info.isSymbolicLink() || manifest.generator !== 'StackForge' || manifest.options?.name !== options.name) throw new Error('已创建的项目位置或标识发生变化，已停止恢复。');
+    if (manifest.generator !== 'StackForge' || manifest.options?.name !== options.name) throw new Error(changed);
   }
   if (!checkpoint.promoted) {
     try { await access(target); throw new Error('目标目录已经存在，请更换项目名。'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (options.git) await command('git', ['--version']);
-    if (checkpoint.staging) await verifyStaging(checkpoint.staging, options, checkpoint.owner);
+    if (checkpoint.staging) await verifyStaging(checkpoint.staging, options, checkpoint.owner, checkpoint.folderIdentity);
     else {
       await mkdir(options.parentDir, { recursive: true });
       checkpoint.staging = await mkdtemp(join(options.parentDir, '.stackforge-'));
+      checkpoint.folderIdentity = directoryIdentity(await lstat(checkpoint.staging, { bigint: true }));
       checkpoint.owner = randomBytes(24).toString('hex');
       await writeFile(join(checkpoint.staging, '.stackforge-owner'), checkpoint.owner, { mode: 0o600 });
       await save();
@@ -179,6 +183,7 @@ export async function generateProject(input, report = () => {}, services = {}) {
     try {
       try { await access(target); throw new Error('目标目录已经存在，请更换项目名。'); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
+      await verifyStaging(staging, options, checkpoint.owner, checkpoint.folderIdentity);
       await rename(staging, target);
       checkpoint.promoted = true;
       await save();
@@ -197,7 +202,10 @@ export async function generateProject(input, report = () => {}, services = {}) {
     step(result.remote?.status === 'failed' ? '本地项目已创建，GitHub 发布未完成' : '项目已创建', 100);
     return result;
   } catch (error) {
-    if (!services.checkpoint && !checkpoint.promoted && staging) await rm(staging, { recursive: true, force: true });
+    if (!services.checkpoint && !checkpoint.promoted && staging) {
+      const owned = await verifyStaging(staging, options, checkpoint.owner, checkpoint.folderIdentity).then(() => true, () => false);
+      if (owned) await rm(staging, { recursive: true, force: true });
+    }
     await save();
     throwIfCancelled(signal);
     throw error;

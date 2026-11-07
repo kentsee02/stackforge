@@ -1,11 +1,12 @@
 import { access, lstat, readFile, realpath, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { throwIfCancelled } from './process.mjs';
+import { sameDirectory } from './project-identity.mjs';
 
-export async function verifyStaging(path, options, owner) {
+export async function verifyStaging(path, options, owner, identity) {
   if (!owner || dirname(resolve(path)) !== resolve(options.parentDir) || !/^\.stackforge-[a-zA-Z0-9]+$/.test(basename(path))) throw new Error('保留目录不属于这个创建任务，已停止恢复。');
-  const info = await lstat(path);
-  if (!info.isDirectory() || info.isSymbolicLink() || dirname(await realpath(path)) !== await realpath(options.parentDir)) throw new Error('保留目录位置发生变化，已停止恢复。');
+  const info = await lstat(path, { bigint: true });
+  if (!info.isDirectory() || info.isSymbolicLink() || (identity && !sameDirectory(info, identity)) || dirname(await realpath(path)) !== await realpath(options.parentDir)) throw new Error('保留目录位置发生变化，已停止恢复。');
   if (await readFile(join(path, '.stackforge-owner'), 'utf8') !== owner) throw new Error('保留目录的任务标识不匹配。');
 }
 

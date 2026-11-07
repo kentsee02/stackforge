@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { JobStore } from './job-store.mjs';
 import { cancelled, throwIfCancelled } from './process.mjs';
+import { recordedIdentity } from './project-identity.mjs';
 
 export class Jobs {
   constructor({ directory, generate, check, publish }) {
@@ -26,14 +27,14 @@ export class Jobs {
 
   projects() {
     const projects = new Map();
-    for (const { job, options } of [...this.records.values()].reverse()) {
+    for (const { job, options, checkpoint } of [...this.records.values()].reverse()) {
       if (typeof job.result?.path !== 'string' || (job.status !== 'complete' && job.retryKind !== 'publish')) continue;
       const path = resolve(options.parentDir, options.name);
       const key = process.platform === 'win32' ? path.toLowerCase() : path;
       const recorded = process.platform === 'win32' ? job.result.path.toLowerCase() : job.result.path;
       if (key !== recorded || projects.has(key)) continue;
       const { name, frontend, backend, database } = options;
-      projects.set(key, { id: job.id, name, path, frontend, backend, database });
+      projects.set(key, { id: job.id, name, path, frontend, backend, database, folderIdentity: recordedIdentity(checkpoint.folderIdentity) });
     }
     return [...projects.values()];
   }

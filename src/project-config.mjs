@@ -18,7 +18,7 @@ export function importedProject(id, path, source) {
   };
   if (!['name', 'frontend', 'backend', 'database'].every(key => typeof source?.[key] === 'string')) throw new Error('Invalid project record.');
   const { name, frontend, backend, database } = validateOptions({ name: source.name, parentDir: dirname(path), frontend: source.frontend, backend: source.backend, database: source.database, install: false, git: false });
-  return { id, path, name, frontend, backend, database, imported: true, ...cloned };
+  return { id, path, name, frontend, backend, database, imported: true, folderIdentity: recordedIdentity(source.folderIdentity), ...cloned };
 }
 
 export function defaultPorts(project) {

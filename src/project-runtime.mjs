@@ -5,9 +5,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { portAvailable } from './environment.mjs';
 import { terminateTree } from './process.mjs';
 import { defaultPorts, projectPathKey } from './project-config.mjs';
+import { sameDirectory } from './project-identity.mjs';
 
 const logLimit = 64 * 1024;
 const active = new Set(['starting', 'running', 'stopping']);
+export const recordedProjectChanged = 'The recorded StackForge project is missing, has moved, or no longer matches its record.';
 
 async function probeService(url, signal) {
   try {
@@ -61,10 +63,11 @@ export async function inspectRecordedProject(project) {
       return { directory, manifest: {} };
     }
     const info = await readProjectFolder(project.path);
+    if (project.folderIdentity && !sameDirectory(await lstat(info.directory, { bigint: true }), project.folderIdentity)) throw new Error();
     if (['name', 'frontend', 'backend', 'database'].some(key => info.manifest.options?.[key] !== project[key])) throw new Error();
     return info;
   } catch {
-    throw new Error('The recorded StackForge project is missing, has moved, or no longer matches its record.');
+    throw new Error(recordedProjectChanged);
   }
 }
 

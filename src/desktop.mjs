@@ -133,7 +133,7 @@ export function createDesktop({ platform = process.platform, env = process.env, 
         await launch(available.terminal, name === 'gnome-terminal' || name === 'xfce4-terminal' ? ['--working-directory', path] : name === 'konsole' ? ['--workdir', path] : [], config);
       }
     },
-    async trashProject(path, expectedIdentity) {
+    async trashProject(path, expectedIdentity, identityError = cloneFolderChanged) {
       path = absoluteDirectory(path, platform);
       const info = await lstatDirectory(path);
       if (!info.isDirectory() || info.isSymbolicLink() || paths.parse(path).root === path) throw new Error('The project folder cannot be safely recycled.');
@@ -154,11 +154,11 @@ export function createDesktop({ platform = process.platform, env = process.env, 
         if (!executable) throw new Error();
         if (expectedIdentity) {
           const current = await lstatDirectory(path, { bigint: true }).catch(() => null);
-          if (!current || !sameDirectory(current, expectedIdentity)) throw new Error(cloneFolderChanged);
+          if (!current || !sameDirectory(current, expectedIdentity)) throw new Error(identityError);
         }
         await command(executable, args, config);
       } catch (error) {
-        if (error.message === cloneFolderChanged) throw error;
+        if (error.message === identityError) throw error;
         throw new Error('The system trash did not accept this folder. Check the drive and close any apps using the project.');
       }
     },

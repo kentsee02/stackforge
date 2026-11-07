@@ -13,11 +13,12 @@ import { Jobs } from './jobs.mjs';
 import { absoluteDirectory, defaultProjectsDirectory } from './paths.mjs';
 import { Settings } from './settings.mjs';
 import { createDesktop } from './desktop.mjs';
-import { ProjectRuntime, inspectRecordedProject, projectDirectory, readProjectFolder, developmentScript, startupDiagnostic } from './project-runtime.mjs';
+import { ProjectRuntime, inspectRecordedProject, projectDirectory, readProjectFolder, developmentScript, startupDiagnostic, recordedProjectChanged } from './project-runtime.mjs';
 import { ProjectConfig, defaultPorts, validatePorts, importedProject, projectPathKey } from './project-config.mjs';
 import { ProjectOperations } from './project-operations.mjs';
 import { cloneGithub, verifyClone } from './project-clone.mjs';
 import { detectFrameworks } from './project-detection.mjs';
+import { directoryIdentity } from './project-identity.mjs';
 import { backupLimit } from './database-backup.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -36,7 +37,7 @@ function removeOnly(project) {
 }
 
 function projectDetails(project) {
-  const { cloneId, cloneIdentity, ...details } = project;
+  const { cloneId, cloneIdentity, folderIdentity, ...details } = project;
   return { ...details, ...(cloneId && { cloned: true }), ...(removeOnly(project) && { removeOnly: true }),
     ...(project.unmanaged && { external: !project.frameworks.length }) };
 }
@@ -64,7 +65,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
       const { manifest } = await readProjectFolder(directory);
       await developmentScript(directory);
       const { name, frontend, backend, database } = manifest.options ?? {};
-      project = importedProject(randomUUID(), directory, { name, frontend, backend, database, ...clone });
+      const folderIdentity = directoryIdentity(await lstat(directory, { bigint: true }));
+      project = importedProject(randomUUID(), directory, { name, frontend, backend, database, folderIdentity, ...clone });
     } catch {
       project = importedProject(randomUUID(), directory, { unmanaged: true, ...clone, frameworks: await detectFrameworks(directory) });
     }
@@ -176,6 +178,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
         const chunks = []; let size = 0;
         for await (const chunk of req) { size += chunk.length; if (size > 16384) return send(res, 413, { error: '请求内容过大。' }); chunks.push(chunk); }
+        if (closing) return send(res, 409, { error: 'StackForge is shutting down.' });
         const body = Buffer.concat(chunks).toString('utf8');
         let payload;
         try { payload = JSON.parse(body); if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error(); }
@@ -184,7 +187,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           return send(res, 409, { error: 'Wait for the GitHub clone to finish.' });
         }
         if (url.pathname === '/api/projects/clone') {
-          if (closing || jobs.busy || removals.size) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
+          if (jobs.busy || removals.size) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
           const controller = new AbortController();
           res.once('close', () => { if (!res.writableFinished) controller.abort(); });
           const done = (async () => {
@@ -199,7 +202,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         }
         if (removals.size && (['/api/projects', '/api/projects/import'].includes(url.pathname) || /\/api\/jobs\/[^/]+\/(publish|retry|open)$/.test(url.pathname))) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
         if (url.pathname === '/api/projects/import') {
-          if (closing || jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
+          if (jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
           try { return send(res, 201, await registerProject(payload.path)); }
           catch (error) { return send(res, 400, { error: error.message }); }
         }
@@ -230,7 +233,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             } catch (error) { return send(res, 409, { error: error.message }); }
           }
           if (action === 'ports') {
-            if (closing || ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before changing its ports.' });
+            if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before changing its ports.' });
             const saving = (async () => {
               const ports = validatePorts(project, payload.ports);
               const { manifest } = await inspectRecordedProject(project);
@@ -245,7 +248,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           }
           if (action === 'trash') {
             if (payload.confirmName !== project.name) return send(res, 400, { error: 'Enter the exact project name to confirm deletion.' });
-            if (closing || jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
+            if (jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
             if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before moving it to the trash.' });
             if (removeOnly(project)) {
               await projectConfig.removeImport(project.id);
@@ -257,7 +260,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
               const databaseDeleted = project.database !== 'none' && await operations.removeDatabase(project, projectConfig.ports(project), info);
               try {
                 if (project.cloneId && project.database !== 'none') await verifyClone(info.directory, project.cloneId, project.cloneIdentity);
-                await desktop.trashProject(info.directory, project.cloneIdentity);
+                if (project.cloneId) await desktop.trashProject(info.directory, project.cloneIdentity);
+                else await desktop.trashProject(info.directory, project.folderIdentity, recordedProjectChanged);
                 if (await locationExists(project.path)) throw new Error('The project is still at its original location. Check the system trash before retrying.');
               } catch (error) {
                 if (databaseDeleted) throw new Error('The database was deleted, but the project folder could not be moved to the trash.');

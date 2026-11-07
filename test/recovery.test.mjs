@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, appendFile, stat, rm, mkdir } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile, appendFile, stat, rm, mkdir, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
+import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { generateProject } from '../src/generator.mjs';
 import { createApp, identity } from '../src/server.mjs';
@@ -67,6 +68,18 @@ test('resuming refuses changed options and unowned directories without modifying
   checkpoint.staging = outside;
   await assert.rejects(generateProject(options, () => {}, { checkpoint, fetchImpl }), /不属于/);
   assert.equal(await readFile(join(outside, 'keep.txt'), 'utf8'), 'keep');
+});
+
+test('resuming rejects a copy of the original staging folder even with its ownership marker', async t => {
+  const parentDir = await temp(t, 'stackforge-staging-identity-');
+  const options = { ...base, parentDir };
+  const checkpoint = {};
+  await assert.rejects(generateProject(options, () => {}, { checkpoint, fetchImpl, npm: async () => { throw new Error('offline'); } }), /offline/);
+  const original = checkpoint.staging + '-original';
+  await rename(checkpoint.staging, original);
+  await cp(original, checkpoint.staging, { recursive: true });
+  await assert.rejects(generateProject(options, () => {}, { checkpoint, fetchImpl, npm: async () => {} }), /位置发生变化/);
+  assert.equal((await stat(checkpoint.staging)).isDirectory(), true);
 });
 
 test('cancelling a command terminates its descendant process and stops file writes', async t => {
@@ -169,6 +182,31 @@ test('shutdown waits for a starting task to finish saving its cancelled state', 
   }
   assert.equal(jobs.view(await created).status, 'cancelled');
   assert.equal(checks, 0);
+});
+
+test('HTTP requests with unfinished bodies cannot create a job after shutdown starts', { timeout: 10000 }, async t => {
+  const directory = await temp(t, 'stackforge-shutdown-');
+  const app = createApp({ stateDir: false, check: async () => ({ canCreate: true }), generate: async () => ({ path: '/project' }) });
+  await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => app.close(resolve)));
+  const url = `http://127.0.0.1:${app.address().port}`;
+  const { token } = await (await fetch(url + '/api/state')).json();
+  const accepted = once(app, 'request');
+  const pending = request(url + '/api/projects', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }
+  });
+  const response = once(pending, 'response');
+  pending.write(' ');
+  try {
+    await accepted;
+    await app.shutdownTasks();
+  } finally {
+    pending.end(JSON.stringify({ ...base, parentDir: directory }));
+  }
+  const [result] = await response;
+  result.resume();
+  assert.equal(result.statusCode, 409);
+  assert.deepEqual(await (await fetch(url + '/api/jobs')).json(), []);
 });
 
 test('loading job history skips invalid timestamps and keeps valid records', async t => {
