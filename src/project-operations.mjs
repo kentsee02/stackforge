@@ -8,6 +8,7 @@ import { inspectRecordedProject, startupDiagnostic } from './project-runtime.mjs
 import { projectChecks, projectGitStatus } from './project-tools.mjs';
 import { transferDatabase } from './database-backup.mjs';
 import { resolveStartup } from './project-startup.mjs';
+import { detectDependencyPlan } from './dependency-plan.mjs';
 
 const logLimit = 64 * 1024;
 // Compose probes can take several seconds while Docker Desktop is busy.
@@ -57,7 +58,7 @@ export class ProjectOperations {
     return result;
   }
 
-  start(project, action, ports, checkId) {
+  start(project, action, ports, checkId, installPlanId) {
     if (this.closing) throw new Error('StackForge is shutting down.');
     const key = projectPathKey(project.path);
     const entry = this.projects.get(key) ?? {};
@@ -72,7 +73,9 @@ export class ProjectOperations {
     this.projects.set(key, entry);
     const options = { signal: controller.signal, log: chunk => { task.log = (task.log + chunk).slice(-logLimit); } };
     const work = {
-      dependencies: () => project.unmanaged ? this.installConfiguredDependencies(project, task, options) : this.installDependencies(project, task, options),
+      dependencies: () => project.unmanaged
+        ? installPlanId ? this.installDetectedDependencies(project, task, options, installPlanId) : this.installConfiguredDependencies(project, task, options)
+        : this.installDependencies(project, task, options),
       databaseTask: () => this.changeDatabase(project, action, ports, options),
       checkTask: () => this.runCheck(project, checkId, options)
     };
@@ -142,6 +145,23 @@ export class ProjectOperations {
       throwIfCancelled(options.signal);
       options.log(`[${name}]\n`);
       await this.command(installCommand, [], { ...options, cwd, shell: true });
+    }
+  }
+
+  async installDetectedDependencies(project, task, options, reviewedId) {
+    const plan = await detectDependencyPlan(project);
+    throwIfCancelled(options.signal);
+    if (!plan.steps.length || plan.id !== reviewedId) throw new Error('The detected install plan changed. Refresh detection and review it again.');
+    const { commands } = await resolveStartup(project, plan.steps, plan.identity);
+    task.phase = 'detected';
+    for (const { tool, command, args, directory, executable, cwd } of commands) {
+      throwIfCancelled(options.signal);
+      options.log(`[${directory}] ${command}\n`);
+      const config = { ...options, cwd };
+      if (tool === 'npm') await this.install(args, config);
+      else if (tool === 'Maven') await maven(args, config, this.command);
+      else if (executable) await this.command(join(cwd, executable), args, config);
+      else await this.command(command, [], { ...config, shell: true });
     }
   }
 

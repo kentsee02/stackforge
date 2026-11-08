@@ -19,7 +19,7 @@ const pythonFrameworks = [['Django', 'django'], ['FastAPI', 'fastapi'], ['Flask'
 const known = new Set([...npmFrameworks.map(([name]) => name), ...pythonFrameworks.map(([name]) => name), 'Spring Boot']);
 export const validFrameworks = values => Array.isArray(values) ? [...new Set(values.filter(value => known.has(value)))] : [];
 
-async function localText(folder, filename) {
+export async function localText(folder, filename) {
   try {
     const path = join(folder, filename);
     const file = await lstat(path);
@@ -32,7 +32,7 @@ async function localDirectory(path) {
   return (await lstat(path).catch(() => null))?.isDirectory() === true;
 }
 
-function npmManifest(text) {
+export function npmManifest(text) {
   try { return JSON.parse(text.replace(/^\uFEFF/, '')); }
   catch { return undefined; }
 }
@@ -71,10 +71,10 @@ async function detectIn(folder) {
   return frameworks;
 }
 
-const conventional = ['frontend', 'backend', 'client', 'server', 'web', 'api', 'apps/*', 'packages/*'];
+export const conventional = ['frontend', 'backend', 'client', 'server', 'web', 'api', 'apps/*', 'packages/*'];
 const ignored = name => name.startsWith('.') || name === 'node_modules';
 
-function workspaceSegments(pattern) {
+export function workspaceSegments(pattern) {
   if (typeof pattern !== 'string' || pattern.length > 512) return;
   const segments = pattern.replace(/^\.\//, '').replace(/\/$/, '').split('/');
   if (segments.length > 8 || segments.some(segment => ignored(segment) || !/^[\p{L}\p{N}@._*-]+$/u.test(segment))) return;
@@ -105,16 +105,24 @@ async function collectWorkspace(directory, segments, folders, budget, depth = 0)
   } catch { /* Directory contents can change during detection. */ }
 }
 
-export async function detectFrameworks(directory) {
-  if (!await localDirectory(directory)) return [];
-  const folders = new Set([directory]);
-  const workspaces = npmManifest(await localText(directory, 'package.json'))?.workspaces;
+export function declaredWorkspaces(manifest) {
+  const workspaces = manifest?.workspaces;
   const declared = Array.isArray(workspaces) ? workspaces : workspaces?.packages;
-  const patterns = new Set([...(Array.isArray(declared) ? declared.slice(0, 32) : []), ...conventional]);
-  const budget = { left: 2048 };
+  return Array.isArray(declared) ? declared : [];
+}
+
+export async function workspaceFolders(directory, patterns, budget = { left: 2048 }) {
+  const folders = new Set();
   for (const pattern of patterns) {
     const segments = workspaceSegments(pattern);
     if (segments) await collectWorkspace(directory, segments, folders, budget);
   }
+  return folders;
+}
+
+export async function detectFrameworks(directory) {
+  if (!await localDirectory(directory)) return [];
+  const manifest = npmManifest(await localText(directory, 'package.json'));
+  const folders = new Set([directory, ...await workspaceFolders(directory, new Set([...declaredWorkspaces(manifest).slice(0, 32), ...conventional]))]);
   return validFrameworks((await Promise.all([...folders].map(detectIn))).flat());
 }

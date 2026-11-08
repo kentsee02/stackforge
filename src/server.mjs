@@ -20,6 +20,7 @@ import { cloneGithub, verifyClone } from './project-clone.mjs';
 import { detectFrameworks } from './project-detection.mjs';
 import { directoryIdentity } from './project-identity.mjs';
 import { resolveStartup, validateStartup } from './project-startup.mjs';
+import { detectDependencyPlan } from './dependency-plan.mjs';
 import { backupLimit } from './database-backup.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -117,7 +118,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         }));
         return send(res, 200, { projects: projects.filter(Boolean) });
       }
-      const projectView = /^\/api\/projects\/([^/]+)\/(database|checks|git)$/.exec(url.pathname);
+      const projectView = /^\/api\/projects\/([^/]+)\/(database|checks|git|dependencies)$/.exec(url.pathname);
       if (req.method === 'GET' && projectView) {
         const [, id, view] = projectView;
         const project = managedProjects().find(item => item.id === id);
@@ -125,6 +126,11 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         try {
           if (view === 'checks') return send(res, 200, { checks: await operations.checks(project) });
           if (view === 'git') return send(res, 200, await operations.git(project));
+          if (view === 'dependencies') {
+            if (!project.unmanaged) return send(res, 409, { error: 'This project uses the StackForge launcher.' });
+            const { id, steps, issues } = await detectDependencyPlan(project);
+            return send(res, 200, { id, steps: steps.map(({ tool, command, directory, evidence }) => ({ tool, command, directory, evidence })), issues });
+          }
           return send(res, 200, await operations.database(project, projectConfig.ports(project), url.searchParams.has('logs')));
         } catch (error) {
           return send(res, 409, { error: error.message.split('\n')[0].trim(), diagnostic: view === 'database' ? startupDiagnostic(project, error.message) : undefined });
@@ -221,7 +227,9 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             return send(res, 409, { error: 'This action requires a StackForge project.' });
           }
           if (project.unmanaged && action === 'start' && !project.startup?.services.some(service => service.command)) return send(res, 409, { error: 'Save a startup configuration before starting this project.' });
-          if (project.unmanaged && action === 'install' && !project.startup?.services.some(service => service.installCommand)) return send(res, 409, { error: 'Save an install command before installing dependencies.' });
+          const detectedInstall = project.unmanaged && action === 'install' && payload.mode === 'detected';
+          if (detectedInstall && (typeof payload.planId !== 'string' || !/^[a-f0-9]{64}$/.test(payload.planId))) return send(res, 400, { error: 'Review the detected install plan before running it.' });
+          if (project.unmanaged && action === 'install' && !detectedInstall && !project.startup?.services.some(service => service.installCommand)) return send(res, 409, { error: 'Save an install command before installing dependencies.' });
           if (removals.has(project.path)) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
           if (configWrites.has(project.path)) return send(res, 409, { error: 'Wait for the project settings to finish saving.' });
           if (action === 'install-cancel' || action === 'check-cancel') {
@@ -236,7 +244,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             if (action === 'run-check' && (inTransition || session.status === 'running')) return send(res, 409, { error: 'Stop the project before running checks.' });
             if (action.startsWith('database-') && (inTransition || session.status === 'running' && !session.initialized)) return send(res, 409, { error: 'Wait for the project to become ready or stop it first.' });
             try {
-              operations.start(project, action, projectConfig.ports(project), payload.check);
+              operations.start(project, action, projectConfig.ports(project), payload.check, detectedInstall ? payload.planId : undefined);
               return send(res, 202, operations.status(project, true));
             } catch (error) { return send(res, 409, { error: error.message }); }
           }
