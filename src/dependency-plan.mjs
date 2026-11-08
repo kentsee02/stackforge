@@ -99,9 +99,8 @@ async function otherInstalls(directory) {
 }
 
 export async function detectDependencyPlan(project) {
-  const root = project.path;
   const saved = project.startup;
-  const { identity } = await resolveStartup(project, [], saved?.identity ?? project.cloneIdentity);
+  const { identity, root } = await resolveStartup(project, [], saved?.identity ?? project.cloneIdentity);
   const budget = { left: 2048 };
   const folders = new Set([root, ...await workspaceFolders(root, conventional, budget)]);
   for (const service of saved?.services ?? []) {

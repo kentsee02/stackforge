@@ -39,5 +39,5 @@ export async function resolveStartup(project, services, expectedIdentity) {
     }
     return { ...service, cwd };
   }));
-  return { identity, commands };
+  return { identity, root, commands };
 }

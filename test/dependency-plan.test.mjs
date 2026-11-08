@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { detectDependencyPlan } from '../src/dependency-plan.mjs';
 import { createApp } from '../src/server.mjs';
@@ -50,7 +50,8 @@ test('detects explicit tools and workspaces, skips ambiguous folders, and accept
     'services/pip/requirements.txt': 'flask==3.0.0',
     ['services/pip/' + python]: 'interpreter fixture'
   });
-  const plan = await detectDependencyPlan({ path: root, startup: { services: [{ directory: 'services/python' }, { directory: 'services/pip' }] } });
+  const startup = { services: [{ directory: 'services/python' }, { directory: 'services/pip' }] };
+  const plan = await detectDependencyPlan({ path: root, startup });
   const commands = Object.fromEntries(plan.steps.map(step => [step.directory, step.command]));
   assert.deepEqual(commands, {
     '.': 'npm ci',
@@ -63,6 +64,10 @@ test('detects explicit tools and workspaces, skips ambiguous folders, and accept
     'services/pip': python + ' -m pip install -r requirements.txt'
   });
   assert.deepEqual(plan.issues.map(issue => issue.directory).sort(), ['api', 'apps/conflict', 'packages/unknown']);
+  const alias = await fixture(t, {});
+  await symlink(dirname(root), join(alias, 'alias'), 'junction');
+  const aliased = await detectDependencyPlan({ path: join(alias, 'alias', basename(root)), startup });
+  assert.equal(aliased.id, plan.id);
 });
 
 test('only installs a reviewed plan and keeps the custom fallback', { timeout: 20000 }, async t => {
@@ -114,5 +119,5 @@ test('only installs a reviewed plan and keeps the custom fallback', { timeout: 2
   const updated = await get(project + '/dependencies');
   await post(project + '/install', { mode: 'detected', planId: updated.id }, 202);
   assert.equal((await task()).status, 'succeeded');
-  assert.deepEqual(calls[1], { args: ['ci'], cwd: root });
+  assert.deepEqual(calls[1], { args: ['ci'], cwd: await realpath(root) });
 });
