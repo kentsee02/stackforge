@@ -26,10 +26,11 @@ export async function terminateTree(child) {
   }
 }
 
-export function run(command, args, { cwd, env = process.env, log = () => {}, timeout = 600_000, signal, stdoutOnly = false, stdoutLimit = 4000, input, binaryLimit } = {}) {
+export function run(command, args, { cwd, env = process.env, log = () => {}, timeout = 600_000, signal, stdoutOnly = false, stdoutLimit = 4000, input, binaryLimit, shell = false, onSpawn } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(cancelled()); return; }
-    const child = spawn(command, args, { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd, env, shell, windowsHide: true, detached: process.platform !== 'win32', stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    if (onSpawn) child.once('spawn', onSpawn);
     let tail = '';
     let stdout = '';
     let stopped;
@@ -66,7 +67,7 @@ export function run(command, args, { cwd, env = process.env, log = () => {}, tim
       child.stdin.end(input);
     }
     const abort = () => stop(cancelled());
-    const timer = setTimeout(() => stop(new Error(`${command} 执行超时，请检查网络后重试。`)), timeout);
+    const timer = timeout > 0 ? setTimeout(() => stop(new Error(`${command} 执行超时，请检查网络后重试。`)), timeout) : undefined;
     signal?.addEventListener('abort', abort, { once: true });
     const clean = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); };
     child.on('error', error => { clean(); reject(stopped ?? new Error(`无法执行 ${command}：${error.message}`)); });

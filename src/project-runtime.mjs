@@ -3,20 +3,21 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { portAvailable } from './environment.mjs';
-import { terminateTree } from './process.mjs';
+import { run, terminateTree } from './process.mjs';
 import { defaultPorts, projectPathKey } from './project-config.mjs';
 import { sameDirectory } from './project-identity.mjs';
+import { resolveStartup } from './project-startup.mjs';
 
 const logLimit = 64 * 1024;
 const active = new Set(['starting', 'running', 'stopping']);
 export const recordedProjectChanged = 'The recorded StackForge project is missing, has moved, or no longer matches its record.';
 
-async function probeService(url, signal) {
+async function probeService(url, signal, custom) {
   try {
-    const response = await fetch(url, { redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(1500)]) });
-    if (!response.ok || !url.endsWith('/api/health')) {
+    const response = await fetch(url, { redirect: custom ? 'manual' : 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(1500)]) });
+    if (custom || !response.ok || !url.endsWith('/api/health')) {
       await response.body?.cancel();
-      return response.ok;
+      return custom || response.ok;
     }
     const chunks = [];
     let size = 0;
@@ -126,17 +127,61 @@ export class ProjectRuntime {
     const key = projectPathKey(project.path);
     if (active.has(this.runs.get(key)?.status)) return;
     const effective = { ...defaultPorts(project), ...overrides };
-    const ports = [effective.frontend, effective.backend, overrides.database].filter(Boolean);
+    const startup = project.startup;
+    const ports = (startup ? startup.services.map(service => service.port) : [effective.frontend, effective.backend, overrides.database]).filter(Boolean);
     const reserved = ports.find(port => [...this.runs.values()].some(other => active.has(other.status) && other.ports.includes(port)));
     if (reserved) throw new Error(`Development port ${reserved} is already in use.`);
     const services = {};
+    if (startup) for (const [index, { name, port }] of startup.services.entries()) {
+      if (port) services[index] = { name, url: `http://127.0.0.1:${port}/`, ready: false };
+    }
     if (effective.frontend) services.frontend = { url: `http://127.0.0.1:${effective.frontend}/`, ready: false };
     if (effective.backend) services.backend = { url: `http://127.0.0.1:${effective.backend}/api/health`, ready: false };
     const entry = { status: 'starting', ports, services, readiness: new AbortController(), log: '', truncated: false };
     this.runs.set(key, entry);
-    entry.done = this.launch(project, entry, effective, overrides).catch(error => {
+    const launch = startup ? this.launchStartup(project, entry, startup) : this.launch(project, entry, effective, overrides);
+    entry.done = launch.catch(error => {
       if (entry.status !== 'stopping') entry.error = error.message;
     }).finally(() => { entry.readiness.abort(); entry.status = entry.error ? 'failed' : 'stopped'; entry.child = undefined; });
+  }
+
+  capture(entry, chunk) {
+    const output = entry.log + chunk.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+    if (output.length > logLimit) entry.truncated = true;
+    entry.log = output.slice(-logLimit);
+  }
+
+  markRunning(entry) {
+    if (entry.status !== 'starting') return;
+    entry.launchedAt = Date.now();
+    entry.status = 'running';
+    this.watchReadiness(entry).catch(() => {});
+  }
+
+  async launchStartup(project, entry, { services, identity }) {
+    const { commands } = await resolveStartup(project, services, identity);
+    const signal = entry.readiness.signal;
+    for (const port of entry.ports) {
+      if (signal.aborted) return;
+      if (!await this.probePort(port)) throw new Error(`Development port ${port} is already in use.`);
+    }
+    if (signal.aborted) return;
+
+    let remaining = commands.length;
+    const onSpawn = () => { if (--remaining === 0) this.markRunning(entry); };
+    await Promise.all(commands.map(({ name, cwd, command, port }) => {
+      const ended = error => {
+        if (signal.aborted) return;
+        this.capture(entry, `[${name}] ${error?.message ?? 'Process exited (0).'}\n`);
+        entry.error = 'A startup service exited. See the runtime log for details.';
+        this.stopRun(entry);
+      };
+      return run(command, [], {
+        cwd, env: { ...process.env, ...(port && { PORT: String(port) }) },
+        shell: true, timeout: 0, signal, onSpawn,
+        log: chunk => this.capture(entry, `[${name}] ${chunk}`)
+      }).then(() => ended(), ended);
+    }));
   }
 
   async launch(project, entry, effective, overrides) {
@@ -154,19 +199,10 @@ export class ProjectRuntime {
       stdio: ['ignore', 'pipe', 'pipe']
     });
     entry.child = child;
-    const capture = chunk => {
-      const output = entry.log + chunk.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-      if (output.length > logLimit) entry.truncated = true;
-      entry.log = output.slice(-logLimit);
-    };
+    const capture = chunk => this.capture(entry, chunk);
     child.stdout.setEncoding('utf8').on('data', capture);
     child.stderr.setEncoding('utf8').on('data', capture);
-    child.once('spawn', () => {
-      if (entry.status !== 'starting') return;
-      entry.launchedAt = Date.now();
-      entry.status = 'running';
-      this.watchReadiness(entry).catch(() => {});
-    });
+    child.once('spawn', () => this.markRunning(entry));
     child.once('error', error => { if (entry.status !== 'stopping') entry.error = `Could not start the development process: ${error.message}`; });
     const [code, signal] = await new Promise(resolve => child.once('close', (...result) => resolve(result)));
     await entry.termination;
@@ -177,7 +213,7 @@ export class ProjectRuntime {
     const signal = entry.readiness.signal;
     const services = Object.values(entry.services);
     while (!signal.aborted) {
-      const checks = await Promise.all(services.map(service => this.probeEndpoint(service.url, signal)));
+      const checks = await Promise.all(services.map(service => this.probeEndpoint(service.url, signal, Boolean(service.name))));
       if (signal.aborted) return;
       for (const [index, service] of services.entries()) service.ready = checks[index];
       const ready = checks.every(Boolean);

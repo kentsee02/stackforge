@@ -1,4 +1,4 @@
-import { setText, setupI18n } from './i18n.js';
+import { setText, setupI18n, translate } from './i18n.js';
 
 setupI18n();
 
@@ -24,6 +24,7 @@ let transferMessage;
 let importing = false;
 let actionError;
 let portMessage;
+let startupMessage;
 let databaseView;
 let toolsView;
 let timer;
@@ -53,7 +54,19 @@ function showMessage(element, message = '') {
 }
 
 function renderServices(project) {
-  $('runtime-services').hidden = !project.services;
+  const readyCustom = Object.values(project.services ?? {}).filter(service => service.name && service.ready);
+  const links = $('runtime-custom-links');
+  const saved = JSON.stringify(readyCustom);
+  if (links.dataset.saved !== saved) {
+    links.dataset.saved = saved;
+    links.replaceChildren(...readyCustom.map(service => {
+      const link = document.createElement('a');
+      Object.assign(link, { className: 'secondary', href: service.url, target: '_blank', rel: 'noopener noreferrer', textContent: service.name });
+      return link;
+    }));
+  }
+  links.hidden = !readyCustom.length;
+  $('runtime-services').hidden = !Object.keys(project.services ?? {}).length;
   $('runtime-readiness').hidden = project.ready;
   for (const key of ['frontend', 'backend']) {
     const link = $('runtime-' + key);
@@ -62,6 +75,62 @@ function renderServices(project) {
     if (service?.ready) link.href = service.url;
     else link.removeAttribute('href');
   }
+}
+
+function startupDraft() {
+  return [...$('project-startup-services').children].map(row => {
+    const { name, directory, command, port } = Object.fromEntries([...row.querySelectorAll('input')].map(input => [input.name, input.value.trim()]));
+    return { name, directory: directory.replaceAll('\\', '/') || '.', command, ...(port && { port: Number(port) }) };
+  });
+}
+
+function addStartupService(service = {}) {
+  const row = $('project-startup-service').content.firstElementChild.cloneNode(true);
+  for (const element of row.querySelectorAll('[data-i18n]')) setText(element, element.dataset.i18n);
+  for (const input of row.querySelectorAll('input')) {
+    input.value = service[input.name] ?? '';
+    if (input.dataset.i18nPlaceholder) input.placeholder = translate(input.dataset.i18nPlaceholder);
+  }
+  $('project-startup-services').append(row);
+  return row;
+}
+
+function renderStartup(project, locked) {
+  const panel = $('project-startup');
+  const form = $('project-startup-form');
+  const rows = $('project-startup-services');
+  panel.hidden = !project.unmanaged;
+  if (panel.hidden) return false;
+  if (form.dataset.project !== project.id) {
+    panel.open = !project.hasStartup;
+    form.dataset.project = project.id;
+    delete form.dataset.saved;
+    rows.replaceChildren();
+  }
+  if (project.startupServices) {
+    const saved = JSON.stringify(project.startupServices);
+    if (form.dataset.saved !== saved) {
+      form.dataset.saved = saved;
+      rows.replaceChildren();
+      project.startupServices.forEach(addStartupService);
+    }
+  }
+  form.hidden = form.dataset.saved === undefined;
+  const dirty = !form.hidden && JSON.stringify(startupDraft()) !== form.dataset.saved;
+  for (const [index, row] of [...rows.children].entries()) {
+    setText(row.querySelector('legend'), `Service ${index + 1}`);
+    row.disabled = locked;
+  }
+  $('project-startup-empty').hidden = Boolean(rows.childElementCount);
+  $('project-startup-hint').hidden = !rows.childElementCount;
+  $('project-startup-add').disabled = locked || rows.childElementCount >= 6;
+  $('project-startup-save').disabled = locked || !dirty;
+  const message = startupMessage?.id === project.id ? startupMessage : undefined;
+  const saving = pending?.id === project.id && pending.action === 'startup';
+  const feedback = $('project-startup-message');
+  feedback.classList.toggle('project-operation-error', Boolean(message?.error) && !saving);
+  showMessage(feedback, saving ? 'Saving startup configuration…' : message?.message || (dirty ? 'Save changes before starting the project.' : ''));
+  return dirty;
 }
 
 function renderPorts(project, busy) {
@@ -320,7 +389,7 @@ function renderRows() {
     if (!row.hidden) matches++;
     row.firstElementChild.setAttribute('aria-pressed', String(project.id === selected));
     const status = row.querySelector('.runtime-state');
-    status.hidden = Boolean(project.unmanaged);
+    status.hidden = Boolean(project.unmanaged && !project.hasStartup);
     showState(status, project.ready ? 'ready' : project.status);
   }
   $('project-no-match').hidden = matches > 0;
@@ -340,8 +409,8 @@ function render() {
   renderRows();
   const project = projects.find(item => item.id === selected);
   if (!project) return;
-  for (const id of ['runtime-action', 'selected-project-state', 'project-runtime-log', 'project-dependencies']) $(id).hidden = Boolean(project.unmanaged);
-  $('unmanaged-project-note').hidden = !project.unmanaged;
+  for (const id of ['runtime-action', 'selected-project-state', 'project-runtime-log']) $(id).hidden = Boolean(project.unmanaged && !project.hasStartup);
+  $('project-dependencies').hidden = Boolean(project.unmanaged);
   if ($('selected-project-name').textContent !== project.name) $('selected-project-name').textContent = project.name;
   if ($('selected-project-path').textContent !== project.path) $('selected-project-path').textContent = project.path;
   showState($('selected-project-state'), project.ready ? 'ready' : project.status);
@@ -350,6 +419,7 @@ function render() {
   const busy = running || project.status === 'stopping';
   const deleting = project.deleting || (pending?.id === project.id && pending.action === 'trash');
   const unavailable = deleting || Boolean(pending) || Boolean(project.operation);
+  const startupDirty = renderStartup(project, busy || unavailable);
   renderPorts(project, busy || unavailable);
   renderDependencies(project, busy, unavailable);
   renderDatabase(project, busy, unavailable);
@@ -362,7 +432,7 @@ function render() {
   const action = $('runtime-action');
   action.dataset.action = running ? 'stop' : 'start';
   action.className = running || project.status === 'stopping' ? 'secondary' : 'primary';
-  action.disabled = Boolean(pending) || deleting || project.status === 'stopping' || (!running && Boolean(project.operation));
+  action.disabled = Boolean(pending) || deleting || project.status === 'stopping' || (!running && (Boolean(project.operation) || startupDirty));
   setText(action.firstElementChild, project.status === 'stopping' ? 'Stopping…' : running ? 'Stop project' : 'Start project');
   const devError = actionError?.id === project.id && ['start', 'stop'].includes(actionError.action) ? actionError : undefined;
   const error = devError?.message ?? project.error;
@@ -428,6 +498,10 @@ async function act(id, action, body = {}) {
       const project = projects.find(item => item.id === id);
       if (project) project.ports = runtime.ports;
       portMessage = { id, message: 'Development ports saved.' };
+    } else if (action === 'startup') {
+      const project = projects.find(item => item.id === id);
+      if (project) Object.assign(project, { startupServices: runtime.services, hasStartup: Boolean(runtime.services.length) });
+      startupMessage = { id, message: 'Startup configuration saved.' };
     } else if (['install', 'install-cancel', 'database-start', 'database-stop', 'run-check', 'check-cancel'].includes(action)) {
       const project = projects.find(item => item.id === id);
       if (project) Object.assign(project, runtime);
@@ -440,6 +514,7 @@ async function act(id, action, body = {}) {
       $('project-feedback').dataset.status = 'error';
       setText($('project-feedback'), error.message);
     } else if (action === 'ports') portMessage = { id, message: error.message };
+    else if (action === 'startup') startupMessage = { id, message: error.message, error: true };
     else actionError = { id, action, message: error.message, diagnostic: error.diagnostic };
   }
   finally {
@@ -512,6 +587,29 @@ $('project-port-form').addEventListener('submit', event => {
   act(selected, 'ports', { ports });
 });
 $('runtime-action').addEventListener('click', event => act(selected, event.currentTarget.dataset.action));
+$('project-startup-add').addEventListener('click', () => {
+  startupMessage = undefined;
+  const row = addStartupService();
+  render();
+  row.querySelector('input').focus();
+});
+$('project-startup-services').addEventListener('click', event => {
+  if (!event.target.closest('.startup-remove')) return;
+  const row = event.target.closest('.startup-service');
+  const next = row.nextElementSibling ?? row.previousElementSibling;
+  row.remove();
+  startupMessage = undefined;
+  render();
+  (next?.querySelector('input') ?? $('project-startup-add')).focus();
+});
+$('project-startup-form').addEventListener('input', () => {
+  startupMessage = undefined;
+  render();
+});
+$('project-startup-form').addEventListener('submit', event => {
+  event.preventDefault();
+  act(selected, 'startup', { services: startupDraft() });
+});
 $('install-dependencies').addEventListener('click', () => { $('dependency-log').open = true; act(selected, 'install'); });
 $('cancel-install').addEventListener('click', () => act(selected, 'install-cancel'));
 $('project-database').addEventListener('toggle', () => loadDatabase());

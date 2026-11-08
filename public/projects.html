@@ -13,7 +13,7 @@
   <a class="skip-link" href="#main" data-i18n="跳到主要内容">Skip to content</a>
   <aside class="sidebar">
     <a class="brand" href="/" aria-label="StackForge home" data-i18n-aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
-    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.16</span></div>
+    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.17</span></div>
     <a class="side-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a>
     <a class="side-link" href="/#activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg><span data-i18n="任务记录">Task history</span></a>
     <a class="side-active projects-nav" href="/projects" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2h7v2"/></svg><span data-i18n="项目管理">Projects</span></a>
@@ -59,11 +59,25 @@
               <span id="runtime-readiness" class="small" role="status" data-i18n="正在检查本地服务…">Checking local services…</span>
               <a id="runtime-frontend" class="secondary" target="_blank" rel="noopener noreferrer" data-i18n="打开网页" hidden>Open app</a>
               <a id="runtime-backend" class="secondary" target="_blank" rel="noopener noreferrer" data-i18n="打开 API" hidden>Open API</a>
+              <span id="runtime-custom-links" class="runtime-custom-links" hidden></span>
             </div>
           </div>
-          <p id="unmanaged-project-note" class="runtime-error small" data-i18n="可在这里查看 Git 状态和运行支持的检查。启动时请使用该项目自己的命令。" hidden>Git status and supported checks are available here. Use the project's own startup commands.</p>
           <p id="runtime-error" class="runtime-error" role="status" hidden></p>
           <p id="runtime-diagnostic" class="runtime-diagnostic" role="status" hidden></p>
+          <details id="project-startup" class="project-ports" hidden>
+            <summary data-i18n="启动配置">Startup configuration</summary>
+            <p class="hint" data-i18n="为每个服务添加你信任的前台命令。点击启动项目后，StackForge 才会运行已保存的命令。">Add a trusted foreground command for each service. Saved commands run when you click Start project.</p>
+            <form id="project-startup-form" hidden>
+              <div id="project-startup-services"></div>
+              <p id="project-startup-empty" class="hint" data-i18n="还没有服务。Monorepo 可以分别配置前端和后端。">No services yet. For a monorepo, add separate frontend and backend commands.</p>
+              <p id="project-startup-hint" class="hint" data-i18n="用 . 表示项目根目录。填写 HTTP 端口后，StackForge 会把它传给 PORT，并在服务响应后显示访问链接。">Use . for the project root. An HTTP port is passed as PORT and gets a link once the service responds.</p>
+              <div class="startup-actions">
+                <button id="project-startup-add" type="button" class="secondary" data-i18n="添加服务">Add service</button>
+                <button id="project-startup-save" type="submit" class="secondary" data-i18n="保存启动配置">Save startup configuration</button>
+              </div>
+              <p id="project-startup-message" class="hint" role="status"></p>
+            </form>
+          </details>
           <section id="project-dependencies" class="project-operation" aria-labelledby="project-dependencies-title">
             <div class="project-operation-heading"><h3 id="project-dependencies-title" data-i18n="依赖安装">Dependencies</h3><span id="dependency-status" class="small" role="status"></span></div>
             <div class="project-operation-actions">
@@ -179,6 +193,16 @@
       </div>
     </form>
   </dialog>
+  <template id="project-startup-service"><fieldset class="startup-service">
+    <legend></legend>
+    <div class="startup-fields">
+      <label class="inline-field"><span data-i18n="服务名称">Service name</span><input name="name" maxlength="40" placeholder="Web" data-i18n-placeholder="网页" required autocomplete="off"></label>
+      <label class="inline-field"><span data-i18n="工作目录">Working directory</span><input name="directory" maxlength="240" placeholder="apps/web" spellcheck="false" autocomplete="off"></label>
+      <label class="inline-field"><span data-i18n="HTTP 端口（可选）">HTTP port (optional)</span><input name="port" type="number" min="1024" max="65535" placeholder="5173"></label>
+      <label class="inline-field startup-command"><span data-i18n="服务启动命令">Startup command</span><input name="command" maxlength="500" placeholder="npm run dev" required spellcheck="false" autocomplete="off"></label>
+    </div>
+    <button class="text-button startup-remove" type="button" data-i18n="移除此服务">Remove this service</button>
+  </fieldset></template>
   <template id="project-row"><li><button type="button" class="project-row" aria-pressed="false"><span class="project-row-copy"><strong></strong><small></small></span><span class="runtime-state"></span></button></li></template>
 </body>
 </html>

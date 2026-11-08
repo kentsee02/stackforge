@@ -5,6 +5,7 @@ import { absoluteDirectory } from './paths.mjs';
 import { validateOptions } from './catalog.mjs';
 import { detectFrameworks, validFrameworks } from './project-detection.mjs';
 import { recordedIdentity } from './project-identity.mjs';
+import { validateStartup } from './project-startup.mjs';
 
 export const projectPathKey = path => process.platform === 'win32' ? path.toLowerCase() : path;
 
@@ -14,11 +15,20 @@ export function importedProject(id, path, source) {
   const cloned = /^[a-f0-9]{32}$/.test(source?.cloneId ?? '') ? { cloneId: source.cloneId, cloneIdentity: recordedIdentity(source.cloneIdentity) } : {};
   if (source?.unmanaged === true || source?.external === true) return {
     id, path, name: basename(path) || path, frontend: 'none', backend: 'none', database: 'none',
-    imported: true, unmanaged: true, frameworks: validFrameworks(source.frameworks), ...cloned
+    imported: true, unmanaged: true, frameworks: validFrameworks(source.frameworks), startup: storedStartup(source.startup), ...cloned
   };
   if (!['name', 'frontend', 'backend', 'database'].every(key => typeof source?.[key] === 'string')) throw new Error('Invalid project record.');
   const { name, frontend, backend, database } = validateOptions({ name: source.name, parentDir: dirname(path), frontend: source.frontend, backend: source.backend, database: source.database, install: false, git: false });
   return { id, path, name, frontend, backend, database, imported: true, folderIdentity: recordedIdentity(source.folderIdentity), ...cloned };
+}
+
+function storedStartup(value) {
+  const identity = recordedIdentity(value?.identity);
+  if (!identity) return;
+  try {
+    const services = validateStartup(value.services);
+    if (services.length) return { identity, services };
+  } catch { /* keep the project registered if its startup settings are damaged */ }
 }
 
 export function defaultPorts(project) {
@@ -74,6 +84,13 @@ export class ProjectConfig {
 
   savePorts(project, ports) {
     return this.update(value => ({ ...value, ports: { ...value.ports, [project.id]: ports } }));
+  }
+
+  saveStartup(id, startup) {
+    return this.update(value => {
+      if (!value.imports.some(project => project.id === id)) throw new Error('This project was not found in StackForge.');
+      return { ...value, imports: value.imports.map(project => project.id === id ? { ...project, startup } : project) };
+    });
   }
 
   async addProject(project) {

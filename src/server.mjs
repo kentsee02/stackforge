@@ -19,6 +19,7 @@ import { ProjectOperations } from './project-operations.mjs';
 import { cloneGithub, verifyClone } from './project-clone.mjs';
 import { detectFrameworks } from './project-detection.mjs';
 import { directoryIdentity } from './project-identity.mjs';
+import { resolveStartup, validateStartup } from './project-startup.mjs';
 import { backupLimit } from './database-backup.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -37,9 +38,9 @@ function removeOnly(project) {
 }
 
 function projectDetails(project) {
-  const { cloneId, cloneIdentity, folderIdentity, ...details } = project;
+  const { cloneId, cloneIdentity, folderIdentity, startup, ...details } = project;
   return { ...details, ...(cloneId && { cloned: true }), ...(removeOnly(project) && { removeOnly: true }),
-    ...(project.unmanaged && { external: !project.frameworks.length }) };
+    ...(project.unmanaged && { external: !project.frameworks.length, hasStartup: Boolean(startup) }) };
 }
 
 export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations() } = {}) {
@@ -48,7 +49,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   const settings = new Settings(settingsFile);
   const projectConfig = new ProjectConfig(stateDir ? join(dirname(stateDir), 'projects.json') : false);
   const removals = new Map();
-  const portWrites = new Map();
+  const configWrites = new Map();
   let cloneTask, transfer;
   let closing = false;
   function managedProjects() {
@@ -104,8 +105,11 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const detail = { ...projectDetails(project), ...session, ...operations.status(project, project.id === selected), deleting };
           if (transfer?.path === project.path) detail.operation = 'databaseTransfer';
           if (project.id === selected) {
-            const info = await inspectRecordedProject(project).catch(() => null);
-            Object.assign(detail, { portDefaults: defaultPorts(project), ports: projectConfig.ports(project), canConfigurePorts: info?.manifest.portConfig === 1 });
+            if (project.unmanaged) detail.startupServices = project.startup?.services ?? [];
+            else {
+              const info = await inspectRecordedProject(project).catch(() => null);
+              Object.assign(detail, { portDefaults: defaultPorts(project), ports: projectConfig.ports(project), canConfigurePorts: info?.manifest.portConfig === 1 });
+            }
           }
           return detail;
         }));
@@ -136,7 +140,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         if (!authorized(req, restore ? 'application/octet-stream' : 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         const project = managedProjects().find(item => item.id === id);
         if (!project || project.database === 'none') return send(res, 404, { error: 'This project has no database.' });
-        if (closing || transfer || removals.has(project.path) || portWrites.has(project.path) || operations.active(project)) {
+        if (closing || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
           return send(res, 409, { error: 'Wait for the current project operation to finish.' });
         }
         const size = Number(req.headers['content-length']);
@@ -172,7 +176,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         } finally { transfer = undefined; }
         return;
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|trash|ports|install|install-cancel|database-start|database-stop|run-check|check-cancel)$/.exec(url.pathname);
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|ports|install|install-cancel|database-start|database-stop|run-check|check-cancel)$/.exec(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
@@ -211,11 +215,12 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const project = managedProjects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
           if (transfer?.path === project.path) return send(res, 409, { error: 'Wait for the current project operation to finish.' });
-          if (project.unmanaged && !['run-check', 'check-cancel', 'trash'].includes(action)) {
+          if (project.unmanaged && !['start', 'stop', 'startup', 'run-check', 'check-cancel', 'trash'].includes(action)) {
             return send(res, 409, { error: 'This action requires a StackForge project.' });
           }
+          if (project.unmanaged && action === 'start' && !project.startup) return send(res, 409, { error: 'Save a startup configuration before starting this project.' });
           if (removals.has(project.path)) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
-          if (portWrites.has(project.path)) return send(res, 409, { error: 'Wait for the project ports to finish saving.' });
+          if (configWrites.has(project.path)) return send(res, 409, { error: 'Wait for the project settings to finish saving.' });
           if (action === 'install-cancel' || action === 'check-cancel') {
             operations.cancel(project, action === 'install-cancel' ? 'dependencies' : 'checkTask');
             return send(res, 202, operations.status(project, true));
@@ -241,10 +246,28 @@ export function createApp({ generate = generateProject, check = checkEnvironment
               await projectConfig.savePorts(project, ports);
               return ports;
             })();
-            portWrites.set(project.path, saving);
+            configWrites.set(project.path, saving);
             try { return send(res, 200, { ports: await saving }); }
             catch (error) { return send(res, 400, { error: error.message }); }
-            finally { portWrites.delete(project.path); }
+            finally { configWrites.delete(project.path); }
+          }
+          if (action === 'startup') {
+            if (!project.unmanaged) return send(res, 409, { error: 'This project uses the StackForge launcher.' });
+            if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before changing its startup configuration.' });
+            const saving = (async () => {
+              const services = validateStartup(payload.services);
+              let startup;
+              if (services.length) {
+                const { identity } = await resolveStartup(project, services, project.startup?.identity ?? project.cloneIdentity);
+                startup = { identity, services };
+              }
+              await projectConfig.saveStartup(id, startup);
+              return { services };
+            })();
+            configWrites.set(project.path, saving);
+            try { return send(res, 200, await saving); }
+            catch (error) { return send(res, 400, { error: error.message }); }
+            finally { configWrites.delete(project.path); }
           }
           if (action === 'trash') {
             if (payload.confirmName !== project.name) return send(res, 400, { error: 'Enter the exact project name to confirm deletion.' });
@@ -334,7 +357,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     cloneTask?.controller.abort();
     transfer?.controller.abort();
     await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), operations.shutdown(),
-      cloneTask?.done, transfer?.done, ...removals.values(), ...portWrites.values()]);
+      cloneTask?.done, transfer?.done, ...removals.values(), ...configWrites.values()]);
   };
   server.jobs = jobs;
   return server;
