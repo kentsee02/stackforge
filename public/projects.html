@@ -66,7 +66,7 @@
           <p id="runtime-diagnostic" class="runtime-diagnostic" role="status" hidden></p>
           <details id="project-startup" class="project-ports" hidden>
             <summary data-i18n="启动配置">Startup configuration</summary>
-            <p class="hint" data-i18n="为每个服务添加你信任的前台命令。点击启动项目后，StackForge 才会运行已保存的命令。">Add a trusted foreground command for each service. Saved commands run when you click Start project.</p>
+            <p class="hint" data-i18n="为每个服务填写可信的启动命令、安装命令，或两者都填。保存后，点击对应按钮才会执行。">Set a trusted startup command, install command, or both. After saving, use the corresponding button to run it.</p>
             <form id="project-startup-form" hidden>
               <div id="project-startup-services"></div>
               <p id="project-startup-empty" class="hint" data-i18n="还没有服务。Monorepo 可以分别配置前端和后端。">No services yet. For a monorepo, add separate frontend and backend commands.</p>
@@ -80,6 +80,7 @@
           </details>
           <section id="project-dependencies" class="project-operation" aria-labelledby="project-dependencies-title">
             <div class="project-operation-heading"><h3 id="project-dependencies-title" data-i18n="依赖安装">Dependencies</h3><span id="dependency-status" class="small" role="status"></span></div>
+            <p id="dependency-config-hint" class="hint" hidden></p>
             <div class="project-operation-actions">
               <button id="install-dependencies" type="button" class="secondary" data-i18n="安装依赖">Install dependencies</button>
               <button id="cancel-install" type="button" class="secondary" data-i18n="取消安装" hidden>Cancel installation</button>
@@ -199,7 +200,8 @@
       <label class="inline-field"><span data-i18n="服务名称">Service name</span><input name="name" maxlength="40" placeholder="Web" data-i18n-placeholder="网页" required autocomplete="off"></label>
       <label class="inline-field"><span data-i18n="工作目录">Working directory</span><input name="directory" maxlength="240" placeholder="apps/web" spellcheck="false" autocomplete="off"></label>
       <label class="inline-field"><span data-i18n="HTTP 端口（可选）">HTTP port (optional)</span><input name="port" type="number" min="1024" max="65535" placeholder="5173"></label>
-      <label class="inline-field startup-command"><span data-i18n="服务启动命令">Startup command</span><input name="command" maxlength="500" placeholder="npm run dev" required spellcheck="false" autocomplete="off"></label>
+      <label class="inline-field startup-command"><span data-i18n="服务启动命令">Startup command</span><input name="command" maxlength="500" placeholder="npm run dev" spellcheck="false" autocomplete="off"></label>
+      <label class="inline-field startup-command"><span data-i18n="安装命令（可选）">Install command (optional)</span><input name="installCommand" maxlength="500" placeholder="npm ci" spellcheck="false" autocomplete="off"></label>
     </div>
     <button class="text-button startup-remove" type="button" data-i18n="移除此服务">Remove this service</button>
   </fieldset></template>

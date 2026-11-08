@@ -7,6 +7,7 @@ import { projectPathKey } from './project-config.mjs';
 import { inspectRecordedProject, startupDiagnostic } from './project-runtime.mjs';
 import { projectChecks, projectGitStatus } from './project-tools.mjs';
 import { transferDatabase } from './database-backup.mjs';
+import { resolveStartup } from './project-startup.mjs';
 
 const logLimit = 64 * 1024;
 // Compose probes can take several seconds while Docker Desktop is busy.
@@ -71,7 +72,7 @@ export class ProjectOperations {
     this.projects.set(key, entry);
     const options = { signal: controller.signal, log: chunk => { task.log = (task.log + chunk).slice(-logLimit); } };
     const work = {
-      dependencies: () => this.installDependencies(project, task, options),
+      dependencies: () => project.unmanaged ? this.installConfiguredDependencies(project, task, options) : this.installDependencies(project, task, options),
       databaseTask: () => this.changeDatabase(project, action, ports, options),
       checkTask: () => this.runCheck(project, checkId, options)
     };
@@ -129,6 +130,18 @@ export class ProjectOperations {
       const wrapper = await lstat(join(backend, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw')).catch(() => null);
       if (!wrapper?.isFile() || projectPathKey(await realpath(backend)) !== projectPathKey(backend)) throw new Error('The project is missing its Maven Wrapper.');
       await installMavenDependencies({ ...options, cwd: backend }, this.command);
+    }
+  }
+
+  async installConfiguredDependencies(project, task, options) {
+    const services = project.startup?.services.filter(service => service.installCommand);
+    if (!services?.length) throw new Error('Save an install command before installing dependencies.');
+    const { commands } = await resolveStartup(project, services, project.startup.identity);
+    task.phase = 'custom';
+    for (const { name, cwd, installCommand } of commands) {
+      throwIfCancelled(options.signal);
+      options.log(`[${name}]\n`);
+      await this.command(installCommand, [], { ...options, cwd, shell: true });
     }
   }
 

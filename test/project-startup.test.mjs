@@ -87,6 +87,7 @@ test('custom startup persists and safely runs a monorepo with independent workin
     { name: 'API', directory: 'apps/api', command: 'node serve.mjs', port: apiPort.port }
   ];
   await action('start', {}, 409);
+  await action('install', {}, 409);
   await action('startup', { services }, 403, 'invalid-token');
   for (const service of [
     { ...services[1], directory: '../outside' },
@@ -102,6 +103,14 @@ test('custom startup persists and safely runs a monorepo with independent workin
   await open();
   assert.deepEqual((await detail()).startupServices, services);
   assert.equal((await get('/api/projects')).projects[0].startupServices, undefined);
+  await action('install', {}, 409);
+  await action('startup', { services: [{ ...services[0], command: '', installCommand: 'node install.mjs' }] }, 400);
+  await action('startup', { services: [{ ...services[0], installCommand: 'node\ninstall.mjs' }] }, 400);
+  await writeFile(join(web, 'install.mjs'), "import { writeFileSync } from 'node:fs'; writeFileSync('installed.txt', 'web'); console.log('web installed');");
+  await writeFile(join(root, 'verify-install.mjs'), "import { readFileSync } from 'node:fs'; if (readFileSync('apps/web/installed.txt', 'utf8') !== 'web') process.exit(1); console.log('workspace verified');");
+  const installOnly = { name: 'Workspace', directory: '.', installCommand: 'node verify-install.mjs' };
+  await action('startup', { services: [{ ...services[0], installCommand: 'node install.mjs' }, services[1], installOnly] }, 200);
+  await assert.rejects(stat(join(web, 'installed.txt')), { code: 'ENOENT' });
   await action('start', {}, 202);
   assert.match((await until(detail, project => project.status === 'failed')).error, /already in use/);
   await assert.rejects(stat(join(api, 'started.txt')), { code: 'ENOENT' });
@@ -112,11 +121,36 @@ test('custom startup persists and safely runs a monorepo with independent workin
   assert.deepEqual(Object.values(running.services).map(service => service.name), ['Web', 'API']);
   assert.match(running.log, /\[Web\] Web listening/);
   assert.match(running.log, /\[API\] API listening/);
+  assert.equal(Object.values(running.services).length, 2);
+  await assert.rejects(stat(join(web, 'installed.txt')), { code: 'ENOENT' });
+  await action('install', {}, 409);
   await action('startup', { services: [] }, 409);
   await action('trash', { confirmName: project.name }, 409);
   await action('stop', {}, 202);
   await until(detail, project => project.status === 'stopped');
   for (const service of services) await assert.rejects(fetch('http://127.0.0.1:' + service.port, { signal: AbortSignal.timeout(1000) }));
+  await action('install', {}, 202);
+  const installed = await until(detail, project => !project.operation && project.dependencies?.status);
+  assert.equal(installed.dependencies.status, 'succeeded', installed.dependencies.error);
+  assert.match(installed.dependencies.log, /\[Web\][\s\S]*web installed[\s\S]*\[Workspace\][\s\S]*workspace verified/);
+  assert.doesNotMatch(installed.dependencies.log, /\[API\]/);
+
+  await action('startup', { services: [{ ...installOnly, installCommand: 'node -e "console.log(1234); setInterval(() => {}, 1000)"' }] }, 200);
+  await action('start', {}, 409);
+  assert.equal((await detail()).hasInstallCommands, true);
+  await action('install', {}, 202);
+  await until(detail, project => project.dependencies?.log.includes('1234'));
+  await action('install-cancel', {}, 202);
+  await until(detail, project => project.dependencies?.status === 'cancelled');
+
+  await action('startup', { services: [
+    { ...installOnly, installCommand: 'node -e "process.exit(5)"' },
+    { name: 'API setup', directory: 'apps/api', installCommand: 'node -e "console.log(5678)"' }
+  ] }, 200);
+  await action('install', {}, 202);
+  const rejectedInstall = await until(detail, project => project.dependencies?.status === 'failed');
+  assert.match(rejectedInstall.dependencies.error, /5/);
+  assert.doesNotMatch(rejectedInstall.dependencies.log, /API setup/);
 
   const broken = { ...services[1], command: 'node -e "process.exit(7)"' };
   await action('startup', { services: [services[0], broken] }, 200);

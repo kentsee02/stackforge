@@ -79,8 +79,8 @@ function renderServices(project) {
 
 function startupDraft() {
   return [...$('project-startup-services').children].map(row => {
-    const { name, directory, command, port } = Object.fromEntries([...row.querySelectorAll('input')].map(input => [input.name, input.value.trim()]));
-    return { name, directory: directory.replaceAll('\\', '/') || '.', command, ...(port && { port: Number(port) }) };
+    const { name, directory, command, port, installCommand } = Object.fromEntries([...row.querySelectorAll('input')].map(input => [input.name, input.value.trim()]));
+    return { name, directory: directory.replaceAll('\\', '/') || '.', ...(command && { command }), ...(port && { port: Number(port) }), ...(installCommand && { installCommand }) };
   });
 }
 
@@ -129,7 +129,7 @@ function renderStartup(project, locked) {
   const saving = pending?.id === project.id && pending.action === 'startup';
   const feedback = $('project-startup-message');
   feedback.classList.toggle('project-operation-error', Boolean(message?.error) && !saving);
-  showMessage(feedback, saving ? 'Saving startup configuration…' : message?.message || (dirty ? 'Save changes before starting the project.' : ''));
+  showMessage(feedback, saving ? 'Saving startup configuration…' : message?.message || (dirty ? 'Save configuration changes before running commands.' : ''));
   return dirty;
 }
 
@@ -168,16 +168,22 @@ function renderOutput(output, id, log = '') {
   }
 }
 
-function renderDependencies(project, busy, unavailable) {
+function renderDependencies(project, busy, unavailable, startupDirty) {
   const task = project.dependencies;
   const installing = project.operation === 'dependencies' || (pending?.id === project.id && pending.action === 'install');
-  const phases = { npm: 'Installing npm dependencies…', maven: 'Downloading Maven dependencies…' };
+  const canInstall = !project.unmanaged || project.hasInstallCommands;
+  const hint = $('dependency-config-hint');
+  hint.hidden = !project.unmanaged;
+  if (project.unmanaged) showMessage(hint, startupDirty ? 'Save configuration changes before installing dependencies.' : canInstall
+    ? 'Saved install commands run in order. Services without an install command are skipped.'
+    : 'Add an install command under Startup configuration if this project needs one.');
+  const phases = { npm: 'Installing npm dependencies…', maven: 'Downloading Maven dependencies…', custom: 'Running install commands…' };
   const results = { succeeded: 'Dependencies installed.', failed: 'Installation failed.', cancelled: 'Installation cancelled.' };
   let status = results[task?.status] ?? (busy ? 'Stop the project before installing dependencies.' : '');
   if (installing) status = task?.status === 'cancelling' ? 'Cancelling installation…' : phases[task?.phase] ?? 'Preparing installation…';
   showMessage($('dependency-status'), status);
-  $('install-dependencies').hidden = installing;
-  $('install-dependencies').disabled = busy || unavailable;
+  $('install-dependencies').hidden = installing || !canInstall;
+  $('install-dependencies').disabled = busy || unavailable || startupDirty;
   $('cancel-install').hidden = !installing;
   $('cancel-install').disabled = Boolean(pending) || task?.status === 'cancelling';
   const error = actionError?.id === project.id && actionError.action?.startsWith('install') ? actionError.message : task?.error;
@@ -410,7 +416,6 @@ function render() {
   const project = projects.find(item => item.id === selected);
   if (!project) return;
   for (const id of ['runtime-action', 'selected-project-state', 'project-runtime-log']) $(id).hidden = Boolean(project.unmanaged && !project.hasStartup);
-  $('project-dependencies').hidden = Boolean(project.unmanaged);
   if ($('selected-project-name').textContent !== project.name) $('selected-project-name').textContent = project.name;
   if ($('selected-project-path').textContent !== project.path) $('selected-project-path').textContent = project.path;
   showState($('selected-project-state'), project.ready ? 'ready' : project.status);
@@ -421,7 +426,7 @@ function render() {
   const unavailable = deleting || Boolean(pending) || Boolean(project.operation);
   const startupDirty = renderStartup(project, busy || unavailable);
   renderPorts(project, busy || unavailable);
-  renderDependencies(project, busy, unavailable);
+  renderDependencies(project, busy, unavailable, startupDirty);
   renderDatabase(project, busy, unavailable);
   if (toolsView?.id !== project.id) {
     toolsView = { id: project.id, checks: {}, git: {} };
@@ -439,7 +444,9 @@ function render() {
   $('runtime-error').hidden = !error;
   showMessage($('runtime-error'), error);
   const issue = devError?.diagnostic ?? project.diagnostic;
-  const diagnostic = issue === 'dependencies' && project.dependencies?.status === 'succeeded' ? undefined : diagnosticMessages[issue];
+  const diagnostic = issue === 'dependencies' && project.unmanaged && !project.hasInstallCommands
+    ? 'Add an install command under Startup configuration if this project needs one.'
+    : issue === 'dependencies' && project.dependencies?.status === 'succeeded' ? undefined : diagnosticMessages[issue];
   const diagnosticField = $('runtime-diagnostic');
   showMessage(diagnosticField, diagnostic);
   diagnosticField.hidden = !diagnostic;
@@ -500,7 +507,9 @@ async function act(id, action, body = {}) {
       portMessage = { id, message: 'Development ports saved.' };
     } else if (action === 'startup') {
       const project = projects.find(item => item.id === id);
-      if (project) Object.assign(project, { startupServices: runtime.services, hasStartup: Boolean(runtime.services.length) });
+      if (project) Object.assign(project, { startupServices: runtime.services,
+        hasStartup: runtime.services.some(service => service.command),
+        hasInstallCommands: runtime.services.some(service => service.installCommand) });
       startupMessage = { id, message: 'Startup configuration saved.' };
     } else if (['install', 'install-cancel', 'database-start', 'database-stop', 'run-check', 'check-cancel'].includes(action)) {
       const project = projects.find(item => item.id === id);

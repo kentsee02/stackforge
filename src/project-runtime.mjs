@@ -127,12 +127,12 @@ export class ProjectRuntime {
     const key = projectPathKey(project.path);
     if (active.has(this.runs.get(key)?.status)) return;
     const effective = { ...defaultPorts(project), ...overrides };
-    const startup = project.startup;
-    const ports = (startup ? startup.services.map(service => service.port) : [effective.frontend, effective.backend, overrides.database]).filter(Boolean);
+    const startup = project.startup?.services.filter(service => service.command);
+    const ports = (startup ? startup.map(service => service.port) : [effective.frontend, effective.backend, overrides.database]).filter(Boolean);
     const reserved = ports.find(port => [...this.runs.values()].some(other => active.has(other.status) && other.ports.includes(port)));
     if (reserved) throw new Error(`Development port ${reserved} is already in use.`);
     const services = {};
-    if (startup) for (const [index, { name, port }] of startup.services.entries()) {
+    if (startup) for (const [index, { name, port }] of startup.entries()) {
       if (port) services[index] = { name, url: `http://127.0.0.1:${port}/`, ready: false };
     }
     if (effective.frontend) services.frontend = { url: `http://127.0.0.1:${effective.frontend}/`, ready: false };
@@ -158,8 +158,8 @@ export class ProjectRuntime {
     this.watchReadiness(entry).catch(() => {});
   }
 
-  async launchStartup(project, entry, { services, identity }) {
-    const { commands } = await resolveStartup(project, services, identity);
+  async launchStartup(project, entry, services) {
+    const { commands } = await resolveStartup(project, services, project.startup.identity);
     const signal = entry.readiness.signal;
     for (const port of entry.ports) {
       if (signal.aborted) return;

@@ -40,7 +40,9 @@ function removeOnly(project) {
 function projectDetails(project) {
   const { cloneId, cloneIdentity, folderIdentity, startup, ...details } = project;
   return { ...details, ...(cloneId && { cloned: true }), ...(removeOnly(project) && { removeOnly: true }),
-    ...(project.unmanaged && { external: !project.frameworks.length, hasStartup: Boolean(startup) }) };
+    ...(project.unmanaged && { external: !project.frameworks.length,
+      hasStartup: Boolean(startup?.services.some(service => service.command)),
+      hasInstallCommands: Boolean(startup?.services.some(service => service.installCommand)) }) };
 }
 
 export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations() } = {}) {
@@ -215,10 +217,11 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const project = managedProjects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
           if (transfer?.path === project.path) return send(res, 409, { error: 'Wait for the current project operation to finish.' });
-          if (project.unmanaged && !['start', 'stop', 'startup', 'run-check', 'check-cancel', 'trash'].includes(action)) {
+          if (project.unmanaged && !['start', 'stop', 'startup', 'install', 'install-cancel', 'run-check', 'check-cancel', 'trash'].includes(action)) {
             return send(res, 409, { error: 'This action requires a StackForge project.' });
           }
-          if (project.unmanaged && action === 'start' && !project.startup) return send(res, 409, { error: 'Save a startup configuration before starting this project.' });
+          if (project.unmanaged && action === 'start' && !project.startup?.services.some(service => service.command)) return send(res, 409, { error: 'Save a startup configuration before starting this project.' });
+          if (project.unmanaged && action === 'install' && !project.startup?.services.some(service => service.installCommand)) return send(res, 409, { error: 'Save an install command before installing dependencies.' });
           if (removals.has(project.path)) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
           if (configWrites.has(project.path)) return send(res, 409, { error: 'Wait for the project settings to finish saving.' });
           if (action === 'install-cancel' || action === 'check-cancel') {
