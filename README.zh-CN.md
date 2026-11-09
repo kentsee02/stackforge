@@ -65,11 +65,13 @@ Windows PowerShell：`$env:PORT=4311; npm start`。
 
 导入和克隆的项目会在「依赖安装」面板预览检测到的命令及其工作目录。支持 npm、pnpm、Yarn 和 Bun 的声明或锁文件、Maven Wrapper、带 `uv.lock` 的 uv 项目，以及已有本地 `.venv` 的 `requirements.txt`。识别到 JavaScript 工作区时，从工作区根目录安装。核对后点击「安装检测到的依赖」。有歧义的项目会显示原因并跳过，也可以点击「执行自定义安装」运行「启动配置」里保存的命令。
 
+安装预览还支持可识别 JVM 项目的 Gradle Wrapper `classes`、目标明确的 .NET 项目或解决方案的 `dotnet restore`、`go mod download`、`cargo fetch`、Composer 和 Bundler。Gradle 准备依赖时会编译主源码，可能生成构建产物。执行命令需要本机已有对应的 SDK 或包管理器。
+
 「数据库管理」会显示 Docker Compose 数据库的状态和最近 100 行容器日志。它使用项目已保存的数据库端口，可以单独启动和停止数据库。停止数据库会保留数据卷。
 
 「下载备份」可导出正在运行的 StackForge 数据库，PostgreSQL 使用自定义归档，MySQL 使用 SQL 文件。删除确认框也提供下载备份入口。MySQL 导出表结构、数据、视图和触发器。「恢复备份」接受同一种数据库的可信文件，大小上限为 64 MiB。请先停止应用，启动空的项目数据库，再输入完整项目名确认。MySQL 恢复失败时可能留下部分已恢复的对象。
 
-「构建、测试与代码检查」会列出已发现服务目录中声明的 `build`、`test` 和 `lint` 命令，并使用对应的包管理器。未声明且无法从锁文件识别时，检查沿用 npm。托管的 Spring Boot 项目还可通过 Maven Wrapper 运行 `package` 和 `test`。运行检查前请停止项目。面板会显示实时日志和最近一次结果，运行中可以取消。
+「构建、测试与代码检查」会使用对应的 JavaScript 包管理器，无法识别时沿用 npm。含 Maven Wrapper 的 Maven 项目可以执行 `package` 和 `test`，包括导入的 Spring Boot。也支持 Gradle、.NET、Go、Rust 的构建和测试、Composer 脚本，以及具备对应配置的 Laravel 和 Rails 测试与代码检查。任意项目都可以在「自定义检查命令」中按目录保存可信的构建、测试或 Lint 命令，保存后在同一面板选择并运行。运行检查前请停止项目。面板会显示实时日志和最近一次结果，运行中可以取消。凭据请放在项目的环境文件里。
 
 「Git 状态」显示当前分支、未提交的改动，以及与跟踪的上游分支相比领先或落后的提交数。刷新时会读取本地仓库，并以上次 fetch 或 pull 留下的上游记录为准。
 

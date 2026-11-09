@@ -3,6 +3,7 @@ import { lstat, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findMavenWrapper } from './project-detection.mjs';
 import { scanProjectServices } from './project-services.mjs';
+import { inspectToolchains, mavenProject } from './project-toolchains.mjs';
 
 const fileInfo = (directory, name) => lstat(join(directory, name)).catch(() => null);
 const regularFile = async (directory, name) => (await fileInfo(directory, name))?.isFile() === true;
@@ -14,7 +15,7 @@ async function otherInstalls({ folder: directory, pom }, root) {
     regularFile(directory, 'pyproject.toml'), regularFile(directory, 'requirements.txt'), fileInfo(directory, '.venv')
   ]);
   const steps = [], issues = [];
-  if (/<project(?:\s|>)/.test(pom)) {
+  if (mavenProject(pom)) {
     const wrapper = await findMavenWrapper(directory, root);
     if (wrapper) {
       const launcher = process.platform === 'win32' && wrapper.startsWith('.\\') ? wrapper.slice(2) : wrapper;
@@ -49,9 +50,9 @@ export async function detectDependencyPlan(project) {
     } else if (manifestText && !workspaceMember) {
       issues.push({ directory, message: 'package.json could not be read as a valid manifest.' });
     }
-    const other = await otherInstalls(service, root);
-    steps.push(...other.steps.map(step => ({ directory, ...step })));
-    issues.push(...other.issues.map(message => ({ directory, message })));
+    const [other, toolchains] = await Promise.all([otherInstalls(service, root), inspectToolchains(service.folder, root)]);
+    steps.push(...[...other.steps, ...toolchains.installs].map(step => ({ directory, ...step })));
+    issues.push(...[...other.issues, ...toolchains.issues].map(message => ({ directory, message })));
   }
   if (steps.length > 16 || limited) {
     steps.length = 0;

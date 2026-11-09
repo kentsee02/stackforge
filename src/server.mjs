@@ -19,7 +19,7 @@ import { ProjectOperations } from './project-operations.mjs';
 import { cloneGithub, verifyClone } from './project-clone.mjs';
 import { detectFrameworks } from './project-services.mjs';
 import { directoryIdentity } from './project-identity.mjs';
-import { resolveStartup, validateStartup } from './project-startup.mjs';
+import { resolveStartup, validateCustomChecks, validateStartup } from './project-startup.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
 import { detectStartupSuggestions } from './startup-suggestions.mjs';
 import { backupLimit } from './database-backup.mjs';
@@ -125,7 +125,10 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         const project = managedProjects().find(item => item.id === id);
         if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
         try {
-          if (view === 'checks') return send(res, 200, { checks: await operations.checks(project) });
+          if (view === 'checks') {
+            const customChecks = projectConfig.checks(project);
+            return send(res, 200, { checks: await operations.checks({ ...project, customChecks }), customChecks: customChecks?.commands ?? [] });
+          }
           if (view === 'git') return send(res, 200, await operations.git(project));
           if (view === 'startup-suggestions') {
             if (!project.unmanaged) return send(res, 409, { error: 'This project uses the StackForge launcher.' });
@@ -189,7 +192,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         } finally { transfer = undefined; }
         return;
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|run-check|check-cancel)$/.exec(url.pathname);
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|run-check|check-cancel|check-config)$/.exec(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
@@ -228,7 +231,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const project = managedProjects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
           if (transfer?.path === project.path) return send(res, 409, { error: 'Wait for the current project operation to finish.' });
-          if (project.unmanaged && !['start', 'stop', 'startup', 'install', 'install-cancel', 'run-check', 'check-cancel', 'trash', 'remove'].includes(action)) {
+          if (project.unmanaged && !['start', 'stop', 'startup', 'install', 'install-cancel', 'run-check', 'check-cancel', 'check-config', 'trash', 'remove'].includes(action)) {
             return send(res, 409, { error: 'This action requires a StackForge project.' });
           }
           if (project.unmanaged && action === 'start' && !project.startup?.services.some(service => service.command)) return send(res, 409, { error: 'Save a startup configuration before starting this project.' });
@@ -249,7 +252,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             if (action === 'run-check' && (inTransition || session.status === 'running')) return send(res, 409, { error: 'Stop the project before running checks.' });
             if (action.startsWith('database-') && (inTransition || session.status === 'running' && !session.initialized)) return send(res, 409, { error: 'Wait for the project to become ready or stop it first.' });
             try {
-              operations.start(project, action, projectConfig.ports(project), payload.check, detectedInstall ? payload.planId : undefined);
+              const target = action === 'run-check' ? { ...project, customChecks: projectConfig.checks(project) } : project;
+              operations.start(target, action, projectConfig.ports(project), payload.check, detectedInstall ? payload.planId : undefined);
               return send(res, 202, operations.status(project, true));
             } catch (error) { return send(res, 409, { error: error.message }); }
           }
@@ -264,6 +268,24 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             })();
             configWrites.set(project.path, saving);
             try { return send(res, 200, { ports: await saving }); }
+            catch (error) { return send(res, 400, { error: error.message }); }
+            finally { configWrites.delete(project.path); }
+          }
+          if (action === 'check-config') {
+            const saving = (async () => {
+              const commands = validateCustomChecks(payload.commands);
+              let config;
+              if (commands.length) {
+                await inspectRecordedProject(project);
+                const previous = projectConfig.checks(project)?.identity ?? project.startup?.identity ?? project.cloneIdentity ?? project.folderIdentity;
+                const { identity } = await resolveStartup(project, commands, previous);
+                config = { identity, commands };
+              }
+              await projectConfig.saveChecks(project, config);
+              return { commands };
+            })();
+            configWrites.set(project.path, saving);
+            try { return send(res, 200, await saving); }
             catch (error) { return send(res, 400, { error: error.message }); }
             finally { configWrites.delete(project.path); }
           }

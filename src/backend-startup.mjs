@@ -76,7 +76,7 @@ async function dotnetStartup(folder) {
   try {
     for await (const entry of entries) {
       if (++visited > 192) return;
-      if (!entry.isFile() || !/^[a-z0-9][a-z0-9_.-]{0,120}\.(?:csproj|fsproj)$/i.test(entry.name)) continue;
+      if (!entry.isFile() || !/^[a-z0-9][a-z0-9_. -]{0,119}\.(?:csproj|fsproj|vbproj)$/i.test(entry.name)) continue;
       const project = (await localText(folder, entry.name)).replace(/<!--[\s\S]*?-->/g, '');
       if (/<Project\b[^>]*\bSdk\s*=\s*["']Microsoft\.NET\.Sdk\.Web(?:\/[^"']+)?["']/i.test(project)) projects.push(entry.name);
       if (projects.length > 1) return;
@@ -84,9 +84,10 @@ async function dotnetStartup(folder) {
   } catch { return; /* A changing directory provides incomplete project evidence. */ }
   if (!projects.length) return;
   const [project] = projects;
+  const target = project.includes(' ') ? `"${project}"` : project;
   const profiles = npmManifest(await nestedText(folder, 'Properties/launchSettings.json'))?.profiles;
   const profile = profiles && Object.entries(profiles).find(([name, value]) => /^\w[\w.-]{0,79}$/.test(name) && value?.commandName === 'Project');
-  const command = 'dotnet run --project ' + project + (profile ? ' --launch-profile ' + profile[0] : ' --no-launch-profile');
+  const command = 'dotnet run --project ' + target + (profile ? ' --launch-profile ' + profile[0] : ' --no-launch-profile');
   const settings = profile?.[1];
   const urls = typeof settings?.applicationUrl === 'string' && !settings.environmentVariables?.ASPNETCORE_URLS ? settings.applicationUrl.split(';') : [];
   const http = urls.map(url => /^http:\/\/(?:localhost|127\.0\.0\.1):(\d+)\/?$/i.exec(url.trim())).filter(Boolean);

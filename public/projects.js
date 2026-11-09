@@ -461,12 +461,55 @@ async function loadDatabase(logs = false) {
 
 const checkStates = { running: 'Check running…', cancelling: 'Cancelling check…', succeeded: 'Check passed', failed: 'Check failed', cancelled: 'Check cancelled' };
 const checkScopes = { root: 'Project · {command}', frontend: 'Frontend · {command}', backend: 'Backend · {command}', maven: 'Backend · {command}' };
+const checkTypes = { build: 'Build', test: 'Test', lint: 'Lint' };
+let checkConfigMessage;
 
 function checkLabel(id, check) {
   const parts = id.split(':');
   const scope = parts[0], name = parts.at(-1);
-  const command = scope === 'maven' ? `Maven Wrapper ${name}` : `${check?.tool ?? 'npm'} run ${name}`;
-  return scope === 'service' ? check ? `${check.directory} · ${command}` : name : checkScopes[scope].replace('{command}', command);
+  const command = check?.command ?? (scope === 'maven' ? `Maven Wrapper ${name}` : `npm run ${name}`);
+  if (scope === 'custom') return check ? `${check.directory} · Custom ${checkTypes[check.name]} · ${command}` : checkTypes[name];
+  if (scope === 'service' || scope === 'tool') return check ? `${check.directory} · ${command}` : checkTypes[name];
+  return checkScopes[scope].replace('{command}', command);
+}
+
+function checkDraft() {
+  return [...$('check-config-rows').children].map(row => ({
+    name: row.querySelector('[name="name"]').value,
+    directory: row.querySelector('[name="directory"]').value.trim().replaceAll('\\', '/') || '.',
+    command: row.querySelector('[name="command"]').value.trim()
+  }));
+}
+
+function addCheckRow(check = { name: 'build', directory: '.', command: '' }) {
+  const row = $('check-config-row').content.firstElementChild.cloneNode(true);
+  for (const element of row.querySelectorAll('[data-i18n]')) setText(element, element.dataset.i18n);
+  for (const field of row.querySelectorAll('input, select')) field.value = check[field.name];
+  $('check-config-rows').append(row);
+  return row;
+}
+
+function renderCheckConfig(project, locked, data) {
+  const rows = $('check-config-rows');
+  if (rows.dataset.project !== project.id) {
+    rows.dataset.project = project.id;
+    delete rows.dataset.saved;
+    rows.replaceChildren();
+    $('check-config-editor').open = false;
+  }
+  if (data && rows.dataset.saved === undefined) {
+    rows.dataset.saved = JSON.stringify(data.customChecks);
+    data.customChecks.forEach(addCheckRow);
+  }
+  const ready = rows.dataset.saved !== undefined;
+  $('check-config-editor').hidden = !ready;
+  for (const row of rows.children) row.disabled = locked;
+  $('check-config-add').disabled = locked || rows.childElementCount >= 12;
+  $('check-config-save').disabled = locked || !ready || JSON.stringify(checkDraft()) === rows.dataset.saved;
+  const feedback = checkConfigMessage?.id === project.id ? checkConfigMessage : undefined;
+  const message = $('check-config-message');
+  message.classList.toggle('project-operation-error', Boolean(feedback?.error));
+  showMessage(message, feedback?.message ?? '');
 }
 
 function renderChecks(project, busy, unavailable) {
@@ -494,6 +537,7 @@ function renderChecks(project, busy, unavailable) {
   showMessage($('check-last-command'), task?.phase ? checkLabel(task.phase, lastCheck) : '');
   $('check-output').hidden = !task?.log;
   renderOutput($('check-output'), project.id, task?.log);
+  renderCheckConfig(project, unavailable || view.loading, view.data);
 }
 
 function renderGit() {
@@ -694,6 +738,12 @@ async function act(id, action, body = {}) {
         hasInstallCommands: runtime.services.some(service => service.installCommand) });
       if (toolsView?.id === id) toolsView = { ...toolsView, checks: {} };
       startupMessage = { id, message: 'Startup configuration saved.' };
+    } else if (action === 'check-config') {
+      if (toolsView?.id === id) {
+        $('check-config-rows').dataset.saved = JSON.stringify(runtime.commands);
+        toolsView = { ...toolsView, checks: {} };
+      }
+      checkConfigMessage = { id, message: 'Custom check commands saved.' };
     } else if (['install', 'install-cancel', 'database-start', 'database-stop', 'run-check', 'check-cancel'].includes(action)) {
       const project = projects.find(item => item.id === id);
       if (project) Object.assign(project, runtime);
@@ -707,6 +757,7 @@ async function act(id, action, body = {}) {
       setText($('project-feedback'), error.message);
     } else if (action === 'ports') portMessage = { id, message: error.message };
     else if (action === 'startup') startupMessage = { id, message: error.message, error: true };
+    else if (action === 'check-config') checkConfigMessage = { id, message: error.message, error: true };
     else actionError = { id, action, message: error.message, diagnostic: error.diagnostic };
   }
   finally {
@@ -846,6 +897,25 @@ $('check-form').addEventListener('submit', event => {
   act(selected, 'run-check', { check: $('check-command').value });
 });
 $('check-cancel').addEventListener('click', () => act(selected, 'check-cancel'));
+$('check-config-add').addEventListener('click', () => {
+  const row = addCheckRow();
+  checkConfigMessage = undefined;
+  render();
+  row.querySelector('select').focus();
+});
+$('check-config-rows').addEventListener('click', event => {
+  const remove = event.target.closest('.startup-remove');
+  if (!remove) return;
+  remove.closest('fieldset').remove();
+  checkConfigMessage = undefined;
+  render();
+  $('check-config-add').focus();
+});
+$('check-config-form').addEventListener('input', () => { checkConfigMessage = undefined; render(); });
+$('check-config-form').addEventListener('submit', event => {
+  event.preventDefault();
+  act(selected, 'check-config', { commands: checkDraft() });
+});
 function confirmProjectRemoval(action) {
   const project = projects.find(item => item.id === selected);
   if (!project || pending) return;

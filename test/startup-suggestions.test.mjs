@@ -243,9 +243,11 @@ test('one service scan feeds import labels, startup, dependencies and workspace 
   const [startup, dependencies, checks] = await Promise.all(['startup-suggestions', 'dependencies', 'checks'].map(view => get(route + '/' + view)));
   assert.deepEqual(startup.groups.map(group => group.directory).sort(), ['Example.Api', 'backend/cmd/api', 'features/payments/server', 'modules/ui', 'services/php', 'services/python']);
   assert.equal(startup.groups.find(group => group.directory === 'services/php').choices[0].source, 'Procfile · web');
-  assert.deepEqual(dependencies.steps.map(({ directory, command }) => [directory, command]), [['.', 'pnpm install'], ['services/python', 'uv sync --locked']]);
-  assert.equal(checks.checks.length, 1);
-  const [check] = checks.checks;
+  assert.deepEqual(Object.fromEntries(dependencies.steps.map(({ directory, command }) => [directory, command])), {
+    '.': 'pnpm install', backend: 'go mod download', 'Example.Api': 'dotnet restore Example.Api.csproj',
+    'services/php': 'composer install --no-interaction', 'services/python': 'uv sync --locked'
+  });
+  const check = checks.checks.find(item => item.directory === 'modules/ui');
   assert.deepEqual([check.directory, check.tool, check.name], ['modules/ui', 'pnpm', 'build']);
   assert.deepEqual((await get('/api/projects?logs=' + id)).projects[0].startupServices, []);
   assert.deepEqual(calls, []);

@@ -4,37 +4,49 @@ import { join } from 'node:path';
 import { projectPathKey } from './project-config.mjs';
 import { inspectRecordedProject } from './project-runtime.mjs';
 import { scanProjectServices } from './project-services.mjs';
+import { findMavenWrapper } from './project-detection.mjs';
+import { resolveStartup } from './project-startup.mjs';
+import { checkNames, inspectToolchains, mavenProject } from './project-toolchains.mjs';
 
-const npmScripts = ['build', 'test', 'lint'];
 const mavenGoals = ['package', 'test'];
-const mavenWrapper = process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw';
-
-async function localFile(directory, filename) {
-  return (await lstat(join(directory, filename)).catch(error => {
-    if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null;
-    throw error;
-  }))?.isFile();
-}
+const checkKey = value => createHash('sha256').update(value).digest('hex').slice(0, 24);
 
 export async function projectChecks(project) {
   await inspectRecordedProject(project);
-  const { services } = await scanProjectServices(project);
+  const { root, services } = await scanProjectServices(project);
   const checks = [];
   for (const { folder: cwd, directory, manifest, manager, managerConflict, pom } of services) {
     const scope = directory === '.' ? 'root' : ['frontend', 'backend'].includes(directory) ? directory : 'service';
     if (manifest && !managerConflict) {
       const scripts = manifest.scripts;
       const tool = manager ?? 'npm';
-      const key = scope === 'service' ? 'service:' + createHash('sha256').update(directory).digest('hex').slice(0, 24) : scope;
-      for (const name of npmScripts) {
+      const key = scope === 'service' ? 'service:' + checkKey(directory) : scope;
+      for (const name of checkNames) {
         if (typeof scripts?.[name] === 'string' && scripts[name].trim()) {
-          checks.push({ id: `${key}:${name}`, scope, directory, tool, name, cwd });
+          checks.push({ id: `${key}:${name}`, scope, directory, tool, name, cwd, command: `${tool} run ${name}` });
         }
       }
     }
-    if (scope === 'backend' && project.backend === 'spring' && pom && await localFile(cwd, mavenWrapper)) {
-      for (const name of mavenGoals) checks.push({ id: `maven:${name}`, scope, directory, tool: 'maven', name, cwd });
+    const wrapper = mavenProject(pom) && await findMavenWrapper(cwd, root);
+    if (wrapper) {
+      const managed = scope === 'backend' && project.backend === 'spring';
+      for (const name of mavenGoals) {
+        const kind = name === 'package' ? 'build' : 'test';
+        const id = managed ? `maven:${name}` : `tool:${checkKey(directory + '\0maven')}:${kind}`;
+        checks.push({ id, scope, directory, tool: 'maven', name, cwd, wrapper, args: ['-B', name], command: `Maven Wrapper ${name}` });
+      }
     }
+    const toolchains = await inspectToolchains(cwd, root);
+    for (const check of toolchains.checks) {
+      const id = `tool:${checkKey(directory + '\0' + check.tool)}:${check.name}`;
+      checks.push({ ...check, id, scope, directory, cwd });
+    }
+  }
+  for (const check of project.customChecks?.commands ?? []) {
+    const resolved = await resolveStartup(project, [check], project.customChecks.identity).catch(() => null);
+    if (!resolved) continue;
+    const id = `custom:${checkKey(JSON.stringify(check))}:${check.name}`;
+    checks.push({ ...resolved.commands[0], id, scope: 'service', tool: 'custom' });
   }
   const order = ['root', 'frontend', 'backend', 'service'];
   return checks.sort((left, right) => order.indexOf(left.scope) - order.indexOf(right.scope));

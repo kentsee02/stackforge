@@ -1,6 +1,29 @@
 import { lstat, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, win32 } from 'node:path';
 import { directoryIdentity, sameDirectory } from './project-identity.mjs';
+import { checkNames } from './project-toolchains.mjs';
+
+function workingDirectory(directory) {
+  const folder = typeof directory === 'string' ? directory.trim().replaceAll('\\', '/') || '.' : '';
+  if (!folder || folder.length > 240 || /[:\x00-\x1f\x7f]/.test(directory) || isAbsolute(folder) || win32.isAbsolute(folder) || folder.split('/').includes('..')) throw new Error('Use a working directory inside the project.');
+  return folder;
+}
+
+export function validateCustomChecks(input) {
+  if (!Array.isArray(input) || input.length > 12) throw new Error('Configure up to twelve custom checks.');
+  const seen = new Set();
+  return input.map(value => {
+    const { name, directory, command } = value ?? {};
+    const folder = workingDirectory(directory);
+    if (!checkNames.includes(name)) throw new Error('Choose Build, Test, or Lint for the custom check.');
+    if (typeof command !== 'string' || !command.trim() || command.trim().length > 500 || /[\x00-\x1f\x7f]/.test(command)) throw new Error('Enter a single-line custom check command of up to 500 characters.');
+    const check = { name, directory: folder, command: command.trim() };
+    const key = JSON.stringify(check);
+    if (seen.has(key)) throw new Error('Remove duplicate custom checks.');
+    seen.add(key);
+    return check;
+  });
+}
 
 export function validateStartup(input) {
   if (!Array.isArray(input) || input.length > 6) throw new Error('Configure up to six startup services.');
@@ -9,11 +32,10 @@ export function validateStartup(input) {
   return input.map(service => {
     const { name, directory, command = '', port, installCommand = '', kind = '', openPath = '' } = service ?? {};
     const label = typeof name === 'string' ? name.trim() : '';
-    const folder = typeof directory === 'string' ? directory.trim().replaceAll('\\', '/') || '.' : '';
     const script = typeof command === 'string' ? command.trim() : '';
     const installer = typeof installCommand === 'string' ? installCommand.trim() : '';
     if (!label || label.length > 40 || /[\x00-\x1f\x7f]/.test(name) || names.has(label.toLowerCase())) throw new Error('Enter a unique service name of up to 40 characters.');
-    if (!folder || folder.length > 240 || /[:\x00-\x1f\x7f]/.test(directory) || isAbsolute(folder) || win32.isAbsolute(folder) || folder.split('/').includes('..')) throw new Error('Use a working directory inside the project.');
+    const folder = workingDirectory(directory);
     if (typeof command !== 'string' || script.length > 500 || /[\x00-\x1f\x7f]/.test(command)) throw new Error('Enter a single-line startup command of up to 500 characters.');
     if (typeof installCommand !== 'string' || installer.length > 500 || /[\x00-\x1f\x7f]/.test(installCommand)) throw new Error('Enter a single-line install command of up to 500 characters.');
     if (!script && !installer) throw new Error('Enter a startup command, an install command, or both.');

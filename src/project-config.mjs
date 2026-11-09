@@ -6,7 +6,7 @@ import { validateOptions } from './catalog.mjs';
 import { validFrameworks } from './project-detection.mjs';
 import { detectFrameworks } from './project-services.mjs';
 import { recordedIdentity } from './project-identity.mjs';
-import { validateStartup } from './project-startup.mjs';
+import { validateCustomChecks, validateStartup } from './project-startup.mjs';
 
 export const projectPathKey = path => process.platform === 'win32' ? path.toLowerCase() : path;
 
@@ -35,7 +35,9 @@ function storedStartup(value) {
 function withoutImport(value, id) {
   const ports = { ...value.ports };
   delete ports[id];
-  return { ...value, ports, imports: value.imports.filter(item => item.id !== id) };
+  const checks = { ...value.checks };
+  delete checks[id];
+  return { ...value, ports, checks, imports: value.imports.filter(item => item.id !== id) };
 }
 
 export function defaultPorts(project) {
@@ -62,7 +64,7 @@ export function validatePorts(project, input) {
 export class ProjectConfig {
   constructor(file) {
     this.file = file;
-    this.value = { ports: {}, imports: [] };
+    this.value = { ports: {}, checks: {}, imports: [] };
     this.pending = Promise.resolve();
     this.ready = this.load();
   }
@@ -73,6 +75,14 @@ export class ProjectConfig {
       const saved = JSON.parse(await readFile(this.file, 'utf8'));
       if (saved.version !== 1) return;
       if (saved.ports && typeof saved.ports === 'object') this.value.ports = saved.ports;
+      for (const [id, entry] of Object.entries(saved.checks ?? {})) {
+        if (!/^[a-f0-9-]{36}$/.test(id)) continue;
+        try {
+          const identity = recordedIdentity(entry?.identity);
+          const commands = validateCustomChecks(entry?.commands);
+          if (identity && commands.length) this.value.checks[id] = { identity, commands };
+        } catch { /* Skip invalid saved commands. */ }
+      }
       if (Array.isArray(saved.imports)) for (const project of saved.imports) {
         try {
           const imported = importedProject(project.id, project.path, project);
@@ -91,6 +101,19 @@ export class ProjectConfig {
 
   savePorts(project, ports) {
     return this.update(value => ({ ...value, ports: { ...value.ports, [project.id]: ports } }));
+  }
+
+  checks(project) {
+    return this.value.checks[project.id];
+  }
+
+  saveChecks(project, config) {
+    return this.update(value => {
+      const checks = { ...value.checks };
+      if (config) checks[project.id] = config;
+      else delete checks[project.id];
+      return { ...value, checks };
+    });
   }
 
   saveStartup(id, startup, frameworks) {
