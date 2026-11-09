@@ -462,10 +462,11 @@ async function loadDatabase(logs = false) {
 const checkStates = { running: 'Check running…', cancelling: 'Cancelling check…', succeeded: 'Check passed', failed: 'Check failed', cancelled: 'Check cancelled' };
 const checkScopes = { root: 'Project · {command}', frontend: 'Frontend · {command}', backend: 'Backend · {command}', maven: 'Backend · {command}' };
 
-function checkLabel(id) {
-  const [scope, name] = id.split(':');
-  const command = scope === 'maven' ? `Maven Wrapper ${name}` : `npm run ${name}`;
-  return checkScopes[scope].replace('{command}', command);
+function checkLabel(id, check) {
+  const parts = id.split(':');
+  const scope = parts[0], name = parts.at(-1);
+  const command = scope === 'maven' ? `Maven Wrapper ${name}` : `${check?.tool ?? 'npm'} run ${name}`;
+  return scope === 'service' ? check ? `${check.directory} · ${command}` : name : checkScopes[scope].replace('{command}', command);
 }
 
 function renderChecks(project, busy, unavailable) {
@@ -489,7 +490,8 @@ function renderChecks(project, busy, unavailable) {
   showMessage($('check-error'), error);
   $('check-error').hidden = !error;
   $('check-last').hidden = !task?.phase;
-  showMessage($('check-last-command'), task?.phase ? checkLabel(task.phase) : '');
+  const lastCheck = view.data?.checks.find(check => check.id === task?.phase);
+  showMessage($('check-last-command'), task?.phase ? checkLabel(task.phase, lastCheck) : '');
   $('check-output').hidden = !task?.log;
   renderOutput($('check-output'), project.id, task?.log);
 }
@@ -525,10 +527,10 @@ async function loadProjectTool(tool, reload = false) {
     if (tool === 'checks' && current === toolsView) {
       const field = $('check-command');
       const previous = field.value;
-      field.replaceChildren(...view.data.checks.map(({ id }) => {
+      field.replaceChildren(...view.data.checks.map(check => {
         const option = document.createElement('option');
-        option.value = id;
-        setText(option, checkLabel(id));
+        option.value = check.id;
+        setText(option, checkLabel(check.id, check));
         return option;
       }));
       if (view.data.checks.some(check => check.id === previous)) field.value = previous;
@@ -690,6 +692,7 @@ async function act(id, action, body = {}) {
       if (project) Object.assign(project, { startupServices: runtime.services,
         hasStartup: runtime.services.some(service => service.command),
         hasInstallCommands: runtime.services.some(service => service.installCommand) });
+      if (toolsView?.id === id) toolsView = { ...toolsView, checks: {} };
       startupMessage = { id, message: 'Startup configuration saved.' };
     } else if (['install', 'install-cancel', 'database-start', 'database-stop', 'run-check', 'check-cancel'].includes(action)) {
       const project = projects.find(item => item.id === id);

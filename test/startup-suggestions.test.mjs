@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createApp } from '../src/server.mjs';
+import { ProjectOperations } from '../src/project-operations.mjs';
 import { detectStartupSuggestions } from '../src/startup-suggestions.mjs';
 
 async function fixture(t, files) {
@@ -201,4 +203,60 @@ test('reading suggestions leaves saved custom configuration and project files un
   assert.equal(data.groups[0].choices[0].command, 'npm run dev');
   assert.deepEqual((await get('/api/projects?logs=' + id)).projects[0].startupServices, saved);
   await assert.rejects(stat(join(root, 'executed.txt')), { code: 'ENOENT' });
+});
+
+test('one service scan feeds import labels, startup, dependencies and workspace checks before saving any configuration', async t => {
+  const root = await realpath(await fixture(t, {
+    'package.json': { packageManager: 'pnpm@10.0.0' },
+    'pnpm-workspace.yaml': 'packages:\n  - modules/*\n',
+    'modules/ui/package.json': { dependencies: { next: '16.0.0' }, scripts: { dev: 'next dev', build: 'next build' } },
+    'services/python/main.py': 'from fastapi import FastAPI\napp = FastAPI()\n',
+    'services/python/pyproject.toml': '[project]\nname = "api"\ndependencies = ["fastapi"]',
+    'services/python/uv.lock': 'version = 1',
+    'Example.Api/Example.Api.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web" />',
+    'pom.xml': '<project><packaging>pom</packaging><modules><module>features/payments/server</module></modules></project>',
+    'features/payments/server/pom.xml': '<project><build><plugins><plugin><artifactId>quarkus-maven-plugin</artifactId></plugin></plugins></build></project>',
+    'backend/go.mod': 'module example.com/http\n',
+    'backend/cmd/api/main.go': 'package main\nimport "net/http"\nfunc main() { http.ListenAndServe(":8080", nil) }',
+    'internal/tools/hidden/package.json': { packageManager: 'npm@11.0.0', dependencies: { fastify: '5.0.0' }, scripts: { start: 'node server.js', test: 'node --test' } },
+    'services/php/composer.json': { require: { 'laravel/framework': '^12.0' } },
+    'services/php/artisan': '<?php',
+    'services/php/Procfile': 'web: php artisan serve --port=8080'
+  }));
+  const outside = await fixture(t, { 'package.json': { dependencies: { hono: '4.0.0' }, packageManager: 'pnpm@10.0.0', scripts: { dev: 'node app.js', test: 'node --test' } } });
+  await symlink(outside, join(root, 'modules/outside'), 'junction');
+  const calls = [];
+  const operations = new ProjectOperations({ command: async (command, args, { cwd }) => { calls.push({ command, args, cwd }); } });
+  const app = createApp({ stateDir: false, operations }).listen(0, '127.0.0.1');
+  await once(app, 'listening');
+  t.after(async () => { await app.shutdownTasks(); await new Promise(resolve => app.close(resolve)); });
+  const base = `http://127.0.0.1:${app.address().port}`;
+  const get = async path => (await fetch(base + path)).json();
+  const { token } = await get('/api/state');
+  const post = (path, body) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, body: JSON.stringify(body) });
+  const response = await post('/api/projects/import', { path: root });
+  assert.equal(response.status, 201);
+  const { id, external, frameworks } = await response.json();
+  assert.equal(external, false);
+  assert.deepEqual(frameworks.sort(), ['ASP.NET Core', 'FastAPI', 'Go', 'Laravel', 'Next.js', 'Quarkus']);
+  const route = '/api/projects/' + id;
+  const [startup, dependencies, checks] = await Promise.all(['startup-suggestions', 'dependencies', 'checks'].map(view => get(route + '/' + view)));
+  assert.deepEqual(startup.groups.map(group => group.directory).sort(), ['Example.Api', 'backend/cmd/api', 'features/payments/server', 'modules/ui', 'services/php', 'services/python']);
+  assert.equal(startup.groups.find(group => group.directory === 'services/php').choices[0].source, 'Procfile · web');
+  assert.deepEqual(dependencies.steps.map(({ directory, command }) => [directory, command]), [['.', 'pnpm install'], ['services/python', 'uv sync --locked']]);
+  assert.equal(checks.checks.length, 1);
+  const [check] = checks.checks;
+  assert.deepEqual([check.directory, check.tool, check.name], ['modules/ui', 'pnpm', 'build']);
+  assert.deepEqual((await get('/api/projects?logs=' + id)).projects[0].startupServices, []);
+  assert.deepEqual(calls, []);
+  assert.equal((await post(route + '/run-check', { check: check.id })).status, 202);
+  for (let i = 0; i < 40 && !calls.length; i++) await delay(25);
+  assert.deepEqual(calls, [{ command: 'pnpm run build', args: [], cwd: join(root, 'modules', 'ui') }]);
+
+  const configured = 'internal/tools/hidden';
+  assert.equal((await post(route + '/startup', { services: [{ name: 'Custom path', directory: configured, command: 'npm run start' }] })).status, 200);
+  assert.ok((await get('/api/projects')).projects[0].frameworks.includes('Fastify'));
+  assert.ok((await get(route + '/startup-suggestions')).groups.some(group => group.directory === configured));
+  assert.ok((await get(route + '/dependencies')).steps.some(step => step.directory === configured));
+  assert.ok((await get(route + '/checks')).checks.some(item => item.directory === configured));
 });

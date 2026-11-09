@@ -3,7 +3,8 @@ import { basename, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { absoluteDirectory } from './paths.mjs';
 import { validateOptions } from './catalog.mjs';
-import { detectFrameworks, validFrameworks } from './project-detection.mjs';
+import { validFrameworks } from './project-detection.mjs';
+import { detectFrameworks } from './project-services.mjs';
 import { recordedIdentity } from './project-identity.mjs';
 import { validateStartup } from './project-startup.mjs';
 
@@ -75,7 +76,7 @@ export class ProjectConfig {
       if (Array.isArray(saved.imports)) for (const project of saved.imports) {
         try {
           const imported = importedProject(project.id, project.path, project);
-          if (imported.unmanaged) imported.frameworks = await detectFrameworks(imported.path);
+          if (imported.unmanaged) imported.frameworks = await detectFrameworks(imported).catch(() => imported.frameworks);
           this.value.imports.push(imported);
         }
         catch { /* ignore a single damaged project record */ }
@@ -92,10 +93,10 @@ export class ProjectConfig {
     return this.update(value => ({ ...value, ports: { ...value.ports, [project.id]: ports } }));
   }
 
-  saveStartup(id, startup) {
+  saveStartup(id, startup, frameworks) {
     return this.update(value => {
       if (!value.imports.some(project => project.id === id)) throw new Error('This project was not found in StackForge.');
-      return { ...value, imports: value.imports.map(project => project.id === id ? { ...project, startup } : project) };
+      return { ...value, imports: value.imports.map(project => project.id === id ? { ...project, startup, frameworks } : project) };
     });
   }
 

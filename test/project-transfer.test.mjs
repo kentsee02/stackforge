@@ -8,7 +8,7 @@ import { createApp } from '../src/server.mjs';
 import { cloneGithub } from '../src/project-clone.mjs';
 import { ProjectOperations } from '../src/project-operations.mjs';
 import { ProjectConfig } from '../src/project-config.mjs';
-import { detectFrameworks } from '../src/project-detection.mjs';
+import { detectFrameworks } from '../src/project-services.mjs';
 import { createDesktop } from '../src/desktop.mjs';
 
 async function fixture(t, options) {
@@ -171,7 +171,7 @@ test('unrecognized directories can be imported and old external records acquire 
     writeFile(join(workspace, 'pom.xml'), '<project><parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId></parent></project>')
   ]);
   const expected = ['Angular', 'Django', 'FastAPI', 'NestJS', 'Next.js', 'Spring Boot', 'Vue'];
-  assert.deepEqual((await detectFrameworks(folder)).sort(), expected);
+  assert.deepEqual((await detectFrameworks({ path: folder })).sort(), expected);
   const file = join(directory, 'projects.json');
   await writeFile(file, JSON.stringify({ version: 1, imports: [{ id: project.id, path: folder, external: true }] }));
   const saved = new ProjectConfig(file);

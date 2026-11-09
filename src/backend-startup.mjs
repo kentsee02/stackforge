@@ -152,10 +152,9 @@ async function gradleStartup(folder, root) {
 }
 
 export async function detectBackendLaunchers(folder, root) {
-  const declared = await projectProcess(folder);
-  if (declared) return [declared];
-  return (await Promise.all([
-    pythonStartup(folder), dotnetStartup(folder), goStartup(folder, root),
+  const [declared, ...launchers] = await Promise.all([
+    projectProcess(folder), pythonStartup(folder), dotnetStartup(folder), goStartup(folder, root),
     rustStartup(folder), phpStartup(folder), rubyStartup(folder), gradleStartup(folder, root)
-  ])).filter(Boolean);
+  ]);
+  return { declared, launchers: launchers.filter(Boolean) };
 }

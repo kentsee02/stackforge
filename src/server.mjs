@@ -17,7 +17,7 @@ import { ProjectRuntime, inspectRecordedProject, projectDirectory, readProjectFo
 import { ProjectConfig, defaultPorts, validatePorts, importedProject, projectPathKey } from './project-config.mjs';
 import { ProjectOperations } from './project-operations.mjs';
 import { cloneGithub, verifyClone } from './project-clone.mjs';
-import { detectFrameworks } from './project-detection.mjs';
+import { detectFrameworks } from './project-services.mjs';
 import { directoryIdentity } from './project-identity.mjs';
 import { resolveStartup, validateStartup } from './project-startup.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
@@ -73,7 +73,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
       const folderIdentity = directoryIdentity(await lstat(directory, { bigint: true }));
       project = importedProject(randomUUID(), directory, { name, frontend, backend, database, folderIdentity, ...clone });
     } catch {
-      project = importedProject(randomUUID(), directory, { unmanaged: true, ...clone, frameworks: await detectFrameworks(directory) });
+      project = importedProject(randomUUID(), directory, { unmanaged: true, ...clone, frameworks: await detectFrameworks({ path: directory, ...clone }) });
     }
     const existing = await Promise.all(jobs.projects().map(item => realpath(item.path).catch(() => item.path)));
     if (existing.some(item => projectPathKey(item) === projectPathKey(project.path))) throw new Error('This folder is already in Projects.');
@@ -277,7 +277,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
                 const { identity } = await resolveStartup(project, services, project.startup?.identity ?? project.cloneIdentity);
                 startup = { identity, services };
               }
-              await projectConfig.saveStartup(id, startup);
+              const frameworks = await detectFrameworks({ ...project, startup }).catch(() => project.frameworks);
+              await projectConfig.saveStartup(id, startup, frameworks);
               return { services };
             })();
             configWrites.set(project.path, saving);

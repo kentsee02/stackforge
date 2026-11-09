@@ -1,18 +1,12 @@
 import { realpath } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative } from 'node:path';
+import { basename, join } from 'node:path';
 import { detectBackendLaunchers } from './backend-startup.mjs';
-import { inspectNode } from './dependency-plan.mjs';
-import { conventional, findMavenWrapper, localText, npmManifest, workspaceFolders, workspaceSegments } from './project-detection.mjs';
-import { resolveStartup } from './project-startup.mjs';
+import { findMavenWrapper, localText, mavenLauncher } from './project-detection.mjs';
+import { childOf, scanProjectServices } from './project-services.mjs';
 
 const startupScripts = ['dev', 'start:dev', 'serve', 'start'];
 const webScript = /^(?:vite|next\s+(?:dev|start)|nuxt\s+dev|react-router\s+dev|react-router-serve)(?:\s|$)/;
 const nodeBackendDependencies = ['@nestjs/core', 'express', 'fastify', 'koa', 'hono', '@hono/node-server'];
-const mavenLaunchers = new Map([
-  ['spring-boot-maven-plugin', 'spring-boot:run'],
-  ['quarkus-maven-plugin', 'quarkus:dev'],
-  ['micronaut-maven-plugin', 'mn:run']
-]);
 
 function nodeServiceKind(manifest, script) {
   if (webScript.test(script)) return 'web';
@@ -57,19 +51,12 @@ async function springPort(folder) {
   if (port >= 1024 && port <= 65535 && values.every(value => Number(value) === port)) return port;
 }
 
-async function mavenSuggestion(folder, root, pom) {
-  const ownPom = pom.replace(/<(parent|pluginManagement|profiles)\b[^>]*>[\s\S]*?<\/\1>/g, '');
-  if (/<packaging>\s*pom\s*<\/packaging>/.test(ownPom)) return;
-  const build = /<build\b[^>]*>([\s\S]*?)<\/build>/.exec(ownPom)?.[1] ?? '';
-  const plugins = [...build.matchAll(/<plugin\b[^>]*>([\s\S]*?)<\/plugin>/g)]
-    .map(([, plugin]) => /<artifactId>\s*([\w.-]+)\s*<\/artifactId>/.exec(plugin)?.[1])
-    .filter(artifact => mavenLaunchers.has(artifact));
-  if (plugins.length !== 1) return;
-  const [plugin] = plugins;
-  const script = mavenLaunchers.get(plugin);
+async function mavenSuggestion({ folder, directory, pom }, root) {
+  const launcherInfo = mavenLauncher(pom);
+  if (!launcherInfo) return;
+  const { artifact, plugin, script } = launcherInfo;
   const [launcher, port] = await Promise.all([findMavenWrapper(folder, root), script === 'spring-boot:run' ? springPort(folder) : undefined]);
-  const name = suggestedName(/<artifactId>\s*([^<]+)<\/artifactId>/.exec(ownPom)?.[1] ?? '', folder);
-  const directory = relative(root, folder).replaceAll('\\', '/') || '.';
+  const name = suggestedName(artifact, folder);
   return { name, directory, choices: [{ command: (launcher ?? 'mvn') + ' ' + script, script, kind: 'api', source: 'pom.xml · ' + plugin, ...(port && { port }) }] };
 }
 
@@ -79,36 +66,14 @@ function workspaceScript(script, hasTurbo) {
   return hasTurbo && /^turbo\s+(?:run\s+)?[\w:-]+(?:\s+--parallel)?$/.test(script);
 }
 
-function childOf(folder, root) {
-  const path = relative(root, folder);
-  return Boolean(path) && !isAbsolute(path) && path !== '..' && !path.startsWith('../') && !path.startsWith('..\\');
-}
-
 export async function detectStartupSuggestions(project) {
-  const { root, identity } = await resolveStartup(project, [], project.startup?.identity ?? project.cloneIdentity);
-  const budget = { left: 2048 };
-  const serviceFolders = [...conventional, 'services/*', 'src/*', 'backend/*', 'server/*', 'cmd/*',
-    'backend/cmd/*', 'server/cmd/*', 'services/*/cmd/*', 'apps/*/cmd/*', '*'];
-  const folders = new Set([root, ...await workspaceFolders(root, serviceFolders, budget)]);
-  for (const service of project.startup?.services ?? []) {
-    const result = await resolveStartup(project, [service], identity).catch(() => null);
-    if (result) folders.add(result.commands[0].cwd);
-  }
-
-  const scanned = new Set(), detectedEntries = new Set(), records = new Map(), owner = new Map(), groups = [];
-  while (folders.size && scanned.size < 96) {
-    const folder = [...folders].sort((a, b) => a.length - b.length || a.localeCompare(b))[0];
-    folders.delete(folder);
-    if (scanned.has(folder)) continue;
-    scanned.add(folder);
-    const [packageText, pomText, backends] = await Promise.all([
-      localText(folder, 'package.json'), localText(folder, 'pom.xml'), detectBackendLaunchers(folder, root)
-    ]);
-    const pom = pomText.replace(/<!--[\s\S]*?-->/g, '');
-    const maven = await mavenSuggestion(folder, root, pom);
+  const { root, services, limited } = await scanProjectServices(project);
+  const detectedEntries = new Set(), records = new Map(), groups = [];
+  for (const service of services) {
+    const { folder, directory, manifest, manager, members, unknownWorkspace } = service;
+    const [maven, { declared, launchers }] = await Promise.all([mavenSuggestion(service, root), detectBackendLaunchers(folder, root)]);
     if (maven) groups.push(maven);
-    const directory = relative(root, folder).replaceAll('\\', '/') || '.';
-    for (const { name, choice, entryPath } of backends) {
+    for (const { name, choice, entryPath } of declared ? [declared] : launchers) {
       if (entryPath && detectedEntries.has(entryPath)) continue;
       if (entryPath) detectedEntries.add(entryPath);
       if (name === 'Spring Boot') {
@@ -118,18 +83,7 @@ export async function detectStartupSuggestions(project) {
       }
       groups.push({ name, directory, choices: [choice] });
     }
-    const modules = [...pom.matchAll(/<modules\b[^>]*>([\s\S]*?)<\/modules>/g)].flatMap(([, text]) =>
-      [...text.matchAll(/<module>\s*([^<]+?)\s*<\/module>/g)].map(match => match[1]));
-    for (const module of await workspaceFolders(folder, modules.slice(0, 32).filter(path => !path.includes('*')), budget)) {
-      if (!scanned.has(module)) folders.add(module);
-    }
-    const manifest = npmManifest(packageText);
-    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) continue;
-    const { tool, conflict, patterns } = await inspectNode(folder, manifest);
-    const inherited = owner.get(folder)?.tool;
-    const manager = conflict || (tool && inherited && tool !== inherited) ? undefined : tool ?? inherited;
-    const unknownWorkspace = patterns === null || patterns.length > 32 || patterns.some(pattern => !workspaceSegments(pattern));
-    const members = unknownWorkspace ? [] : [...await workspaceFolders(folder, patterns, budget)].filter(path => path !== folder);
+    if (!manifest) continue;
     const name = suggestedName(typeof manifest.name === 'string' ? manifest.name.split('/').at(-1) : '', folder);
     const scripts = manifest.scripts;
     const turbo = members.length && await localText(folder, 'turbo.json');
@@ -144,10 +98,6 @@ export async function detectStartupSuggestions(project) {
         ...(port && { port }), ...(kind && { kind }), ...(members.length && workspaceScript(text, Boolean(turbo)) && { orchestrates: true }) });
     }
     records.set(folder, { directory, name, choices, members, unknownWorkspace });
-    for (const member of members) {
-      owner.set(member, { tool: manager });
-      if (!scanned.has(member)) folders.add(member);
-    }
   }
 
   const suppressed = new Set();
@@ -162,5 +112,5 @@ export async function detectStartupSuggestions(project) {
       groups.push({ directory: record.directory, name: record.name, choices: record.choices });
     }
   }
-  return { groups: groups.slice(0, 12), limited: folders.size > 0 || budget.left <= 0 || groups.length > 12 };
+  return { groups: groups.slice(0, 12), limited: limited || groups.length > 12 };
 }

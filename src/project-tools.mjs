@@ -1,49 +1,43 @@
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { lstat, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { projectPathKey } from './project-config.mjs';
 import { inspectRecordedProject } from './project-runtime.mjs';
+import { scanProjectServices } from './project-services.mjs';
 
 const npmScripts = ['build', 'test', 'lint'];
 const mavenGoals = ['package', 'test'];
 const mavenWrapper = process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw';
 
-async function localFile(directory, filename, maxSize = Infinity) {
-  const path = join(directory, filename);
-  const file = await lstat(path).catch(error => {
+async function localFile(directory, filename) {
+  return (await lstat(join(directory, filename)).catch(error => {
     if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null;
     throw error;
-  });
-  return file?.isFile() && file.size <= maxSize ? path : undefined;
+  }))?.isFile();
 }
 
 export async function projectChecks(project) {
-  const { directory } = await inspectRecordedProject(project);
+  await inspectRecordedProject(project);
+  const { services } = await scanProjectServices(project);
   const checks = [];
-  for (const scope of ['root', 'frontend', 'backend']) {
-    const cwd = scope === 'root' ? directory : join(directory, scope);
-    const actual = await realpath(cwd).catch(error => {
-      if (['ENOENT', 'ENOTDIR'].includes(error.code)) return '';
-      throw error;
-    });
-    if (!actual || projectPathKey(actual) !== projectPathKey(cwd)) continue;
-
-    const manifest = await localFile(cwd, 'package.json', 512 * 1024);
-    if (manifest) {
-      const content = await readFile(manifest, 'utf8');
-      let scripts;
-      try { scripts = JSON.parse(content.replace(/^\uFEFF/, ''))?.scripts; }
-      catch { /* npm scripts are unavailable until this package.json is valid. */ }
+  for (const { folder: cwd, directory, manifest, manager, managerConflict, pom } of services) {
+    const scope = directory === '.' ? 'root' : ['frontend', 'backend'].includes(directory) ? directory : 'service';
+    if (manifest && !managerConflict) {
+      const scripts = manifest.scripts;
+      const tool = manager ?? 'npm';
+      const key = scope === 'service' ? 'service:' + createHash('sha256').update(directory).digest('hex').slice(0, 24) : scope;
       for (const name of npmScripts) {
         if (typeof scripts?.[name] === 'string' && scripts[name].trim()) {
-          checks.push({ id: `${scope}:${name}`, scope, tool: 'npm', name, cwd });
+          checks.push({ id: `${key}:${name}`, scope, directory, tool, name, cwd });
         }
       }
     }
-    if (scope === 'backend' && project.backend === 'spring' && await localFile(cwd, 'pom.xml') && await localFile(cwd, mavenWrapper)) {
-      for (const name of mavenGoals) checks.push({ id: `maven:${name}`, scope, tool: 'maven', name, cwd });
+    if (scope === 'backend' && project.backend === 'spring' && pom && await localFile(cwd, mavenWrapper)) {
+      for (const name of mavenGoals) checks.push({ id: `maven:${name}`, scope, directory, tool: 'maven', name, cwd });
     }
   }
-  return checks;
+  const order = ['root', 'frontend', 'backend', 'service'];
+  return checks.sort((left, right) => order.indexOf(left.scope) - order.indexOf(right.scope));
 }
 
 export async function projectGitStatus(project, command) {

@@ -64,7 +64,7 @@ export class ProjectOperations {
     const entry = this.projects.get(key) ?? {};
     if (entry.active) throw new Error('Wait for the current project operation to finish.');
     const kind = action === 'install' ? 'dependencies' : action === 'run-check' ? 'checkTask' : 'databaseTask';
-    if (kind === 'checkTask' && (typeof checkId !== 'string' || !/^(?:(?:root|frontend|backend):(?:build|test|lint)|maven:(?:package|test))$/.test(checkId))) {
+    if (kind === 'checkTask' && (typeof checkId !== 'string' || !/^(?:(?:root|frontend|backend|service:[a-f0-9]{24}):(?:build|test|lint)|maven:(?:package|test))$/.test(checkId))) {
       throw new Error('Choose an available project check.');
     }
     const controller = new AbortController();
@@ -101,7 +101,7 @@ export class ProjectOperations {
   }
 
   async checks(project) {
-    return (await projectChecks(project)).map(({ id, scope, tool, name }) => ({ id, scope, tool, name }));
+    return (await projectChecks(project)).map(({ id, scope, directory, tool, name }) => ({ id, scope, directory, tool, name }));
   }
 
   git(project) {
@@ -113,9 +113,13 @@ export class ProjectOperations {
     throwIfCancelled(options.signal);
     const check = checks.find(item => item.id === checkId);
     if (!check) throw new Error('This project check is no longer available.');
+    const { commands: [verified] } = await resolveStartup(project, [check], project.startup?.identity ?? project.cloneIdentity ?? project.folderIdentity);
+    if (projectPathKey(verified.cwd) !== projectPathKey(check.cwd)) throw new Error('This project check is no longer available.');
+    throwIfCancelled(options.signal);
     const config = { ...options, cwd: check.cwd };
     if (check.tool === 'maven') await maven(['-B', check.name], config, this.command);
-    else await npm(['run', check.name], config);
+    else if (check.tool === 'npm') await npm(['run', check.name], config);
+    else await this.command(`${check.tool} run ${check.name}`, [], { ...config, shell: true });
   }
 
   async installDependencies(project, task, options) {

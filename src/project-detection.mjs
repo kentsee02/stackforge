@@ -16,7 +16,15 @@ const npmFrameworks = [
   ['Hono', 'hono']
 ];
 const pythonFrameworks = [['Django', 'django'], ['FastAPI', 'fastapi'], ['Flask', 'flask']];
-const known = new Set([...npmFrameworks.map(([name]) => name), ...pythonFrameworks.map(([name]) => name), 'Spring Boot']);
+const mavenLaunchers = new Map([
+  ['spring-boot-maven-plugin', { framework: 'Spring Boot', script: 'spring-boot:run' }],
+  ['quarkus-maven-plugin', { framework: 'Quarkus', script: 'quarkus:dev' }],
+  ['micronaut-maven-plugin', { framework: 'Micronaut', script: 'mn:run' }]
+]);
+const known = new Set([
+  ...npmFrameworks.map(([name]) => name), ...pythonFrameworks.map(([name]) => name),
+  ...[...mavenLaunchers.values()].map(({ framework }) => framework), 'Ktor', 'ASP.NET Core', 'Go', 'Rust', 'Laravel', 'Rails'
+]);
 export const validFrameworks = values => Array.isArray(values) ? [...new Set(values.filter(value => known.has(value)))] : [];
 
 export async function localText(folder, filename) {
@@ -50,11 +58,23 @@ export async function findBuildWrapper(directory, root, wrapper) {
   }
 }
 
-async function detectIn(folder) {
-  const [npm, pom, gradle, gradleKotlin, requirements, pyproject] = await Promise.all(
-    ['package.json', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'requirements.txt', 'pyproject.toml'].map(file => localText(folder, file))
+export function mavenLauncher(pom) {
+  const ownPom = pom.replace(/<(parent|pluginManagement|profiles)\b[^>]*>[\s\S]*?<\/\1>/g, '');
+  if (/<packaging>\s*pom\s*<\/packaging>/.test(ownPom)) return;
+  const build = /<build\b[^>]*>([\s\S]*?)<\/build>/.exec(ownPom)?.[1] ?? '';
+  const plugins = [...build.matchAll(/<plugin\b[^>]*>([\s\S]*?)<\/plugin>/g)]
+    .map(([, plugin]) => /<artifactId>\s*([\w.-]+)\s*<\/artifactId>/.exec(plugin)?.[1])
+    .filter(artifact => mavenLaunchers.has(artifact));
+  if (plugins.length !== 1) return;
+  const [plugin] = plugins;
+  const artifact = /<artifactId>\s*([^<]+)<\/artifactId>/.exec(ownPom)?.[1] ?? '';
+  return { ...mavenLaunchers.get(plugin), plugin, artifact };
+}
+
+export async function detectManifestFrameworks(folder, manifest, pom) {
+  const [gradle, gradleKotlin, requirements, pyproject] = await Promise.all(
+    ['build.gradle', 'build.gradle.kts', 'requirements.txt', 'pyproject.toml'].map(file => localText(folder, file))
   );
-  const manifest = npmManifest(npm);
   const dependencies = new Set();
   for (const key of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
     const group = manifest?.[key];
@@ -67,9 +87,8 @@ async function detectIn(folder) {
     frameworks.push(name);
     for (const base of supersedes) dependencies.delete(base);
   }
-  const maven = pom.replace(/<!--[\s\S]*?-->/g, '');
   const gradleBuild = (gradle + '\n' + gradleKotlin).replace(/\/\*[\s\S]*?\*\/|^[ \t]*\/\/.*$/gm, '');
-  if (/<groupId>\s*org\.springframework\.boot\s*<\/groupId>\s*<artifactId>\s*spring-boot[\w-]*\s*<\/artifactId>/.test(maven) ||
+  if (/<groupId>\s*org\.springframework\.boot\s*<\/groupId>\s*<artifactId>\s*spring-boot[\w-]*\s*<\/artifactId>/.test(pom) ||
       /\bid\s*\(?\s*['"]org\.springframework\.boot['"]/.test(gradleBuild)) frameworks.push('Spring Boot');
   const section = name => new RegExp(`^\\[${name}\\][ \\t]*\\r?\\n([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))`, 'm').exec(pyproject)?.[1] ?? '';
   const poetry = section('tool\\.poetry\\.dependencies');
@@ -84,7 +103,6 @@ async function detectIn(folder) {
   return frameworks;
 }
 
-export const conventional = ['frontend', 'backend', 'client', 'server', 'web', 'api', 'apps/*', 'packages/*'];
 const ignored = name => name.startsWith('.') || name === 'node_modules';
 
 export function workspaceSegments(pattern) {
@@ -131,11 +149,4 @@ export async function workspaceFolders(directory, patterns, budget = { left: 204
     if (segments) await collectWorkspace(directory, segments, folders, budget);
   }
   return folders;
-}
-
-export async function detectFrameworks(directory) {
-  if (!await localDirectory(directory)) return [];
-  const manifest = npmManifest(await localText(directory, 'package.json'));
-  const folders = new Set([directory, ...await workspaceFolders(directory, new Set([...declaredWorkspaces(manifest).slice(0, 32), ...conventional]))]);
-  return validFrameworks((await Promise.all([...folders].map(detectIn))).flat());
 }
