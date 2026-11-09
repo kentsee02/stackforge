@@ -57,7 +57,7 @@ Windows PowerShell：`$env:PORT=4311; npm start`。
 - 「从 GitHub 克隆」接受仓库 HTTPS 地址和保存父目录，通过本机 Git 和已配置的凭据访问私有仓库。克隆和本地导入使用同一套框架检测。删除时输入完整项目名，StackForge 会核对克隆标记与记录的文件系统身份，再将整个文件夹移到系统回收站。缺少目录身份记录的旧版克隆支持从列表移除。
 - 「从项目列表移除」只清除导入或克隆的登记，保留文件和数据库。如果原目录被替换，可先移除旧记录，再导入当前文件夹。
 - 「启动配置」适用于没有 StackForge 启动器的本地导入和 GitHub 克隆项目，最多可同时启动六个服务。为每个服务填写名称、相对工作目录和可信的前台命令，例如 `npm run dev`，用 `.` 表示项目根目录。可选的 HTTP 端口会在启动前检查冲突，并通过 `PORT` 传给进程。需要命令行参数的框架，请在命令中明确指定端口。点击「启动项目」会运行已保存的命令，并显示带服务名称的日志和已就绪的访问链接。点击「停止项目」会停止整组服务。命令保存在本机项目设置中，凭据请放在项目的环境文件里。
-- 「检测启动配置」会预览已声明的 JavaScript 脚本和 Spring Boot Maven 启动命令，分别以 `package.json` 或 `pom.xml` 所在目录为工作目录。检测范围包括根目录、常见服务目录、JavaScript 工作区和 Maven 模块。优先使用已有的 Maven Wrapper，并建议 Spring Boot 配置中的固定端口或受支持的前端 `--port` 参数。能确认 JavaScript 工作区有统一启动命令时，只建议该命令。选择建议会加入可编辑草稿，并保留已有自定义服务。
+- 「检测启动配置」会预览启动命令及其工作目录。支持 JavaScript 和 TypeScript 项目声明的脚本，Spring Boot、Quarkus、Micronaut 和 Ktor（Gradle）的构建插件，以及 Django、FastAPI、Flask、ASP.NET Core、Go HTTP 服务、Rust Web 应用、Laravel 和 Rails 的常见入口。任意框架都可以通过 `Procfile.dev` 或 `Procfile` 中唯一的 `web:` 命令提供启动建议。检测范围包括常见服务目录、声明的 JavaScript 工作区、Maven 模块和已保存的服务目录。加入草稿后请核对运行环境、端口和访问路径，再保存。自定义命令仍可随时填写。
 - 外部服务可将「服务用途」设为「网页应用」或「API 服务」，并填写服务实际监听的 HTTP 端口。「打开网页」默认打开 `/`。「打开 API」使用你填写的本机访问路径，例如 `/api/health` 或 `/swagger-ui/index.html`。服务响应就绪探测后才显示链接。
 - 启动时遇到常见的端口、依赖、Java 或 Docker 问题，页面会在日志旁显示处理提示。
 

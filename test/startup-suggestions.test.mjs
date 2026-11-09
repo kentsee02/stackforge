@@ -86,6 +86,91 @@ test('a recognized workspace launcher replaces its member suggestions', async t 
   ]);
 });
 
+test('mixed Python, .NET, Go, Rust, PHP, and Ruby services use their own entry directories', async t => {
+  const root = await fixture(t, {
+    'package.json': { name: 'frontend', packageManager: 'npm@11.0.0', scripts: { dev: 'vite --port 5178' } },
+    'backend/app/main.py': 'from fastapi import FastAPI\napp = FastAPI()\n',
+    'services/django/manage.py': "from django.core.management import execute_from_command_line\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'settings')",
+    'services/django/pyproject.toml': '[project]\nname = "django-demo"\n',
+    'services/django/uv.lock': 'version = 1\n',
+    'services/flask/app.py': 'from flask import Flask\napp = Flask(__name__)\n',
+    'Example.Api/Http.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web" />',
+    'Example.Api/Program.cs': 'app.MapControllers();',
+    'Example.Api/Properties/launchSettings.json': { profiles: {
+      Development: { commandName: 'Project', applicationUrl: 'https://localhost:7110;http://localhost:5110' }
+    } },
+    'services/go/go.mod': 'module example.com/server\n',
+    'services/go/cmd/api/main.go': 'package main\nimport "net/http"\nfunc main() { http.ListenAndServe(":8080", nil) }',
+    'services/rust/Cargo.toml': '[package]\nname = "rust-server"\n[dependencies]\naxum = "0.8"\n',
+    'services/rust/src/main.rs': 'async fn main() {}',
+    'services/php/composer.json': { require: { 'laravel/framework': '^12.0' } },
+    'services/php/artisan': '<?php',
+    'services/ruby/Gemfile': "source 'https://rubygems.org'\ngem 'rails', '~> 8.0'\n",
+    'services/ruby/bin/rails': 'require "rails/commands"'
+  });
+  const { groups, limited } = await detectStartupSuggestions({ path: root });
+  const python = process.platform === 'win32' ? 'python' : 'python3';
+  assert.equal(limited, false);
+  assert.deepEqual(Object.fromEntries(groups.map(group => [group.directory, group.choices[0].command])), {
+    '.': 'npm run dev',
+    backend: python + ' -m uvicorn app.main:app --reload',
+    'services/django': 'uv run --no-sync python manage.py runserver',
+    'services/flask': python + ' -m flask --app app.py run',
+    'Example.Api': 'dotnet run --project Http.csproj --launch-profile Development',
+    'services/go/cmd/api': 'go run .',
+    'services/rust': 'cargo run --bin rust-server',
+    'services/php': 'php artisan serve',
+    'services/ruby': 'ruby bin/rails server'
+  });
+  const dotnet = groups.find(group => group.directory === 'Example.Api').choices[0];
+  assert.equal(dotnet.port, 5110);
+  assert.equal(dotnet.kind, 'api');
+});
+
+test('JVM suggestions require active plugins and prefer project wrappers', async t => {
+  const gradle = process.platform === 'win32' ? 'gradlew.bat' : 'gradlew';
+  const root = await fixture(t, {
+    [gradle]: 'wrapper',
+    'build.gradle.kts': 'plugins { id("org.springframework.boot") version "3.0" apply false }',
+    'services/boot/build.gradle.kts': 'plugins { id("org.springframework.boot") }',
+    'services/boot/src/main/resources/application.properties': 'server.port=8082',
+    'services/quarkus/build.gradle': "plugins { id 'io.quarkus' }",
+    'services/ktor/build.gradle.kts': 'plugins { id("io.ktor.plugin") }\napplication { mainClass.set("server.MainKt") }',
+    'services/no-main/build.gradle.kts': 'plugins { id("io.ktor.plugin") }',
+    'services/maven/pom.xml': '<project><build><plugins><plugin><artifactId>quarkus-maven-plugin</artifactId></plugin></plugins></build></project>',
+    'services/micronaut/pom.xml': '<project><build><plugins><plugin><artifactId>micronaut-maven-plugin</artifactId></plugin></plugins></build></project>',
+    'services/parent/pom.xml': '<project><build><pluginManagement><plugins><plugin><artifactId>quarkus-maven-plugin</artifactId></plugin></plugins></pluginManagement></build></project>'
+  });
+  const { groups } = await detectStartupSuggestions({ path: root });
+  const launcher = ['..', '..', gradle].join(sep);
+  assert.deepEqual(Object.fromEntries(groups.map(group => [group.directory, group.choices[0].command])), {
+    'services/boot': launcher + ' bootRun',
+    'services/quarkus': launcher + ' quarkusDev',
+    'services/ktor': launcher + ' run',
+    'services/maven': 'mvn quarkus:dev',
+    'services/micronaut': 'mvn mn:run'
+  });
+  assert.equal(groups.find(group => group.directory === 'services/boot').choices[0].port, 8082);
+});
+
+test('declared cross-framework commands work and ambiguous entries stay manual', async t => {
+  const root = await fixture(t, {
+    'services/custom/Procfile.dev': 'worker: custom worker\r\nweb: custom serve --local\r\n',
+    'services/custom/Procfile': 'web: custom serve --production\n',
+    'services/duplicate/Procfile': 'web: first\nweb: second\n',
+    'services/python/main.py': 'from fastapi import FastAPI\napp = FastAPI()\n',
+    'services/python/app.py': 'from flask import Flask\napp = Flask(__name__)\n',
+    'services/dotnet/Tools.csproj': '<Project Sdk="Microsoft.NET.Sdk" />',
+    'services/go/main.go': 'package main\nimport "net/http"\nfunc main() { http.ListenAndServe(":8080", nil) }',
+    'services/node/package.json': { name: 'api', packageManager: 'npm@11.0.0', dependencies: { express: '5.0.0' },
+      scripts: { dev: 'vite', 'start:dev': 'node --watch api.mjs' } }
+  });
+  const { groups } = await detectStartupSuggestions({ path: root });
+  assert.deepEqual(groups.map(group => group.directory), ['services/custom', 'services/node']);
+  assert.deepEqual(groups[0].choices, [{ command: 'custom serve --local', script: 'Web process', source: 'Procfile.dev · web' }]);
+  assert.deepEqual(groups[1].choices.map(choice => choice.kind), ['web', 'api']);
+});
+
 test('reading suggestions leaves saved custom configuration and project files untouched', async t => {
   const root = await fixture(t, {
     'package.json': { name: 'fixture', scripts: { dev: 'node should-not-run.mjs' } },

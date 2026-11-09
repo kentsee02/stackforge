@@ -114,7 +114,8 @@ function startupSuggestionConflict(group, choice, draft) {
     const path = startupDirectoryKey(service.directory);
     return service.command && (folder === '.' || path === folder || path.startsWith(folder + '/'));
   })) return 'This workspace command overlaps an existing startup service.';
-  if (draft.some(service => service.command && startupDirectoryKey(service.directory) === folder)) return 'A startup command is already configured for this folder. Edit it below to use another script.';
+  if (draft.some(service => service.command && startupDirectoryKey(service.directory) === folder &&
+      (!service.kind || !choice.kind || service.kind === choice.kind))) return 'A startup command is already configured for this folder. Edit it below to use another command.';
   if (draft.length >= 6) return 'Configure up to six startup services.';
 }
 
@@ -155,10 +156,10 @@ function renderStartupSuggestions(project, locked, draft) {
   const data = view?.data;
   status.hidden = !view;
   status.classList.toggle('project-operation-error', Boolean(view?.error));
-  if (view) showMessage(status, view.error ?? (view.loading ? 'Looking for startup scripts…' : data.limited
+  if (view) showMessage(status, view.error ?? (view.loading ? 'Looking for startup commands…' : data.limited
     ? 'The scan limit was reached. Review these suggestions and add any remaining services manually.'
-    : data.groups.length ? 'Choose a script and add it to the draft. Review and save before starting.'
-    : 'No reliable startup scripts were detected. Add a service manually.'));
+    : data.groups.length ? 'Choose a command and add it to the draft. Review and save before starting.'
+    : 'No reliable startup commands were detected. Add a service manually.'));
   if (displayedStartupSuggestions !== data) {
     displayedStartupSuggestions = data;
     list.replaceChildren(...(data?.groups ?? []).map(group => suggestionRow(group, project.id)));

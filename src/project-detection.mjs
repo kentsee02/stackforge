@@ -38,9 +38,12 @@ export function npmManifest(text) {
 }
 
 export async function findMavenWrapper(directory, root) {
+  return findBuildWrapper(directory, root, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw');
+}
+
+export async function findBuildWrapper(directory, root, wrapper) {
   const within = relative(root, directory);
   if (isAbsolute(within) || within.split(sep)[0] === '..') return;
-  const wrapper = process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw';
   for (let folder = directory; ; folder = dirname(folder)) {
     if ((await lstat(join(folder, wrapper)).catch(() => null))?.isFile()) return (relative(directory, folder) || '.') + sep + wrapper;
     if (!relative(root, folder)) return;
