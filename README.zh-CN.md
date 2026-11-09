@@ -70,7 +70,9 @@ Windows PowerShell：`$env:PORT=4311; npm start`。
 
 「数据库管理」会显示 Docker Compose 数据库的状态和最近 100 行容器日志。它使用项目已保存的数据库端口，可以单独启动和停止数据库。停止数据库会保留数据卷。
 
-「下载备份」可导出正在运行的 StackForge 数据库，PostgreSQL 使用自定义归档，MySQL 使用 SQL 文件。删除确认框也提供下载备份入口。MySQL 导出表结构、数据、视图和触发器。「恢复备份」接受同一种数据库的可信文件，大小上限为 64 MiB。请先停止应用，启动空的项目数据库，再输入完整项目名确认。MySQL 恢复失败时可能留下部分已恢复的对象。
+导入和克隆项目也可使用此面板。项目根目录须有一个 Compose 文件，且其中恰好有一个使用官方镜像的 MySQL 或 PostgreSQL 服务，并使用独立的本地命名数据卷。StackForge 会核对已记录的项目目录、Compose 标签、实际挂载和数据卷的使用者。外部卷、共享卷或有歧义的配置会被拒绝。没有记录目录身份的旧项目，可以先移除登记再重新导入。启动数据库时，其他 Compose 服务可独立管理。
+
+「下载备份」可导出已验证且正在运行的数据库，PostgreSQL 使用自定义归档，MySQL 使用 SQL 文件。托管数据库的删除确认框也提供下载入口。MySQL 用容器的 root 密码导出，涵盖表结构、数据、视图、触发器、存储过程、函数和计划事件。备份移除对象中指定的旧账号，以便恢复时使用目标账号。「恢复备份」接受同一种数据库的可信文件，大小上限为 64 MiB。请先停止应用，启动空的项目数据库，再输入完整项目名确认。MySQL 用已配置的非 root 用户恢复，服务器须允许其创建对应对象。恢复失败时可能留下部分已恢复的对象。
 
 「构建、测试与代码检查」会使用对应的 JavaScript 包管理器，无法识别时沿用 npm。含 Maven Wrapper 的 Maven 项目可以执行 `package` 和 `test`，包括导入的 Spring Boot。也支持 Gradle、.NET、Go、Rust 的构建和测试、Composer 脚本，以及具备对应配置的 Laravel 和 Rails 测试与代码检查。任意项目都可以在「自定义检查命令」中按目录保存可信的构建、测试或 Lint 命令，保存后在同一面板选择并运行。运行检查前请停止项目。面板会显示实时日志和最近一次结果，运行中可以取消。凭据请放在项目的环境文件里。
 
@@ -84,10 +86,11 @@ Windows PowerShell：`$env:PORT=4311; npm start`。
 
 - Vue 3 或 React，搭配 Vite 与 TypeScript。前端 `/api` 会代理到后端，默认端口为 8080。
 - Spring Boot：从官方 Spring Initializr 下载稳定版本，包含 Java 21、Maven Wrapper、健康检查 API 和可选 JDBC 驱动。
-- Express：健康检查 API，可选 mysql2 / pg 连接池和数据库检查接口。
+- Express：TypeScript、健康检查 API，可选 mysql2 / pg 连接池和数据库检查接口。
 - NestJS 提供 TypeScript 模块、健康检查控制器、开发热重载和可选的 MySQL 或 PostgreSQL 连接。NestJS 全栈预设搭配 React 和 PostgreSQL。
 - MySQL 8.4 或 PostgreSQL 17：Compose、持久化数据卷、健康检查，以及随机生成的本地密码。
 - npm workspaces 管理前端与 Node 后端；统一开发脚本在需要时自动启动数据库。
+- 根目录的 `npm test` 会运行 Vue 和 React 的渲染测试，以及 Express 和 NestJS 的 HTTP 健康检查测试，无需连接数据库。Spring Boot 使用 Maven 测试入口。
 - README、.gitignore、stackforge.json、可选 Git main 分支。
 - npm 包在创建时解析当前版本并写入精确版本号；安装后由 lockfile 锁定。
 

@@ -76,6 +76,8 @@ try {
       record.checks.push('secrets-and-recovery-files-excluded');
       await npm(['run', 'build'], { cwd: result.path });
       record.checks.push('frontend-production-build');
+      await npm(['test'], { cwd: result.path });
+      record.checks.push('npm-workspace-tests');
       if (variant.backend === 'nestjs') {
         await readFile(join(result.path, 'backend', 'dist', 'main.js'));
         record.checks.push('nestjs-production-build');

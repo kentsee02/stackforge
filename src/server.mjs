@@ -23,6 +23,7 @@ import { resolveStartup, validateCustomChecks, validateStartup } from './project
 import { detectDependencyPlan } from './dependency-plan.mjs';
 import { detectStartupSuggestions } from './startup-suggestions.mjs';
 import { backupLimit } from './database-backup.mjs';
+import { hasImportedCompose } from './imported-database.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const identity = { application: 'stackforge-local', version: metadata.version, project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
@@ -65,20 +66,20 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     const directory = await projectDirectory(absoluteDirectory(path)).catch(() => {
       throw new Error('Choose an existing project directory.');
     });
+    const folderIdentity = directoryIdentity(await lstat(directory, { bigint: true }));
     let project;
     try {
       const { manifest } = await readProjectFolder(directory);
       await developmentScript(directory);
       const { name, frontend, backend, database } = manifest.options ?? {};
-      const folderIdentity = directoryIdentity(await lstat(directory, { bigint: true }));
       project = importedProject(randomUUID(), directory, { name, frontend, backend, database, folderIdentity, ...clone });
     } catch {
-      project = importedProject(randomUUID(), directory, { unmanaged: true, ...clone, frameworks: await detectFrameworks({ path: directory, ...clone }) });
+      project = importedProject(randomUUID(), directory, { unmanaged: true, folderIdentity, ...clone, frameworks: await detectFrameworks({ path: directory, ...clone }) });
     }
     const existing = await Promise.all(jobs.projects().map(item => realpath(item.path).catch(() => item.path)));
     if (existing.some(item => projectPathKey(item) === projectPathKey(project.path))) throw new Error('This folder is already in Projects.');
     await projectConfig.addProject(project);
-    return projectDetails(project);
+    return { ...projectDetails(project), ...(project.unmanaged && { hasComposeDatabase: await hasImportedCompose(project) }) };
   }
   function send(res, status, value) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -107,6 +108,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const session = runtime.status(project, project.id === selected);
           if (!deleting && !['starting', 'running', 'stopping'].includes(session.status) && !await locationExists(project.path)) return;
           const detail = { ...projectDetails(project), ...session, ...operations.status(project, project.id === selected), deleting };
+          if (project.unmanaged) detail.hasComposeDatabase = await hasImportedCompose(project);
           if (transfer?.path === project.path) detail.operation = 'databaseTransfer';
           if (project.id === selected) {
             if (project.unmanaged) detail.startupServices = project.startup?.services ?? [];
@@ -155,7 +157,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         const restore = action === 'restore';
         if (!authorized(req, restore ? 'application/octet-stream' : 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         const project = managedProjects().find(item => item.id === id);
-        if (!project || project.database === 'none') return send(res, 404, { error: 'This project has no database.' });
+        if (!project || (project.database === 'none' && !await hasImportedCompose(project))) return send(res, 404, { error: 'This project has no database.' });
         if (closing || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
           return send(res, 409, { error: 'Wait for the current project operation to finish.' });
         }
@@ -231,7 +233,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const project = managedProjects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
           if (transfer?.path === project.path) return send(res, 409, { error: 'Wait for the current project operation to finish.' });
-          if (project.unmanaged && !['start', 'stop', 'startup', 'install', 'install-cancel', 'run-check', 'check-cancel', 'check-config', 'trash', 'remove'].includes(action)) {
+          if (project.unmanaged && !['start', 'stop', 'startup', 'install', 'install-cancel', 'run-check', 'check-cancel', 'check-config', 'trash', 'remove', 'database-start', 'database-stop'].includes(action)) {
             return send(res, 409, { error: 'This action requires a StackForge project.' });
           }
           if (project.unmanaged && action === 'start' && !project.startup?.services.some(service => service.command)) return send(res, 409, { error: 'Save a startup configuration before starting this project.' });
@@ -250,7 +252,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             const inTransition = ['starting', 'stopping'].includes(session.status);
             if (action === 'install' && (inTransition || session.status === 'running')) return send(res, 409, { error: 'Stop the project before installing dependencies.' });
             if (action === 'run-check' && (inTransition || session.status === 'running')) return send(res, 409, { error: 'Stop the project before running checks.' });
-            if (action.startsWith('database-') && (inTransition || session.status === 'running' && !session.initialized)) return send(res, 409, { error: 'Wait for the project to become ready or stop it first.' });
+            if (action.startsWith('database-') && (inTransition || !project.unmanaged && session.status === 'running' && !session.initialized)) return send(res, 409, { error: 'Wait for the project to become ready or stop it first.' });
             try {
               const target = action === 'run-check' ? { ...project, customChecks: projectConfig.checks(project) } : project;
               operations.start(target, action, projectConfig.ports(project), payload.check, detectedInstall ? payload.planId : undefined);

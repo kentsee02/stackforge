@@ -6,7 +6,7 @@ export const catalog = {
   ],
   backend: [
     { id: 'spring', name: 'Spring Boot', detail: 'Java 21 · Maven Wrapper' },
-    { id: 'express', name: 'Express', detail: 'Node.js · REST API' },
+    { id: 'express', name: 'Express', detail: 'Node.js · TypeScript · REST API' },
     { id: 'nestjs', name: 'NestJS', detail: 'Node.js · TypeScript · Modules' },
     { id: 'none', name: '不需要后端', detail: '仅生成前端应用' }
   ],

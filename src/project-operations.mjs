@@ -9,6 +9,7 @@ import { projectChecks, projectGitStatus } from './project-tools.mjs';
 import { transferDatabase } from './database-backup.mjs';
 import { resolveStartup } from './project-startup.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
+import { inspectImportedDatabase } from './imported-database.mjs';
 
 const logLimit = 64 * 1024;
 // Compose probes can take several seconds while Docker Desktop is busy.
@@ -202,6 +203,18 @@ export class ProjectOperations {
   }
 
   async database(project, ports, logs = false) {
+    if (project.unmanaged) {
+      const { config, container, engine } = await inspectImportedDatabase(project, this.command);
+      const state = { engine, status: container?.status === 'exited' || container?.status === 'created' || container?.status === 'dead' ? 'stopped' : container?.status ?? 'absent' };
+      if (logs && container) {
+        let output = '';
+        await this.command('docker', ['logs', '--tail', '100', container.id], {
+          ...config, timeout: dockerProbeTimeout, log: chunk => { output = (output + chunk).slice(-logLimit); }
+        });
+        state.log = output;
+      }
+      return state;
+    }
     const config = await databaseOptions(project, ports);
     const state = await this.databaseState(config);
     if (logs && state.status !== 'absent') {
@@ -215,6 +228,15 @@ export class ProjectOperations {
   }
 
   async changeDatabase(project, action, ports, options) {
+    if (project.unmanaged) {
+      const { config, container, start } = await inspectImportedDatabase(project, this.command, options.signal);
+      throwIfCancelled(options.signal);
+      if (action === 'database-start') await start(options);
+      else if (container && !['created', 'exited', 'dead'].includes(container.status)) {
+        await this.command('docker', ['container', 'stop', container.id], { ...config, ...options });
+      }
+      return;
+    }
     const config = await databaseOptions(project, ports);
     const state = await this.databaseState({ ...config, signal: options.signal });
     throwIfCancelled(options.signal);
@@ -224,6 +246,11 @@ export class ProjectOperations {
   }
 
   async databaseBackup(project, ports, file, signal) {
+    if (project.unmanaged) {
+      const { config, container, engine } = await inspectImportedDatabase(project, this.command, signal);
+      if (container?.status !== 'running') throw new Error('Start the project database before backing it up or restoring it.');
+      return transferDatabase({ engine, project: project.name, container: container.id, config, command: this.command, file, signal });
+    }
     const config = await databaseOptions(project, ports);
     const containers = await this.databaseContainers({ ...config, signal });
     if (containers.length !== 1 || containers[0].status !== 'running') {

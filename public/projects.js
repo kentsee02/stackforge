@@ -412,7 +412,7 @@ const databaseLabels = { absent: 'Database not created', stopped: '已停止', r
 
 function renderDatabase(project, busy, unavailable) {
   const details = $('project-database');
-  details.hidden = project.database === 'none';
+  details.hidden = project.database === 'none' && !project.hasComposeDatabase;
   if (databaseView?.id !== project.id) databaseView = { id: project.id, next: 0 };
   const view = databaseView;
   const task = project.databaseTask;
@@ -420,15 +420,15 @@ function renderDatabase(project, busy, unavailable) {
   view.taskStatus = task?.status;
   const changing = project.operation === 'databaseTask';
   const state = changing ? (task?.phase === 'database-stop' ? 'stopping' : 'starting') : view.status;
-  $('database-engine').textContent = stackNames[project.database] ?? '';
+  $('database-engine').textContent = stackNames[view.engine ?? project.database] ?? '';
   showMessage($('database-status'), databaseLabels[state] ?? (view.error ? 'Database status unavailable' : 'Checking database…'));
-  const transitioning = busy && !project.initialized;
+  const transitioning = project.unmanaged ? ['starting', 'stopping'].includes(project.status) : busy && !project.initialized;
   const disabled = unavailable || transitioning || !view.status || Boolean(view.error);
   $('database-start').disabled = disabled || ['running', 'starting', 'restarting', 'paused'].includes(state);
   $('database-stop').disabled = disabled || ['absent', 'stopped'].includes(state);
   $('database-logs').disabled = view.loading || !view.status || state === 'absent' || Boolean(view.error);
-  $('database-backup').disabled = unavailable || state !== 'running';
-  $('database-restore').disabled = unavailable || busy || state !== 'running';
+  $('database-backup').disabled = unavailable || Boolean(view.error) || state !== 'running';
+  $('database-restore').disabled = unavailable || busy || Boolean(view.error) || state !== 'running';
   const transfer = transferMessage?.id === project.id ? transferMessage.message : '';
   showMessage($('database-transfer-message'), transfer);
   $('database-transfer-message').hidden = !transfer;
@@ -909,7 +909,7 @@ $('database-restore').addEventListener('click', () => {
   restoring = projects.find(project => project.id === selected);
   if (!restoring || pending) return;
   $('database-restore-form').reset();
-  $('database-restore-file').accept = restoring.database === 'postgres' ? '.dump' : '.sql';
+  $('database-restore-file').accept = (databaseView?.engine ?? restoring.database) === 'postgres' ? '.dump' : '.sql';
   $('database-restore-expected').textContent = restoring.name;
   $('database-restore-submit').disabled = true;
   $('database-restore-dialog').showModal();

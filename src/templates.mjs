@@ -12,11 +12,20 @@ export function frontendFiles(options, versions) {
     ? `<script setup lang="ts">\nimport { ref, onMounted } from 'vue';\nconst message = ref(${JSON.stringify(message)});\nconst setMessage = (value: string) => { message.value = value; };\nonMounted(() => { ${request} });\n</script>\n<template><main><p>Created with StackForge</p><h1>${options.name}</h1><p>{{ message }}</p></main></template>\n`
     : `import { useEffect, useState } from 'react';\nexport default function App() {\n  const [message, setMessage] = useState(${JSON.stringify(message)});\n  useEffect(() => { ${request} }, []);\n  return <main><p>Created with StackForge</p><h1>${options.name}</h1><p>{message}</p></main>;\n}\n`;
   return {
-    'frontend/package.json': json({ name: `${options.name}-web`, private: true, version: '0.1.0', type: 'module', scripts: { dev: 'vite --host 127.0.0.1', build: 'vite build', preview: 'vite preview --host 127.0.0.1' }, dependencies: vue ? { vue: versions.vue } : { react: versions.react, 'react-dom': versions['react-dom'] }, devDependencies: { vite: versions.vite, typescript: versions.typescript, [vue ? '@vitejs/plugin-vue' : '@vitejs/plugin-react']: versions[vue ? '@vitejs/plugin-vue' : '@vitejs/plugin-react'], ...(!vue && { '@types/react': versions['@types/react'], '@types/react-dom': versions['@types/react-dom'] }) } }),
+    'frontend/package.json': json({ name: `${options.name}-web`, private: true, version: '0.1.0', type: 'module', scripts: { dev: 'vite --host 127.0.0.1', build: 'vite build', preview: 'vite preview --host 127.0.0.1', test: 'vitest run' }, dependencies: vue ? { vue: versions.vue } : { react: versions.react, 'react-dom': versions['react-dom'] }, devDependencies: { vite: versions.vite, vitest: versions.vitest, typescript: versions.typescript, [vue ? '@vitejs/plugin-vue' : '@vitejs/plugin-react']: versions[vue ? '@vitejs/plugin-vue' : '@vitejs/plugin-react'], ...(!vue && { '@types/react': versions['@types/react'], '@types/react-dom': versions['@types/react-dom'] }) } }),
     'frontend/index.html': `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${options.name}</title></head><body><div id="app"></div><script type="module" src="/src/main.${vue ? 'ts' : 'tsx'}"></script></body></html>\n`,
     'frontend/vite.config.ts': `import { defineConfig, loadEnv } from 'vite';\nimport ${vue ? 'vue' : 'react'} from '${vue ? '@vitejs/plugin-vue' : '@vitejs/plugin-react'}';\nexport default defineConfig(({ mode }) => {\n  const env = loadEnv(mode, '.', 'STACKFORGE_');\n  return { plugins: [${vue ? 'vue' : 'react'}()], server: { port: Number(env.STACKFORGE_FRONTEND_PORT || 5173), strictPort: true${hasBackend ? ", proxy: { '/api': 'http://127.0.0.1:' + Number(env.STACKFORGE_BACKEND_PORT || 8080) }" : ''} } };\n});\n`,
     [`frontend/src/main.${vue ? 'ts' : 'tsx'}`]: vue ? `import { createApp } from 'vue';\nimport App from './App.vue';\nimport './style.css';\ncreateApp(App).mount('#app');\n` : `import { createRoot } from 'react-dom/client';\nimport App from './App';\nimport './style.css';\ncreateRoot(document.getElementById('app')!).render(<App />);\n`,
     [`frontend/src/App.${extension}`]: app,
+    [`frontend/src/App.test.${vue ? 'ts' : 'tsx'}`]: `import { expect, test } from 'vitest';
+${vue ? "import { createSSRApp } from 'vue';\nimport { renderToString } from 'vue/server-renderer';\nimport App from './App.vue';" : "import { renderToStaticMarkup } from 'react-dom/server';\nimport App from './App';"}
+
+test('renders the project heading and initial status', async () => {
+  const html = ${vue ? 'await renderToString(createSSRApp(App))' : 'renderToStaticMarkup(<App />)'};
+  expect(html).toContain('<h1>${options.name}</h1>');
+  expect(html).toContain(${JSON.stringify(message)});
+});
+`,
     'frontend/src/vite-env.d.ts': '/// <reference types="vite/client" />\n',
     'frontend/tsconfig.json': json({ compilerOptions: { target: 'ES2022', lib: ['ES2022', 'DOM', 'DOM.Iterable'], module: 'ESNext', moduleResolution: 'Bundler', jsx: 'react-jsx', strict: true, skipLibCheck: true, isolatedModules: true, noEmit: true }, include: ['src', 'vite.config.ts'] }),
     'frontend/src/style.css': 'body{margin:0;background:#f5f8f9;color:#16262b;font-family:system-ui,sans-serif}main{max-width:720px;margin:15vh auto;padding:32px}h1{font-size:clamp(32px,6vw,64px);letter-spacing:-.04em;overflow-wrap:anywhere}p{line-height:1.7}::selection{background:#c5e3e9}\n'
@@ -44,9 +53,41 @@ export function expressFiles(options, versions) {
   const database = nodeDatabase(db);
   const databaseCode = database ? `${database.source}\nconst pool = ${database.pool};\n` : '';
   return {
-    'backend/package.json': json({ name: `${options.name}-api`, private: true, version: '0.1.0', type: 'module', scripts: { dev: 'node --watch src/server.js', start: 'node src/server.js' }, dependencies: { express: versions.express, ...(database && { [database.driver]: versions[database.driver] }) } }),
-    'backend/src/server.js': `import express from 'express';\n${databaseCode}\nconst app = express();\napp.use(express.json());\napp.get('/api/health', (req, res) => res.json({ status: 'ok', message: 'Hello, ${options.name}! The frontend and backend are connected.' }));\n${db === 'none' ? '' : `app.get('/api/db', async (req, res) => {\n  try { await pool.query('SELECT 1'); res.json({ status: 'ok', database: '${db}' }); }\n  catch { res.status(503).json({ status: 'unavailable', message: 'Check the database container and environment variables.' }); }\n});\n`}const port = Number(process.env.STACKFORGE_BACKEND_PORT || 8080);\nconst server = app.listen(port, '127.0.0.1', () => console.log('API: http://127.0.0.1:' + port + '/api/health'));\nasync function shutdown() { server.close(); ${db === 'none' ? '' : 'await pool.end();'} process.exit(0); }\nprocess.on('SIGINT', shutdown);\nprocess.on('SIGTERM', shutdown);\n`
+    'backend/package.json': json({ name: `${options.name}-api`, private: true, version: '0.1.0', type: 'module', scripts: { dev: 'tsx watch src/server.ts', build: 'tsc -p tsconfig.json', start: 'node dist/server.js', test: 'npm run build && node --test test/health.test.mjs' }, dependencies: { express: versions.express, ...(database && { [database.driver]: versions[database.driver] }) }, devDependencies: { typescript: versions.typescript, tsx: versions.tsx, '@types/node': versions['@types/node'], '@types/express': versions['@types/express'], ...(db === 'postgres' && { '@types/pg': versions['@types/pg'] }) } }),
+    'backend/tsconfig.json': json({ compilerOptions: { target: 'ES2022', module: 'NodeNext', rootDir: 'src', outDir: 'dist', types: ['node'], strict: true, skipLibCheck: true, sourceMap: true }, include: ['src/**/*.ts'] }),
+    'backend/src/app.ts': `import express from 'express';\n${databaseCode}\nexport const app = express();\napp.use(express.json());\napp.get('/api/health', (_req, res) => res.json({ status: 'ok', message: 'Hello, ${options.name}! The frontend and backend are connected.' }));\n${db === 'none' ? '' : `app.get('/api/db', async (_req, res) => {\n  try { await pool.query('SELECT 1'); res.json({ status: 'ok', database: '${db}' }); }\n  catch { res.status(503).json({ status: 'unavailable', message: 'Check the database container and environment variables.' }); }\n});\nexport const closeDatabase = () => pool.end();\n`}`,
+    'backend/src/server.ts': `import { app${database ? ', closeDatabase' : ''} } from './app.js';
+const port = Number(process.env.STACKFORGE_BACKEND_PORT || 8080);
+const server = app.listen(port, '127.0.0.1', () => console.log('API: http://127.0.0.1:' + port + '/api/health'));
+async function shutdown() {
+  server.close();
+  ${database ? 'await closeDatabase();\n  ' : ''}process.exit(0);
+}
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);
+`,
+    'backend/test/health.test.mjs': apiHealthTest(options.name, `import { once } from 'node:events';
+import { app${database ? ', closeDatabase' : ''} } from '../dist/app.js';`, `  const server = app.listen(0, '127.0.0.1');
+  t.after(async () => {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));${database ? '\n    await closeDatabase();' : ''}
+  });
+  await once(server, 'listening');
+  const url = 'http://127.0.0.1:' + server.address().port;`)
   };
+}
+
+function apiHealthTest(name, imports, setup) {
+  return `import assert from 'node:assert/strict';
+import { test } from 'node:test';
+${imports}
+
+test('GET /api/health responds without a database connection', async t => {
+${setup}
+  const response = await fetch(url + '/api/health', { signal: AbortSignal.timeout(5000) });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { status: 'ok', message: 'Hello, ${name}! The frontend and backend are connected.' });
+});
+`;
 }
 
 export function nestFiles(options, versions) {
@@ -60,10 +101,16 @@ export function nestFiles(options, versions) {
   return {
     'backend/package.json': json({
       name: `${options.name}-api`, private: true, version: '0.1.0', type: 'module',
-      scripts: { dev: 'nest start --watch', build: 'nest build', start: 'node dist/main.js' },
+      scripts: { dev: 'nest start --watch', build: 'nest build', start: 'node dist/main.js', test: 'npm run build && node --test test/health.test.mjs' },
       dependencies: resolved(dependencies), devDependencies: resolved(devDependencies)
     }),
     'backend/nest-cli.json': json({ sourceRoot: 'src', compilerOptions: { tsConfigPath: 'tsconfig.json', deleteOutDir: true } }),
+    'backend/test/health.test.mjs': apiHealthTest(options.name, `import 'reflect-metadata';
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from '../dist/app.module.js';`, `  const app = await NestFactory.create(AppModule, { logger: false });
+  t.after(() => app.close());
+  await app.listen(0, '127.0.0.1');
+  const url = await app.getUrl();`),
     'backend/tsconfig.json': json({
       compilerOptions: {
         target: 'ES2022', module: 'NodeNext', rootDir: 'src', outDir: 'dist', types: ['node'],
@@ -148,7 +195,7 @@ export function databaseFiles(options, password, rootPassword, databaseId) {
   return {
     '.env': `COMPOSE_PROJECT_NAME=${composeName}\nDB_HOST=127.0.0.1\nDB_PORT=${port}\nDB_NAME=app\nDB_USER=app\nDB_PASSWORD=${password}\n${mysql ? `DB_ROOT_PASSWORD=${rootPassword}\n` : ''}`,
     '.env.example': `# COMPOSE_PROJECT_NAME=unique-local-project-name\nDB_HOST=127.0.0.1\nDB_PORT=${port}\nDB_NAME=app\nDB_USER=app\nDB_PASSWORD=replace-with-a-local-password\n${mysql ? 'DB_ROOT_PASSWORD=replace-with-a-root-password\n' : ''}`,
-    'compose.yaml': mysql ? `services:\n  db:\n    image: mysql:8.4\n    environment:\n      MYSQL_DATABASE: \${DB_NAME:?DB_NAME required}\n      MYSQL_USER: \${DB_USER:?DB_USER required}\n      MYSQL_PASSWORD: \${DB_PASSWORD:?DB_PASSWORD required}\n      MYSQL_ROOT_PASSWORD: \${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD required}\n    ports:\n      - "127.0.0.1:\${DB_PORT:-3306}:3306"\n    volumes:\n      - db_data:/var/lib/mysql\n    healthcheck:\n      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -u root --silent"]\n      interval: 5s\n      timeout: 5s\n      retries: 30${volume}` : `services:\n  db:\n    image: postgres:17\n    environment:\n      POSTGRES_DB: \${DB_NAME:?DB_NAME required}\n      POSTGRES_USER: \${DB_USER:?DB_USER required}\n      POSTGRES_PASSWORD: \${DB_PASSWORD:?DB_PASSWORD required}\n    ports:\n      - "127.0.0.1:\${DB_PORT:-5432}:5432"\n    volumes:\n      - db_data:/var/lib/postgresql/data\n    healthcheck:\n      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]\n      interval: 5s\n      timeout: 5s\n      retries: 20${volume}`
+    'compose.yaml': mysql ? `services:\n  db:\n    image: mysql:8.4\n    command: ["--log-bin-trust-function-creators=ON"]\n    environment:\n      MYSQL_DATABASE: \${DB_NAME:?DB_NAME required}\n      MYSQL_USER: \${DB_USER:?DB_USER required}\n      MYSQL_PASSWORD: \${DB_PASSWORD:?DB_PASSWORD required}\n      MYSQL_ROOT_PASSWORD: \${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD required}\n    ports:\n      - "127.0.0.1:\${DB_PORT:-3306}:3306"\n    volumes:\n      - db_data:/var/lib/mysql\n    healthcheck:\n      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -u root --silent"]\n      interval: 5s\n      timeout: 5s\n      retries: 30${volume}` : `services:\n  db:\n    image: postgres:17\n    environment:\n      POSTGRES_DB: \${DB_NAME:?DB_NAME required}\n      POSTGRES_USER: \${DB_USER:?DB_USER required}\n      POSTGRES_PASSWORD: \${DB_PASSWORD:?DB_PASSWORD required}\n    ports:\n      - "127.0.0.1:\${DB_PORT:-5432}:5432"\n    volumes:\n      - db_data:/var/lib/postgresql/data\n    healthcheck:\n      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]\n      interval: 5s\n      timeout: 5s\n      retries: 20${volume}`
   };
 }
 
@@ -176,8 +223,9 @@ export function generatedReadme(options) {
     ...(options.database !== 'none' ? ['- compose.yaml: Database service and persistent data volume'] : []),
     '- scripts/dev.mjs: Cross-platform development launcher', '- stackforge.json: Generator options and resolved versions', '',
     '## Next steps', '',
-    ...(options.backend === 'nestjs' ? [`Run npm run build to build the NestJS backend${options.frontend === 'none' ? '' : ' and the frontend'}.`, ''] :
+    ...(hasNodeBackend(options.backend) ? [`Run npm run build to build the ${options.backend === 'nestjs' ? 'NestJS' : 'Express'} backend${options.frontend === 'none' ? '' : ' and the frontend'}.`, ''] :
       options.frontend !== 'none' ? ['Run npm run build to check the frontend production build.', ''] : []),
+    ...(options.frontend !== 'none' || hasNodeBackend(options.backend) ? ['Run npm test in the project root to test the JavaScript and TypeScript workspaces. These tests run without a database.', ''] : []),
     ...(options.backend === 'spring' ? ['Run ./mvnw test in backend/ (mvnw.cmd test on Windows) to test the backend.', ''] : []),
     'This is a development starter. Add business logic, authentication, and deployment configuration for your project.', ''
   ];

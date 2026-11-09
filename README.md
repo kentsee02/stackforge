@@ -65,7 +65,9 @@ The same preview supports Gradle Wrapper `classes` for recognized JVM builds, `d
 
 **Database controls** shows the Docker Compose database status and the last 100 lines of container output. It uses the project's saved database port and can start or stop the database separately. Stopping the database keeps its data volume.
 
-**Download backup** exports a running StackForge database as a PostgreSQL custom archive or a MySQL SQL dump. You can also download a backup from the project deletion dialog. MySQL exports table definitions, data, views, and triggers. **Restore backup** accepts a trusted file from the same database engine up to 64 MiB. Stop the application, start an empty project database, and type the exact project name to confirm. A failed MySQL restore can leave partially restored objects.
+Imported and cloned projects can use these controls when a single root Compose file defines one official MySQL or PostgreSQL service with a dedicated local named data volume. StackForge checks the recorded project directory, Compose labels, actual mounts and volume users. External volumes, shared volumes and ambiguous configurations are rejected. For older imports without a recorded directory identity, remove the registration and import the folder again. The database starts independently of the other Compose services.
+
+**Download backup** exports a verified running database as a PostgreSQL custom archive or a MySQL SQL dump. You can also download a managed database backup from the project deletion dialog. MySQL uses the container's root password for export and includes tables, data, views, triggers, stored procedures, functions, and scheduled events. Dumps omit explicit definers so restored objects can use the destination account. **Restore backup** accepts a trusted file from the same database engine up to 64 MiB. Stop the application, start an empty project database, and type the exact project name to confirm. MySQL restore uses the configured non-root user and can require the server to allow stored functions and triggers. A failed restore can leave partially restored MySQL objects.
 
 **Build, test & lint** uses the detected JavaScript package manager or npm when none is declared. Maven Wrapper `package` and `test` are available for discovered Maven projects, including imported Spring Boot projects. Detected checks also include Gradle, .NET, Go, and Rust build and test commands, Composer scripts, and supported Laravel and Rails tests and linters. Open **Custom check commands** to save a trusted build, test, or lint command and its working directory for any project. Select and run the saved command from the same panel. Stop the development server before running a check. The panel shows live output, the latest result, and a cancel button during execution. Keep credentials in the project's environment files.
 
@@ -79,10 +81,11 @@ The same preview supports Gradle Wrapper `classes` for recognized JVM builds, `d
 
 - Vue 3 or React with Vite and TypeScript. Frontend `/api` requests proxy to the backend, which defaults to port 8080.
 - Spring Boot from the official Spring Initializr service, using a stable release, Java 21, Maven Wrapper, a health endpoint, and optional JDBC connectivity.
-- Express with a health endpoint and optional mysql2 / pg connection pool and database check endpoint.
+- Express with TypeScript, a health endpoint, and an optional mysql2 / pg connection pool and database check endpoint.
 - NestJS with TypeScript, a module and health controller, a development watcher, and optional MySQL or PostgreSQL connectivity. The NestJS full-stack preset pairs React with PostgreSQL.
 - MySQL 8.4 or PostgreSQL 17 with Docker Compose, health checks, persistent volumes, and random local credentials.
 - npm workspaces for the frontend and Node backend, plus a development launcher that starts the database when needed.
+- `npm test` runs Vue and React render tests and Express and NestJS HTTP health tests without a database. Spring Boot keeps its Maven test entry.
 - English README, .gitignore, stackforge.json, and optional Git repository on the main branch.
 - npm dependencies resolved to exact versions at creation time, with a lockfile after installation.
 

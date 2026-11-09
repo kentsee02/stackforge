@@ -16,7 +16,8 @@ export function importedProject(id, path, source) {
   const cloned = /^[a-f0-9]{32}$/.test(source?.cloneId ?? '') ? { cloneId: source.cloneId, cloneIdentity: recordedIdentity(source.cloneIdentity) } : {};
   if (source?.unmanaged === true || source?.external === true) return {
     id, path, name: basename(path) || path, frontend: 'none', backend: 'none', database: 'none',
-    imported: true, unmanaged: true, frameworks: validFrameworks(source.frameworks), startup: storedStartup(source.startup), ...cloned
+    imported: true, unmanaged: true, frameworks: validFrameworks(source.frameworks), startup: storedStartup(source.startup),
+    folderIdentity: recordedIdentity(source.folderIdentity), ...cloned
   };
   if (!['name', 'frontend', 'backend', 'database'].every(key => typeof source?.[key] === 'string')) throw new Error('Invalid project record.');
   const { name, frontend, backend, database } = validateOptions({ name: source.name, parentDir: dirname(path), frontend: source.frontend, backend: source.backend, database: source.database, install: false, git: false });

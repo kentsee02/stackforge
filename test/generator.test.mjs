@@ -49,6 +49,15 @@ test('all 29 supported stack combinations produce connected, parseable projects'
     const manifest = JSON.parse(await readFile(join(result.path, 'stackforge.json'), 'utf8'));
     assert.equal(manifest.options.parentDir, undefined);
     if (backend === 'spring') assert.equal(manifest.versions.springBoot, '3.5.0');
+    if (backend === 'express') {
+      const express = JSON.parse(await readFile(join(result.path, 'backend/package.json'), 'utf8'));
+      assert.match(express.scripts.dev, /tsx watch src\/server\.ts/);
+      assert.match(express.scripts.test, /node --test/);
+      assert.equal(express.devDependencies.typescript, manifest.versions.typescript);
+      assert.equal(Boolean(express.devDependencies['@types/pg']), database === 'postgres');
+      assert.match(await readFile(join(result.path, 'backend/src/app.ts'), 'utf8'), /\/api\/health/);
+      assert.match(await readFile(join(result.path, 'backend/test/health.test.mjs'), 'utf8'), /\/api\/health/);
+    }
     if (backend === 'nestjs') {
       assert.ok(pkg.workspaces.includes('backend'));
       assert.match(pkg.scripts.build, /--workspace backend/);
@@ -56,6 +65,7 @@ test('all 29 supported stack combinations produce connected, parseable projects'
       assert.equal(nest.dependencies['@nestjs/common'], nest.dependencies['@nestjs/core']);
       assert.equal(nest.dependencies['@nestjs/platform-express'], nest.dependencies['@nestjs/core']);
       assert.equal(nest.devDependencies.typescript, manifest.versions.typescript);
+      assert.match(nest.scripts.test, /node --test/);
       assert.equal(Boolean(nest.dependencies.pg), database === 'postgres');
       assert.equal(Boolean(nest.dependencies.mysql2), database === 'mysql');
       assert.equal(Boolean(nest.devDependencies['@types/pg']), database === 'postgres');
@@ -79,7 +89,11 @@ test('all 29 supported stack combinations produce connected, parseable projects'
     if (frontend !== 'none') {
       const config = await readFile(join(result.path, 'frontend/vite.config.ts'), 'utf8');
       assert.equal(config.includes('proxy:'), backend !== 'none');
+      const frontendPackage = JSON.parse(await readFile(join(result.path, 'frontend/package.json'), 'utf8'));
+      assert.equal(frontendPackage.scripts.test, 'vitest run');
+      assert.match(await readFile(join(result.path, 'frontend/src/App.test.' + (frontend === 'vue' ? 'ts' : 'tsx')), 'utf8'), /renders the project heading/);
     }
+    if (pkg.workspaces) assert.match(pkg.scripts.test, /--workspaces/);
   }
   assert.equal(count, 29);
   assert.equal(nestOnlyInstalls, 3);

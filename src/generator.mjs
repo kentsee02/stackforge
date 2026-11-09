@@ -73,20 +73,13 @@ export async function generateProject(input, report = () => {}, services = {}) {
   }
   const staging = checkpoint.staging;
   const versions = checkpoint.versions ??= {};
-  try {
-    if (!checkpoint.promoted) {
-    await steps('versions', '解析技术栈与依赖版本', 8, async () => {
-    const packages = [];
-    if (options.frontend !== 'none') packages.push('vite', 'typescript', ...(options.frontend === 'vue' ? ['vue', '@vitejs/plugin-vue'] : ['react', 'react-dom', '@vitejs/plugin-react', '@types/react', '@types/react-dom']));
-    if (options.backend === 'express') packages.push('express');
-    if (nest) {
-      // Keep the compiler that emits the decorator metadata used for Nest injection.
-      versions.typescript ??= '6.0.3';
-      packages.push('@nestjs/core', '@nestjs/cli', 'reflect-metadata', 'rxjs', '@types/node');
-      if (options.database === 'postgres') packages.push('@types/pg');
-    }
-    if (nodeBackend && options.database !== 'none') packages.push(options.database === 'mysql' ? 'mysql2' : 'pg');
-    const fetched = await Promise.allSettled(packages.filter(name => !versions[name]).map(async name => {
+  const frontPackages = options.frontend === 'none' ? [] : ['vite', 'vitest', 'typescript', ...(options.frontend === 'vue' ? ['vue', '@vitejs/plugin-vue'] : ['react', 'react-dom', '@vitejs/plugin-react', '@types/react', '@types/react-dom'])];
+  const backendPackages = nodeBackend ? [
+    'typescript', '@types/node', ...(nest ? ['@nestjs/core', '@nestjs/cli', 'reflect-metadata', 'rxjs'] : ['express', '@types/express', 'tsx']),
+    ...(options.database === 'mysql' ? ['mysql2'] : options.database === 'postgres' ? ['pg', '@types/pg'] : [])
+  ] : [];
+  const resolveVersions = async packages => {
+    const fetched = await Promise.allSettled([...new Set(packages)].filter(name => !versions[name]).map(async name => {
       const metadata = await download(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`, { ...services, signal });
       if (typeof metadata.version !== 'string' || !/^\d+\.\d+\.\d+([+-][a-zA-Z0-9.-]+)?$/.test(metadata.version)) throw new Error(`无法解析 ${name} 的版本。`);
       versions[name] = metadata.version;
@@ -94,16 +87,25 @@ export async function generateProject(input, report = () => {}, services = {}) {
     }));
     const failure = fetched.find(item => item.status === 'rejected');
     if (failure) throw failure.reason;
+  };
+  try {
+    if (!checkpoint.promoted) {
+    await steps('versions', '解析技术栈与依赖版本', 8, async () => {
+    // Nest requires a compiler that emits decorator metadata.
+    if (nest) versions.typescript ??= '6.0.3';
+    await resolveVersions([...frontPackages, ...backendPackages]);
     if (nest) {
       versions['@nestjs/common'] = versions['@nestjs/core'];
       versions['@nestjs/platform-express'] = versions['@nestjs/core'];
     }
     });
     if (options.frontend !== 'none') await steps('frontend', '生成 TypeScript 前端与 API 代理', 22, async () => {
+      await resolveVersions(frontPackages);
       await put(staging, frontendFiles(options, versions));
       checkpoint.configurableFrontend = true;
     });
     await steps('backend', '生成后端服务与连接配置', 35, async () => {
+    await resolveVersions(backendPackages);
     if (options.backend === 'spring') {
       let boot = versions.springBoot;
       if (!boot) {
@@ -157,10 +159,9 @@ export async function generateProject(input, report = () => {}, services = {}) {
     const databaseId = options.database === 'none' ? undefined : randomBytes(12).toString('hex');
     if (databaseId) await put(staging, databaseFiles(options, randomBytes(24).toString('hex'), randomBytes(24).toString('hex'), databaseId));
     const workspaces = [...(options.frontend !== 'none' ? ['frontend'] : []), ...(nodeBackend ? ['backend'] : [])];
-    const buildWorkspaces = workspaces.filter(workspace => workspace === 'frontend' || nest);
     const configurablePorts = (options.frontend === 'none' || checkpoint.configurableFrontend) && (options.backend === 'none' || checkpoint.configurableBackend);
     await put(staging, {
-      'package.json': json({ name: options.name, private: true, version: '0.1.0', type: 'module', engines: { node: '>=22.12.0' }, ...(workspaces.length > 0 && { workspaces }), scripts: { dev: 'node scripts/dev.mjs', ...(buildWorkspaces.length > 0 && { build: 'npm run build ' + buildWorkspaces.map(workspace => '--workspace ' + workspace).join(' ') }), ...(options.database !== 'none' && { 'db:up': 'docker compose up -d --wait', 'db:down': 'docker compose down' }) } }),
+      'package.json': json({ name: options.name, private: true, version: '0.1.0', type: 'module', engines: { node: '>=22.12.0' }, ...(workspaces.length > 0 && { workspaces }), scripts: { dev: 'node scripts/dev.mjs', ...(workspaces.length > 0 && { build: 'npm run build --if-present ' + workspaces.map(workspace => '--workspace ' + workspace).join(' '), test: 'npm run test --workspaces --if-present' }), ...(options.database !== 'none' && { 'db:up': 'docker compose up -d --wait', 'db:down': 'docker compose down' }) } }),
       '.gitignore': 'node_modules/\ndist/\ntarget/\n.env\n.env.*\n!.env.example\n.stackforge-owner\n.stackforge-cache/\n*.log\n.idea/\n.vscode/\n.DS_Store\n',
       'scripts/dev.mjs': devScript(options),
       'README.md': generatedReadme(options),
