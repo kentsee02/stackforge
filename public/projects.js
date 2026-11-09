@@ -57,18 +57,23 @@ function showMessage(element, message = '') {
 }
 
 function renderServices(project) {
-  const readyCustom = Object.values(project.services ?? {}).filter(service => service.name && service.ready);
+  const custom = Object.values(project.services ?? {}).filter(service => service.name && service.ready);
+  const readyCustom = custom.filter(service => service.kind !== 'api' || service.openUrl);
   const links = $('runtime-custom-links');
   const saved = JSON.stringify(readyCustom);
   if (links.dataset.saved !== saved) {
     links.dataset.saved = saved;
     links.replaceChildren(...readyCustom.map(service => {
       const link = document.createElement('a');
-      Object.assign(link, { className: 'secondary', href: service.url, target: '_blank', rel: 'noopener noreferrer', textContent: service.name });
+      Object.assign(link, { className: 'secondary', href: service.openUrl ?? service.url, target: '_blank', rel: 'noopener noreferrer', title: service.name });
+      const label = service.kind === 'web' ? 'Open app' : service.kind === 'api' ? 'Open API' : undefined;
+      if (label) setText(link, readyCustom.filter(item => item.kind === service.kind).length > 1 ? `${label} · ${service.name}` : label);
+      else link.textContent = service.name;
       return link;
     }));
   }
   links.hidden = !readyCustom.length;
+  $('runtime-api-path-hint').hidden = !custom.some(service => service.kind === 'api' && !service.openUrl);
   $('runtime-services').hidden = !Object.keys(project.services ?? {}).length;
   $('runtime-readiness').hidden = project.ready;
   for (const key of ['frontend', 'backend']) {
@@ -82,15 +87,15 @@ function renderServices(project) {
 
 function startupDraft() {
   return [...$('project-startup-services').children].map(row => {
-    const { name, directory, command, port, installCommand } = Object.fromEntries([...row.querySelectorAll('input')].map(input => [input.name, input.value.trim()]));
-    return { name, directory: directory.replaceAll('\\', '/') || '.', ...(command && { command }), ...(port && { port: Number(port) }), ...(installCommand && { installCommand }) };
+    const { name, directory, command, port, installCommand, kind, openPath } = Object.fromEntries([...row.querySelectorAll('input, select')].map(input => [input.name, input.value.trim()]));
+    return { name, directory: directory.replaceAll('\\', '/') || '.', ...(command && { command }), ...(port && { port: Number(port) }), ...(installCommand && { installCommand }), ...(kind && { kind }), ...(openPath && { openPath }) };
   });
 }
 
 function addStartupService(service = {}) {
   const row = $('project-startup-service').content.firstElementChild.cloneNode(true);
   for (const element of row.querySelectorAll('[data-i18n]')) setText(element, element.dataset.i18n);
-  for (const input of row.querySelectorAll('input')) {
+  for (const input of row.querySelectorAll('input, select')) {
     input.value = service[input.name] ?? '';
     if (input.dataset.i18nPlaceholder) input.placeholder = translate(input.dataset.i18nPlaceholder);
   }
@@ -134,7 +139,7 @@ function suggestionRow(group, id) {
     let name = group.name;
     for (let count = 2; names.has(name.toLowerCase()); count++) name = group.name.slice(0, 35) + ' (' + count + ')';
     const portInUse = choice.port && draft.some(service => service.port === choice.port);
-    const added = addStartupService({ name, directory: group.directory, command: choice.command, port: portInUse ? undefined : choice.port });
+    const added = addStartupService({ name, directory: group.directory, command: choice.command, port: portInUse ? undefined : choice.port, kind: choice.kind });
     startupMessage = { id, message: portInUse ? 'Suggestion added. Its port is already configured, so the port field was left blank.' : 'Suggestion added to the draft. Save to use it.' };
     render();
     added.querySelector('input').focus();
@@ -167,8 +172,9 @@ function renderStartupSuggestions(project, locked, draft) {
     select.disabled = locked;
     const command = row.querySelector('.startup-suggestion-command');
     if (command.textContent !== choice.command) command.textContent = choice.command;
-    const evidence = `package.json · scripts.${choice.script}`;
-    const notes = [evidence, choice.orchestrates && translate('Workspace launcher'), choice.port && translate(`Port ${choice.port}`)].filter(Boolean);
+    const evidence = choice.source ?? `package.json · scripts.${choice.script}`;
+    const kind = choice.kind === 'web' ? 'Web app' : choice.kind === 'api' ? 'API service' : '';
+    const notes = [evidence, translate(kind), choice.orchestrates && translate('Workspace launcher'), choice.port && translate(`Port ${choice.port}`)].filter(Boolean);
     const source = row.querySelector('.startup-suggestion-source');
     if (source.textContent !== notes.join(' · ')) source.textContent = notes.join(' · ');
     row.querySelector('button').disabled = locked || Boolean(conflict);
@@ -223,6 +229,7 @@ function renderStartup(project, locked) {
   }
   $('project-startup-empty').hidden = Boolean(rows.childElementCount);
   $('project-startup-hint').hidden = !rows.childElementCount;
+  $('project-startup-link-hint').hidden = !rows.childElementCount;
   $('project-startup-add').disabled = locked || rows.childElementCount >= 6;
   $('project-startup-save').disabled = locked || !dirty;
   const message = startupMessage?.id === project.id ? startupMessage : undefined;

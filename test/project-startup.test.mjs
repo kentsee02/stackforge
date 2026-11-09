@@ -36,7 +36,7 @@ test('custom startup persists and safely runs a monorepo with independent workin
     "import { createServer } from 'node:http';",
     "import { writeFileSync } from 'node:fs';",
     "writeFileSync('started.txt', process.cwd());",
-    "createServer((req, res) => { res.writeHead(404); res.end(); })",
+    "createServer((req, res) => { res.writeHead(req.url === '/api/demo?view=local' ? 200 : 404); res.end(); })",
     ".listen(Number(process.env.PORT), '127.0.0.1', () => console.log('" + name + " listening'));"
   ].join('\n');
   await Promise.all([mkdir(web, { recursive: true }), mkdir(api, { recursive: true }), mkdir(external)]);
@@ -83,8 +83,8 @@ test('custom startup persists and safely runs a monorepo with independent workin
   const action = (name, body, expected, auth) => post('/api/projects/' + project.id + '/' + name, body, expected, auth);
   const detail = async () => (await get('/api/projects?logs=' + project.id)).projects[0];
   const services = [
-    { name: 'Web', directory: 'apps/web', command: 'node serve.mjs', port: webPort.port },
-    { name: 'API', directory: 'apps/api', command: 'node serve.mjs', port: apiPort.port }
+    { name: 'Web', directory: 'apps/web', command: 'node serve.mjs', port: webPort.port, kind: 'web' },
+    { name: 'API', directory: 'apps/api', command: 'node serve.mjs', port: apiPort.port, kind: 'api', openPath: '/api/demo?view=local' }
   ];
   await action('start', {}, 409);
   await action('install', {}, 409);
@@ -95,7 +95,11 @@ test('custom startup persists and safely runs a monorepo with independent workin
     { ...services[1], directory: 'C:outside' },
     { ...services[1], directory: 'missing' },
     { ...services[1], name: 'web' },
-    { ...services[1], port: webPort.port }
+    { ...services[1], port: webPort.port },
+    { ...services[1], kind: 'bad' },
+    { ...services[1], openPath: '//example.com/path' },
+    { ...services[1], openPath: '/\\example.com/path' },
+    { ...services[1], openPath: 'https://example.com/path' }
   ]) await action('startup', { services: [services[0], service] }, 400);
   assert.deepEqual(await action('startup', { services }, 200), { services });
   await assert.rejects(stat(join(web, 'started.txt')), { code: 'ENOENT' });
@@ -119,6 +123,10 @@ test('custom startup persists and safely runs a monorepo with independent workin
   await action('start', {}, 202);
   const running = await until(detail, project => project.ready === true);
   assert.deepEqual(Object.values(running.services).map(service => service.name), ['Web', 'API']);
+  assert.equal(running.services[0].kind, 'web');
+  assert.equal(running.services[1].kind, 'api');
+  assert.equal((await fetch(running.services[1].url)).status, 404);
+  assert.equal((await fetch(running.services[1].openUrl)).status, 200);
   assert.match(running.log, /\[Web\] Web listening/);
   assert.match(running.log, /\[API\] API listening/);
   assert.equal(Object.values(running.services).length, 2);

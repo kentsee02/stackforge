@@ -132,8 +132,10 @@ export class ProjectRuntime {
     const reserved = ports.find(port => [...this.runs.values()].some(other => active.has(other.status) && other.ports.includes(port)));
     if (reserved) throw new Error(`Development port ${reserved} is already in use.`);
     const services = {};
-    if (startup) for (const [index, { name, port }] of startup.entries()) {
-      if (port) services[index] = { name, url: `http://127.0.0.1:${port}/`, ready: false };
+    if (startup) for (const [index, { name, port, kind, openPath }] of startup.entries()) {
+      if (!port) continue;
+      const url = `http://127.0.0.1:${port}/`;
+      services[index] = { name, url, ready: false, ...(kind && { kind }), ...(openPath && { openUrl: new URL(openPath, url).href }) };
     }
     if (effective.frontend) services.frontend = { url: `http://127.0.0.1:${effective.frontend}/`, ready: false };
     if (effective.backend) services.backend = { url: `http://127.0.0.1:${effective.backend}/api/health`, ready: false };

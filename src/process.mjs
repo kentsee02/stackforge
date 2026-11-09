@@ -100,10 +100,10 @@ export function installNodeDependencies(options, command = npm) {
   return command(['install', '--no-audit', '--no-fund'], options);
 }
 
-export function maven(args, options, command = run) {
+export function maven(args, options, command = run, wrapper = process.platform === 'win32' ? 'mvnw.cmd' : './mvnw') {
   return process.platform === 'win32'
-    ? command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `mvnw.cmd ${args.join(' ')}`], options)
-    : command('./mvnw', args, options);
+    ? command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `${wrapper} ${args.join(' ')}`], options)
+    : command(wrapper, args, options);
 }
 
 export function installMavenDependencies(options, command = run) {

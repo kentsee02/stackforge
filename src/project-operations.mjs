@@ -154,12 +154,12 @@ export class ProjectOperations {
     if (!plan.steps.length || plan.id !== reviewedId) throw new Error('The detected install plan changed. Refresh detection and review it again.');
     const { commands } = await resolveStartup(project, plan.steps, plan.identity);
     task.phase = 'detected';
-    for (const { tool, command, args, directory, executable, cwd } of commands) {
+    for (const { tool, command, args, directory, executable, wrapper, cwd } of commands) {
       throwIfCancelled(options.signal);
       options.log(`[${directory}] ${command}\n`);
       const config = { ...options, cwd };
       if (tool === 'npm') await this.install(args, config);
-      else if (tool === 'Maven') await maven(args, config, this.command);
+      else if (tool === 'Maven') await maven(args, config, this.command, wrapper);
       else if (executable) await this.command(join(cwd, executable), args, config);
       else await this.command(command, [], { ...config, shell: true });
     }

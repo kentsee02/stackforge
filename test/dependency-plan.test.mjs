@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { detectDependencyPlan } from '../src/dependency-plan.mjs';
 import { createApp } from '../src/server.mjs';
@@ -26,6 +26,7 @@ test('detects explicit tools and workspaces, skips ambiguous folders, and accept
   const root = await fixture(t, {
     'package.json': '{"workspaces":["components/*"]}',
     'package-lock.json': '{}',
+    [wrapper]: 'workspace wrapper',
     'components/ui/package.json': '{}',
     'components/ui/package-lock.json': '{}',
     'frontend/package.json': '{}',
@@ -36,6 +37,7 @@ test('detects explicit tools and workspaces, skips ambiguous folders, and accept
     ['backend/' + wrapper]: 'wrapper',
     'apps/docs/package.json': '{"packageManager":"bun@1.2.0"}',
     'apps/docs/bun.lock': '{}',
+    'apps/maven/pom.xml': '<project></project>',
     'apps/node/package.json': '{"packageManager":"pnpm@10.0.0"}',
     'apps/node/pnpm-lock.yaml': 'lockfileVersion: 9.0',
     'apps/node/pnpm-workspace.yaml': "packages:\n  - 'modules/*'\n",
@@ -59,6 +61,7 @@ test('detects explicit tools and workspaces, skips ambiguous folders, and accept
     'backend': (process.platform === 'win32' ? wrapper : './' + wrapper) + ' -B -DskipTests dependency:go-offline',
     'frontend': 'yarn install --frozen-lockfile',
     'apps/docs': 'bun install --frozen-lockfile',
+    'apps/maven': ['..', '..', wrapper].join(sep) + ' -B -DskipTests dependency:go-offline',
     'apps/node': 'pnpm install --frozen-lockfile',
     'services/python': 'uv sync --locked',
     'services/pip': python + ' -m pip install -r requirements.txt'

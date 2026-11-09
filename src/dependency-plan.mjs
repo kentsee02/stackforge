@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstat, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { conventional, declaredWorkspaces, localText, npmManifest, workspaceFolders, workspaceSegments } from './project-detection.mjs';
+import { conventional, declaredWorkspaces, findMavenWrapper, localText, npmManifest, workspaceFolders, workspaceSegments } from './project-detection.mjs';
 import { resolveStartup } from './project-startup.mjs';
 
 const managers = {
@@ -72,18 +72,19 @@ export async function inspectNode(directory, manifest) {
   return { ...metadata, tool, step: { tool, command: [tool, ...args].join(' '), args, evidence } };
 }
 
-async function otherInstalls(directory) {
-  const wrapper = process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw';
+async function otherInstalls(directory, root) {
   const python = process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python';
-  const [pom, mavenWrapper, uvLock, pythonProject, requirements, venv] = await Promise.all([
-    localText(directory, 'pom.xml'), regularFile(directory, wrapper), regularFile(directory, 'uv.lock'),
+  const [pom, uvLock, pythonProject, requirements, venv] = await Promise.all([
+    localText(directory, 'pom.xml'), regularFile(directory, 'uv.lock'),
     regularFile(directory, 'pyproject.toml'), regularFile(directory, 'requirements.txt'), fileInfo(directory, '.venv')
   ]);
   const steps = [], issues = [];
   if (/<project(?:\s|>)/.test(pom.replace(/<!--[\s\S]*?-->/g, ''))) {
-    if (mavenWrapper) {
-      steps.push({ tool: 'Maven', command: (process.platform === 'win32' ? wrapper : './' + wrapper) + ' -B -DskipTests dependency:go-offline',
-        args: ['-B', '-DskipTests', 'dependency:go-offline'], evidence: 'pom.xml · ' + wrapper });
+    const wrapper = await findMavenWrapper(directory, root);
+    if (wrapper) {
+      const launcher = process.platform === 'win32' && wrapper.startsWith('.\\') ? wrapper.slice(2) : wrapper;
+      steps.push({ tool: 'Maven', command: launcher + ' -B -DskipTests dependency:go-offline',
+        wrapper: launcher, args: ['-B', '-DskipTests', 'dependency:go-offline'], evidence: 'pom.xml · ' + launcher });
     } else issues.push('A Maven project was found without a Maven Wrapper.');
   }
   if (uvLock && pythonProject) {
@@ -141,7 +142,7 @@ export async function detectDependencyPlan(project) {
     } else if (manifestText && !coveredByWorkspace) {
       issues.push({ directory, message: 'package.json could not be read as a valid manifest.' });
     }
-    const other = await otherInstalls(folder);
+    const other = await otherInstalls(folder, root);
     steps.push(...other.steps.map(step => ({ directory, ...step })));
     issues.push(...other.issues.map(message => ({ directory, message })));
   }

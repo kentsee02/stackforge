@@ -1,5 +1,5 @@
 import { lstat, opendir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 const npmFrameworks = [
   ['Next.js', 'next', ['react']],
@@ -35,6 +35,16 @@ async function localDirectory(path) {
 export function npmManifest(text) {
   try { return JSON.parse(text.replace(/^\uFEFF/, '')); }
   catch { return undefined; }
+}
+
+export async function findMavenWrapper(directory, root) {
+  const within = relative(root, directory);
+  if (isAbsolute(within) || within.split(sep)[0] === '..') return;
+  const wrapper = process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw';
+  for (let folder = directory; ; folder = dirname(folder)) {
+    if ((await lstat(join(folder, wrapper)).catch(() => null))?.isFile()) return (relative(directory, folder) || '.') + sep + wrapper;
+    if (!relative(root, folder)) return;
+  }
 }
 
 async function detectIn(folder) {

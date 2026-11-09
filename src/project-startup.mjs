@@ -7,7 +7,7 @@ export function validateStartup(input) {
   const names = new Set();
   const ports = new Set();
   return input.map(service => {
-    const { name, directory, command = '', port, installCommand = '' } = service ?? {};
+    const { name, directory, command = '', port, installCommand = '', kind = '', openPath = '' } = service ?? {};
     const label = typeof name === 'string' ? name.trim() : '';
     const folder = typeof directory === 'string' ? directory.trim().replaceAll('\\', '/') || '.' : '';
     const script = typeof command === 'string' ? command.trim() : '';
@@ -19,9 +19,11 @@ export function validateStartup(input) {
     if (!script && !installer) throw new Error('Enter a startup command, an install command, or both.');
     if (!script && port !== undefined) throw new Error('An HTTP port requires a startup command.');
     if (port !== undefined && (!Number.isInteger(port) || port < 1024 || port > 65535 || ports.has(port))) throw new Error('Use a different HTTP port from 1024 to 65535 for each service.');
+    if (!['', 'web', 'api'].includes(kind)) throw new Error('Choose a valid service type.');
+    if (typeof openPath !== 'string' || (openPath && (openPath.length > 240 || !/^\/(?!\/)/.test(openPath) || /[\\\s\x00-\x1f\x7f]/.test(openPath)))) throw new Error('Enter a local access path starting with a single slash.');
     names.add(label.toLowerCase());
     if (port !== undefined) ports.add(port);
-    return { name: label, directory: folder, ...(script && { command: script }), ...(port !== undefined && { port }), ...(installer && { installCommand: installer }) };
+    return { name: label, directory: folder, ...(script && { command: script }), ...(port !== undefined && { port }), ...(installer && { installCommand: installer }), ...(kind && { kind }), ...(openPath && { openPath }) };
   });
 }
 

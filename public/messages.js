@@ -1,5 +1,12 @@
 // [Chinese source, English translation]. {name} slots preserve runtime values.
 export const messages = [
+  ['服务用途', 'Service type'], ['通用服务', 'Generic service'], ['网页应用', 'Web app'], ['API 服务', 'API service'],
+  ['访问路径（可选）', 'Access path (optional)'],
+  ['网页默认打开 /。API 请填写实际存在的访问路径，例如 /api/health。', 'Web apps open / by default. For an API, enter an existing path such as /api/health.'],
+  ['在 API 服务的配置中填写访问路径，即可显示打开链接。', 'Set an access path for the API service to show its link.'],
+  ['请选择有效的服务用途。', 'Choose a valid service type.'],
+  ['请输入以单个斜线开头的本机访问路径。', 'Enter a local access path starting with a single slash.'],
+  ['打开网页 · {name}', 'Open app · {name}'], ['打开 API · {name}', 'Open API · {name}'],
   ['检测启动配置', 'Detect startup configuration'],
   ['启动脚本', 'Startup script'],
   ['加入配置草稿', 'Add to draft'],
