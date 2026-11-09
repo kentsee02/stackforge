@@ -21,6 +21,7 @@ import { detectFrameworks } from './project-detection.mjs';
 import { directoryIdentity } from './project-identity.mjs';
 import { resolveStartup, validateStartup } from './project-startup.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
+import { detectStartupSuggestions } from './startup-suggestions.mjs';
 import { backupLimit } from './database-backup.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -118,7 +119,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         }));
         return send(res, 200, { projects: projects.filter(Boolean) });
       }
-      const projectView = /^\/api\/projects\/([^/]+)\/(database|checks|git|dependencies)$/.exec(url.pathname);
+      const projectView = /^\/api\/projects\/([^/]+)\/(database|checks|git|dependencies|startup-suggestions)$/.exec(url.pathname);
       if (req.method === 'GET' && projectView) {
         const [, id, view] = projectView;
         const project = managedProjects().find(item => item.id === id);
@@ -126,6 +127,10 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         try {
           if (view === 'checks') return send(res, 200, { checks: await operations.checks(project) });
           if (view === 'git') return send(res, 200, await operations.git(project));
+          if (view === 'startup-suggestions') {
+            if (!project.unmanaged) return send(res, 409, { error: 'This project uses the StackForge launcher.' });
+            return send(res, 200, await detectStartupSuggestions(project));
+          }
           if (view === 'dependencies') {
             if (!project.unmanaged) return send(res, 409, { error: 'This project uses the StackForge launcher.' });
             const { id, steps, issues } = await detectDependencyPlan(project);

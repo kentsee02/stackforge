@@ -34,7 +34,7 @@ function pnpmWorkspaces(text) {
   return patterns;
 }
 
-async function inspectNode(directory, manifest) {
+export async function inspectNode(directory, manifest) {
   const [locks, workspace] = await Promise.all([
     Promise.all(Object.entries(managers).map(async ([tool, names]) => {
       const files = await Promise.all(names.map(name => fileInfo(directory, name)));
@@ -53,7 +53,7 @@ async function inspectNode(directory, manifest) {
   if (candidates.length > 1 || candidates.some(lock => lock.unsafe) ||
       (locked && pin && locked.tool !== tool) || (workspace && tool !== 'pnpm') ||
       (manifest.packageManager !== undefined && !pin)) {
-    return { ...metadata, issue: 'Package manager declarations and lockfiles conflict or are unsupported.' };
+    return { ...metadata, conflict: true, issue: 'Package manager declarations and lockfiles conflict or are unsupported.' };
   }
   if (!tool) return { ...metadata, issue: 'No package manager is declared and no supported lockfile was found.' };
 
@@ -64,12 +64,12 @@ async function inspectNode(directory, manifest) {
       const text = await localText(directory, 'yarn.lock');
       const classic = pin ? pin[2] === '1' : /^# yarn lockfile v1\b/m.test(text);
       const modern = pin ? Number(pin[2]) >= 2 : /^__metadata:/m.test(text) || await regularFile(directory, '.yarnrc.yml');
-      if (!classic && !modern) return { ...metadata, issue: 'The Yarn lockfile version could not be identified.' };
+      if (!classic && !modern) return { ...metadata, tool, issue: 'The Yarn lockfile version could not be identified.' };
       args.push(classic ? '--frozen-lockfile' : '--immutable');
     } else args.push('--frozen-lockfile');
   }
   const evidence = [locked?.file, pin && 'package.json (' + manifest.packageManager + ')', workspace && 'pnpm-workspace.yaml'].filter(Boolean).join(' · ');
-  return { ...metadata, step: { tool, command: [tool, ...args].join(' '), args, evidence } };
+  return { ...metadata, tool, step: { tool, command: [tool, ...args].join(' '), args, evidence } };
 }
 
 async function otherInstalls(directory) {

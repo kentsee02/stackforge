@@ -25,6 +25,8 @@ let importing = false;
 let actionError;
 let portMessage;
 let startupMessage;
+let startupDetection;
+let displayedStartupSuggestions;
 let dependencyPlanView;
 let databaseView;
 let toolsView;
@@ -96,6 +98,101 @@ function addStartupService(service = {}) {
   return row;
 }
 
+function startupDirectoryKey(directory) {
+  return (directory || '.').split('/').filter(part => part && part !== '.').join('/') || '.';
+}
+
+function startupSuggestionConflict(group, choice, draft) {
+  const folder = startupDirectoryKey(group.directory);
+  if (draft.some(service => startupDirectoryKey(service.directory) === folder && service.command === choice.command)) return 'Already in the configuration.';
+  if (choice.orchestrates && draft.some(service => {
+    const path = startupDirectoryKey(service.directory);
+    return service.command && (folder === '.' || path === folder || path.startsWith(folder + '/'));
+  })) return 'This workspace command overlaps an existing startup service.';
+  if (draft.some(service => service.command && startupDirectoryKey(service.directory) === folder)) return 'A startup command is already configured for this folder. Edit it below to use another script.';
+  if (draft.length >= 6) return 'Configure up to six startup services.';
+}
+
+function suggestionRow(group, id) {
+  const row = $('startup-suggestion-row').content.firstElementChild.cloneNode(true);
+  const title = row.querySelector('.startup-suggestion-title');
+  title.querySelector('strong').textContent = group.name;
+  const folder = title.querySelector('.small');
+  if (group.directory === '.') setText(folder, 'Project root');
+  else folder.textContent = group.directory;
+  for (const element of row.querySelectorAll('[data-i18n]')) setText(element, element.dataset.i18n);
+  const select = row.querySelector('select');
+  select.parentElement.hidden = group.choices.length < 2;
+  select.append(...group.choices.map((choice, index) => new Option(choice.script, String(index))));
+  select.addEventListener('change', render);
+  row.querySelector('button').addEventListener('click', () => {
+    if (selected !== id) return;
+    const draft = startupDraft();
+    const choice = group.choices[Number(select.value)];
+    if (startupSuggestionConflict(group, choice, draft)) return;
+    const names = new Set(draft.map(service => service.name.toLowerCase()));
+    let name = group.name;
+    for (let count = 2; names.has(name.toLowerCase()); count++) name = group.name.slice(0, 35) + ' (' + count + ')';
+    const portInUse = choice.port && draft.some(service => service.port === choice.port);
+    const added = addStartupService({ name, directory: group.directory, command: choice.command, port: portInUse ? undefined : choice.port });
+    startupMessage = { id, message: portInUse ? 'Suggestion added. Its port is already configured, so the port field was left blank.' : 'Suggestion added to the draft. Save to use it.' };
+    render();
+    added.querySelector('input').focus();
+  });
+  return row;
+}
+
+function renderStartupSuggestions(project, locked, draft) {
+  const view = startupDetection?.id === project.id ? startupDetection : undefined;
+  $('detect-startup').disabled = locked || Boolean(view?.loading);
+  const status = $('startup-detection-status');
+  const list = $('startup-suggestions');
+  const data = view?.data;
+  status.hidden = !view;
+  status.classList.toggle('project-operation-error', Boolean(view?.error));
+  if (view) showMessage(status, view.error ?? (view.loading ? 'Looking for startup scripts…' : data.limited
+    ? 'The scan limit was reached. Review these suggestions and add any remaining services manually.'
+    : data.groups.length ? 'Choose a script and add it to the draft. Review and save before starting.'
+    : 'No reliable startup scripts were detected. Add a service manually.'));
+  if (displayedStartupSuggestions !== data) {
+    displayedStartupSuggestions = data;
+    list.replaceChildren(...(data?.groups ?? []).map(group => suggestionRow(group, project.id)));
+  }
+  list.hidden = !data?.groups.length;
+  for (const [index, row] of [...list.children].entries()) {
+    const group = data.groups[index];
+    const select = row.querySelector('select');
+    const choice = group.choices[Number(select.value)];
+    const conflict = startupSuggestionConflict(group, choice, draft);
+    select.disabled = locked;
+    const command = row.querySelector('.startup-suggestion-command');
+    if (command.textContent !== choice.command) command.textContent = choice.command;
+    const evidence = `package.json · scripts.${choice.script}`;
+    const notes = [evidence, choice.orchestrates && translate('Workspace launcher'), choice.port && translate(`Port ${choice.port}`)].filter(Boolean);
+    const source = row.querySelector('.startup-suggestion-source');
+    if (source.textContent !== notes.join(' · ')) source.textContent = notes.join(' · ');
+    row.querySelector('button').disabled = locked || Boolean(conflict);
+    const hint = row.querySelector('.startup-suggestion-conflict');
+    hint.hidden = !conflict;
+    showMessage(hint, conflict);
+  }
+}
+
+async function detectStartup() {
+  const project = projects.find(item => item.id === selected);
+  if (!project?.unmanaged) return;
+  const view = { id: project.id, loading: true };
+  startupDetection = view;
+  render();
+  try {
+    view.data = await request(`/api/projects/${project.id}/startup-suggestions`, { signal: AbortSignal.timeout(12000) });
+  } catch (error) { view.error = error.message; }
+  finally {
+    view.loading = false;
+    if (startupDetection === view && selected === view.id) render();
+  }
+}
+
 function renderStartup(project, locked) {
   const panel = $('project-startup');
   const form = $('project-startup-form');
@@ -117,7 +214,9 @@ function renderStartup(project, locked) {
     }
   }
   form.hidden = form.dataset.saved === undefined;
-  const dirty = !form.hidden && JSON.stringify(startupDraft()) !== form.dataset.saved;
+  const draft = startupDraft();
+  const dirty = !form.hidden && JSON.stringify(draft) !== form.dataset.saved;
+  renderStartupSuggestions(project, locked, draft);
   for (const [index, row] of [...rows.children].entries()) {
     setText(row.querySelector('legend'), `Service ${index + 1}`);
     row.disabled = locked;
@@ -666,6 +765,8 @@ $('project-port-form').addEventListener('submit', event => {
   act(selected, 'ports', { ports });
 });
 $('runtime-action').addEventListener('click', event => act(selected, event.currentTarget.dataset.action));
+$('detect-startup').addEventListener('click', detectStartup);
+$('language').addEventListener('change', render);
 $('project-startup-add').addEventListener('click', () => {
   startupMessage = undefined;
   const row = addStartupService();

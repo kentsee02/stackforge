@@ -313,6 +313,13 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 .startup-command input, .startup-fields [name="directory"] { font-family: ui-monospace, Consolas, monospace; }
 .startup-remove { margin-top: 8px; }
 .startup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.startup-suggestions { padding: 0; margin: 8px 0 14px; list-style: none; }
+.startup-suggestions li { padding: 10px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.startup-suggestion-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 9px; }
+.startup-suggestion-title strong, .startup-suggestion-command { font-size: 13px; }
+.startup-suggestion-command { display: block; margin-top: 5px; }
+.startup-suggestion-choice { display: block; margin-top: 6px; }
+.startup-suggestion-choice select { display: block; width: 100%; max-width: 300px; margin-top: 4px; padding: 6px 8px; min-height: 36px; border: 1px solid var(--control); border-radius: 6px; background: var(--sheet); color: var(--text); }
 @media (max-width: 530px) {
   .startup-fields { grid-template-columns: minmax(0, 1fr); }
   .startup-fields input { min-height: 40px; }
