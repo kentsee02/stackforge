@@ -76,8 +76,15 @@ test('detects explicit tools and workspaces, skips ambiguous folders, and accept
 test('only installs a reviewed plan and keeps the custom fallback', { timeout: 20000 }, async t => {
   const root = await fixture(t, { 'package.json': '{}', 'package-lock.json': '{}' });
   const calls = [];
+  let prismaFailure = false;
   const app = createApp({ stateDir: false, operations: new ProjectOperations({
-    install: async (args, options) => { calls.push({ args, cwd: options.cwd }); },
+    install: async (args, options) => {
+      calls.push({ args, cwd: options.cwd });
+      if (prismaFailure) {
+        options.log('PrismaConfigEnvError: Cannot resolve environment variable: DATABASE_URL.\n');
+        throw new Error('npm exited with code 1');
+      }
+    },
     command: async (command, args, options) => { calls.push({ command, args, cwd: options.cwd }); }
   }) });
   app.listen(0, '127.0.0.1');
@@ -123,4 +130,9 @@ test('only installs a reviewed plan and keeps the custom fallback', { timeout: 2
   await post(project + '/install', { mode: 'detected', planId: updated.id }, 202);
   assert.equal((await task()).status, 'succeeded');
   assert.deepEqual(calls[1], { args: ['ci'], cwd: await realpath(root) });
+  prismaFailure = true;
+  await post(project + '/install', { mode: 'detected', planId: updated.id }, 202);
+  const failed = await task();
+  assert.equal(failed.diagnostic, 'databaseUrl');
+  assert.match(failed.log, /PrismaConfigEnvError/);
 });

@@ -1,11 +1,11 @@
-import { realpath } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 import { detectBackendLaunchers } from './backend-startup.mjs';
 import { findMavenWrapper, localText, mavenLauncher } from './project-detection.mjs';
 import { childOf, scanProjectServices } from './project-services.mjs';
+import { jvmEndpoint, nodeApiEndpoint, webEndpoint } from './startup-endpoints.mjs';
 
 const startupScripts = ['dev', 'start:dev', 'serve', 'start'];
-const webScript = /^(?:vite|next\s+(?:dev|start)|nuxt\s+dev|react-router\s+dev|react-router-serve)(?:\s|$)/;
+const webScript = /^(?:vite|next\s+(?:dev|start)|(?:nuxt|nuxi)\s+dev|ng\s+serve|react-router\s+dev|react-router-serve)(?:\s|$)/;
 const nodeBackendDependencies = ['@nestjs/core', 'express', 'fastify', 'koa', 'hono', '@hono/node-server'];
 
 function nodeServiceKind(manifest, script) {
@@ -16,48 +16,17 @@ function nodeServiceKind(manifest, script) {
         typeof manifest[key]?.[name] === 'string' && manifest[key][name].trim()))) return 'api';
 }
 
-function startupPort(script) {
-  if (!webScript.test(script) || /[;&|$<>`\r\n]/.test(script)) return;
-  const flags = [...script.matchAll(/(?:^|\s)--port(?:=|\s+)([^\s]+)/g)];
-  if (flags.length !== 1 || !/^\d+$/.test(flags[0][1])) return;
-  const port = Number(flags[0][1]);
-  if (Number.isInteger(port) && port >= 1024 && port <= 65535) return port;
-}
-
 function suggestedName(name, folder) {
   return name.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 40) || basename(folder).slice(0, 40);
-}
-
-async function springPort(folder) {
-  const resources = join(folder, 'src', 'main', 'resources');
-  const actual = await realpath(resources).catch(() => null);
-  if (!actual || !childOf(actual, folder)) return;
-  const [properties, ...yaml] = await Promise.all(['application.properties', 'application.yml', 'application.yaml'].map(file => localText(actual, file)));
-  const values = [...properties.matchAll(/^[ \t]*server\.port[ \t]*[:=][ \t]*([^\r\n]*)/gm)].map(match => match[1].trim());
-  for (const text of yaml) {
-    const blocks = text.matchAll(/^server:[ \t]*(?:#[^\r\n]*)?\r?\n((?:[ \t][^\r\n]*\r?\n?)*)/gm);
-    for (const [, block] of blocks) {
-      const entries = block.split(/\r?\n/).filter(line => /^ +[^ #]/.test(line));
-      const indent = Math.min(...entries.map(line => line.search(/\S/)));
-      for (const line of entries) {
-        if (line.search(/\S/) !== indent) continue;
-        const port = /^\s*port:\s*(.*)$/.exec(line);
-        if (port) values.push(port[1].replace(/\s+#.*$/, '').trim());
-      }
-    }
-  }
-  if (!values.length || values.some(value => !/^\d+$/.test(value))) return;
-  const port = Number(values[0]);
-  if (port >= 1024 && port <= 65535 && values.every(value => Number(value) === port)) return port;
 }
 
 async function mavenSuggestion({ folder, directory, pom }, root) {
   const launcherInfo = mavenLauncher(pom);
   if (!launcherInfo) return;
-  const { artifact, plugin, script } = launcherInfo;
-  const [launcher, port] = await Promise.all([findMavenWrapper(folder, root), script === 'spring-boot:run' ? springPort(folder) : undefined]);
+  const { artifact, plugin, script, framework } = launcherInfo;
+  const [launcher, { port, openPath }] = await Promise.all([findMavenWrapper(folder, root), jvmEndpoint(folder, framework)]);
   const name = suggestedName(artifact, folder);
-  return { name, directory, choices: [{ command: (launcher ?? 'mvn') + ' ' + script, script, kind: 'api', source: 'pom.xml · ' + plugin, ...(port && { port }) }] };
+  return { name, directory, choices: [{ command: (launcher ?? 'mvn') + ' ' + script, script, kind: 'api', source: 'pom.xml · ' + plugin, ...(port && { port }), ...(openPath && { openPath }) }] };
 }
 
 function workspaceScript(script, hasTurbo) {
@@ -76,11 +45,7 @@ export async function detectStartupSuggestions(project) {
     for (const { name, choice, entryPath } of declared ? [declared] : launchers) {
       if (entryPath && detectedEntries.has(entryPath)) continue;
       if (entryPath) detectedEntries.add(entryPath);
-      if (name === 'Spring Boot') {
-        if (maven?.choices[0].script === 'spring-boot:run') continue;
-        const port = await springPort(folder);
-        if (port) choice.port = port;
-      }
+      if (name === 'Spring Boot' && maven?.choices[0].script === 'spring-boot:run') continue;
       groups.push({ name, directory, choices: [choice] });
     }
     if (!manifest) continue;
@@ -92,10 +57,10 @@ export async function detectStartupSuggestions(project) {
       const value = scripts?.[script];
       if (typeof value !== 'string' || !value.trim()) continue;
       const text = value.trim();
-      const port = startupPort(text);
       const kind = nodeServiceKind(manifest, text);
+      const { port, openPath } = kind === 'web' ? await webEndpoint(folder, text) : kind === 'api' ? await nodeApiEndpoint(folder, text) : {};
       choices.push({ command: manager + ' run ' + script, script,
-        ...(port && { port }), ...(kind && { kind }), ...(members.length && workspaceScript(text, Boolean(turbo)) && { orchestrates: true }) });
+        ...(port && { port }), ...(openPath && { openPath }), ...(kind && { kind }), ...(members.length && workspaceScript(text, Boolean(turbo)) && { orchestrates: true }) });
     }
     records.set(folder, { directory, name, choices, members, unknownWorkspace });
   }

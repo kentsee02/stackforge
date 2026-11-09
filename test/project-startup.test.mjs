@@ -36,7 +36,7 @@ test('custom startup persists and safely runs a monorepo with independent workin
     "import { createServer } from 'node:http';",
     "import { writeFileSync } from 'node:fs';",
     "writeFileSync('started.txt', process.cwd());",
-    "createServer((req, res) => { res.writeHead(req.url === '/api/demo?view=local' ? 200 : 404); res.end(); })",
+    "createServer((req, res) => { if (req.url === '/unavailable') console.log('probed unavailable path'); res.writeHead(req.url === '/api/demo?view=local' ? 200 : 404); res.end(); })",
     ".listen(Number(process.env.PORT), '127.0.0.1', () => console.log('" + name + " listening'));"
   ].join('\n');
   await Promise.all([mkdir(web, { recursive: true }), mkdir(api, { recursive: true }), mkdir(external)]);
@@ -120,6 +120,15 @@ test('custom startup persists and safely runs a monorepo with independent workin
   await assert.rejects(stat(join(api, 'started.txt')), { code: 'ENOENT' });
   await webPort.close();
 
+  await action('startup', { services: [services[0], { ...services[1], openPath: '/unavailable' }] }, 200);
+  await action('start', {}, 202);
+  const wrongPath = await until(detail, project => project.log.includes('probed unavailable path'));
+  assert.equal(wrongPath.services[1].ready, false);
+  assert.equal(wrongPath.ready, false);
+  await action('stop', {}, 202);
+  await until(detail, project => project.status === 'stopped');
+  await action('startup', { services: [{ ...services[0], installCommand: 'node install.mjs' }, services[1], installOnly] }, 200);
+
   await action('start', {}, 202);
   const running = await until(detail, project => project.ready === true);
   assert.deepEqual(Object.values(running.services).map(service => service.name), ['Web', 'API']);
@@ -160,11 +169,13 @@ test('custom startup persists and safely runs a monorepo with independent workin
   assert.match(rejectedInstall.dependencies.error, /5/);
   assert.doesNotMatch(rejectedInstall.dependencies.log, /API setup/);
 
-  const broken = { ...services[1], command: 'node -e "process.exit(7)"' };
+  await writeFile(join(api, 'broken.mjs'), "console.error('JAVA_HOME is set to an invalid directory'); process.exit(7);");
+  const broken = { ...services[1], command: 'node broken.mjs' };
   await action('startup', { services: [services[0], broken] }, 200);
   await action('start', {}, 202);
   const failed = await until(detail, project => project.status === 'failed');
   assert.match(failed.log, /\[API\].*7/);
+  assert.equal(failed.diagnostic, 'java');
   await assert.rejects(fetch('http://127.0.0.1:' + webPort.port, { signal: AbortSignal.timeout(1000) }));
 
   await rename(root, root + '-original');

@@ -146,6 +146,16 @@ test('startup diagnostics distinguish missing packages, Java mismatch, Docker, a
   assert.equal(startupDiagnostic(project, 'Database startup failed. Ensure Docker Desktop is running, then check .env and ports.'), 'database');
   assert.equal(startupDiagnostic({ ...project, backend: 'express' }, "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'express' imported from server.js"), 'dependencies');
   assert.equal(startupDiagnostic(project, 'The frontend plugin printed a custom message.'), undefined);
+  const imported = { unmanaged: true, backend: 'none', database: 'none', frameworks: ['Spring Boot'] };
+  assert.equal(startupDiagnostic(imported, 'Error: JAVA_HOME is set to an invalid directory: local/jdk'), 'java');
+  assert.equal(startupDiagnostic(imported, 'No compiler is provided in this environment. Perhaps you are running on a JRE rather than a JDK?'), 'java');
+  assert.equal(startupDiagnostic(imported, 'PrismaConfigEnvError: Cannot resolve environment variable: DATABASE_URL.'), 'databaseUrl');
+  assert.equal(startupDiagnostic(imported, 'Error: P1001: Can\'t reach database server'), 'databaseConnection');
+  assert.equal(startupDiagnostic(imported, 'NETSDK1045: The current .NET SDK does not support this target.'), 'dotnetSdk');
+  assert.equal(startupDiagnostic(imported, 'ERR_PNPM_OUTDATED_LOCKFILE Cannot install with frozen-lockfile'), 'lockfile');
+  assert.equal(startupDiagnostic(imported, 'python.exe: No module named uvicorn'), 'pythonDependencies');
+  assert.equal(startupDiagnostic(imported, '无法执行 dotnet：spawn dotnet ENOENT'), 'toolMissing');
+  assert.equal(startupDiagnostic(imported, 'Configuration includes a DATABASE_URL setting.'), undefined);
 });
 
 test('service links appear only after their readiness checks pass and disappear on stop', async t => {

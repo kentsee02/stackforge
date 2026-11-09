@@ -1,6 +1,6 @@
 {
   "name": "stackforge-local",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "A local, open-source full-stack project generator",
   "type": "module",
   "private": true,
@@ -11,6 +11,6 @@
     "launch": "node scripts/launcher.mjs",
     "test:integration": "node scripts/integration.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check src/server.mjs && node --check src/generator.mjs && node --check src/jobs.mjs && node --check src/job-store.mjs && node --check src/checkpoint.mjs && node --check src/process.mjs && node --check src/environment.mjs && node --check src/git.mjs && node --check scripts/launcher.mjs && node --check scripts/integration.mjs && node --check public/app.js && node --check public/template-store.js && node --check public/i18n.js && node --check public/messages.js && node --check src/paths.mjs && node --check src/settings.mjs && node --check src/desktop.mjs && node --check src/project-runtime.mjs && node --check src/project-startup.mjs && node --check src/node-project.mjs && node --check src/project-services.mjs && node --check src/dependency-plan.mjs && node --check src/backend-startup.mjs && node --check src/startup-suggestions.mjs && node --check src/project-config.mjs && node --check src/project-operations.mjs && node --check src/project-toolchains.mjs && node --check src/project-tools.mjs && node --check src/project-clone.mjs && node --check src/project-detection.mjs && node --check src/project-identity.mjs && node --check src/database-backup.mjs && node --check public/projects.js"
+    "check": "node --check src/server.mjs && node --check src/generator.mjs && node --check src/jobs.mjs && node --check src/job-store.mjs && node --check src/checkpoint.mjs && node --check src/process.mjs && node --check src/environment.mjs && node --check src/git.mjs && node --check scripts/launcher.mjs && node --check scripts/integration.mjs && node --check public/app.js && node --check public/template-store.js && node --check public/i18n.js && node --check public/messages.js && node --check src/paths.mjs && node --check src/settings.mjs && node --check src/desktop.mjs && node --check src/project-runtime.mjs && node --check src/project-startup.mjs && node --check src/node-project.mjs && node --check src/project-services.mjs && node --check src/dependency-plan.mjs && node --check src/backend-startup.mjs && node --check src/startup-endpoints.mjs && node --check src/startup-suggestions.mjs && node --check src/project-config.mjs && node --check src/project-operations.mjs && node --check src/project-toolchains.mjs && node --check src/project-tools.mjs && node --check src/project-clone.mjs && node --check src/project-detection.mjs && node --check src/project-identity.mjs && node --check src/database-backup.mjs && node --check public/projects.js"
   }
 }

@@ -1,18 +1,10 @@
-import { lstat, opendir, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { lstat, opendir, stat } from 'node:fs/promises';
+import { dirname, join, relative, sep } from 'node:path';
 import { findBuildWrapper, localText, npmManifest } from './project-detection.mjs';
+import { declaredEndpoint, jvmEndpoint, ktorEndpoint, literalPath, literalPort, nestedText, uniqueValue } from './startup-endpoints.mjs';
 
-function candidate(name, command, source, kind, port) {
-  return { name, choice: { command, script: name, source, ...(kind && { kind }), ...(port && { port }) } };
-}
-
-async function nestedText(folder, file) {
-  if (dirname(file) === '.') return localText(folder, file);
-  const directory = await realpath(join(folder, dirname(file))).catch(() => null);
-  if (!directory) return '';
-  const within = relative(folder, directory);
-  if (isAbsolute(within) || within.split(sep)[0] === '..') return '';
-  return localText(directory, basename(file));
+function candidate(name, command, source, kind, { port, openPath } = {}) {
+  return { name, choice: { command, script: name, source, ...(kind && { kind }), ...(port && { port }), ...(openPath && { openPath }) } };
 }
 
 async function isFile(folder, name) {
@@ -24,7 +16,7 @@ async function projectProcess(folder) {
     const text = await localText(folder, file);
     const commands = [...text.matchAll(/^web:[ \t]+([^\r\n]+)$/gm)].map(match => match[1].trim());
     if (commands.length === 1 && commands[0] && commands[0].length <= 500 && !/[\x00-\x1f\x7f]/.test(commands[0])) {
-      return candidate('Web process', commands[0], file + ' · web');
+      return candidate('Web process', commands[0], file + ' · web', undefined, declaredEndpoint(commands[0]));
     }
   }
 }
@@ -65,7 +57,10 @@ async function pythonStartup(folder) {
   const srcLayout = entry.file.startsWith('src/');
   const module = (srcLayout ? entry.file.slice(4) : entry.file).replace(/(?:\/__init__)?\.py$/, '').replaceAll('/', '.');
   const args = ' -m uvicorn ' + module + ':app --reload' + (srcLayout ? ' --app-dir src' : '');
-  return { ...candidate('FastAPI', python + args, entry.file + ' · FastAPI', 'api'), entryPath };
+  const app = /^app\s*=\s*(?:fastapi\.)?FastAPI\s*\(([^)]{0,1600})\)/m.exec(contents[entries.indexOf(entry.file)])?.[1] ?? '';
+  const docs = [...app.matchAll(/(?:^|,)\s*docs_url\s*=\s*(['"])([^'"\r\n]+)\1\s*(?=,|$)/g)];
+  const openPath = uniqueValue(docs.map(([, , value]) => value), literalPath);
+  return { ...candidate('FastAPI', python + args, entry.file + ' · FastAPI', 'api', { openPath }), entryPath };
 }
 
 async function dotnetStartup(folder) {
@@ -89,12 +84,14 @@ async function dotnetStartup(folder) {
   const profile = profiles && Object.entries(profiles).find(([name, value]) => /^\w[\w.-]{0,79}$/.test(name) && value?.commandName === 'Project');
   const command = 'dotnet run --project ' + target + (profile ? ' --launch-profile ' + profile[0] : ' --no-launch-profile');
   const settings = profile?.[1];
-  const urls = typeof settings?.applicationUrl === 'string' && !settings.environmentVariables?.ASPNETCORE_URLS ? settings.applicationUrl.split(';') : [];
-  const http = urls.map(url => /^http:\/\/(?:localhost|127\.0\.0\.1):(\d+)\/?$/i.exec(url.trim())).filter(Boolean);
-  const port = http.length === 1 ? Number(http[0][1]) : undefined;
+  const bindings = [settings?.applicationUrl, settings?.environmentVariables?.ASPNETCORE_URLS].filter(value => typeof value === 'string');
+  const port = uniqueValue(bindings, value => uniqueValue(value.split(';').filter(url => /^http:\/\//i.test(url.trim())), url =>
+    literalPort(/^http:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)\/?$/i.exec(url.trim())?.[1])));
+  const launchUrl = settings?.launchUrl;
+  const openPath = typeof launchUrl === 'string' && launchUrl ? literalPath(launchUrl.startsWith('/') ? launchUrl : '/' + launchUrl) : undefined;
   const program = await localText(folder, 'Program.cs');
   const kind = /\.MapControllers\s*\(|\.Map(?:Get|Group|Post)\s*\(\s*["']\/api(?:\/|["'])/.test(program) ? 'api' : undefined;
-  return candidate('ASP.NET Core', command, project + (profile ? ' · launchSettings.json' : ''), kind, port >= 1024 && port <= 65535 ? port : undefined);
+  return candidate('ASP.NET Core', command, project + (profile ? ' · launchSettings.json' : ''), kind, { port, openPath });
 }
 
 async function goStartup(folder, root) {
@@ -103,7 +100,13 @@ async function goStartup(folder, root) {
   if (!/"(?:net\/http|github\.com\/(?:gin-gonic\/gin|labstack\/echo(?:\/v\d+)?|gofiber\/fiber(?:\/v\d+)?|go-chi\/chi(?:\/v\d+)?))"/.test(main)) return;
   if (!/\b(?:ListenAndServe(?:TLS)?|Run|Start|Listen)\s*\(/.test(main)) return;
   for (let current = folder; ; current = dirname(current)) {
-    if (await isFile(current, 'go.mod')) return candidate('Go', 'go run .', 'go.mod · main.go', 'api');
+    if (await isFile(current, 'go.mod')) {
+      const listeners = [...main.matchAll(/\bhttp\.ListenAndServe\s*\(\s*([^,\r\n]+)/g)];
+      const port = uniqueValue(listeners.map(([, address]) => /^"(?:localhost|127\.0\.0\.1|0\.0\.0\.0)?:(\d+)"$/.exec(address.trim())?.[1]), literalPort);
+      const routes = [...main.matchAll(/\bhttp\.HandleFunc\s*\(\s*"(?:GET )?(\/[^"\r\n]*)"\s*,/g)];
+      const openPath = routes.length === 1 ? literalPath(routes[0][1]) : undefined;
+      return candidate('Go', 'go run .', 'go.mod · main.go', 'api', { port, openPath });
+    }
     if (!relative(root, current)) return;
   }
 }
@@ -115,7 +118,11 @@ async function rustStartup(folder) {
   if (!name || /^[ \t]*autobins\s*=\s*false\b/m.test(section) ||
       !/^[ \t]*(?:axum|actix-web|rocket|warp|salvo|poem)\s*(?:=|\.workspace\s*=)/m.test(cargo)) return;
   const main = await nestedText(folder, 'src/main.rs');
-  if (/\bfn\s+main\s*\(/.test(main)) return candidate('Rust', 'cargo run --bin ' + name, 'Cargo.toml · src/main.rs', 'api');
+  if (/\bfn\s+main\s*\(/.test(main)) {
+    const bindings = [...main.matchAll(/\bTcpListener::bind\s*\(\s*([^,\r\n)]+)/g)];
+    const port = uniqueValue(bindings.map(([, address]) => /^"(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)"$/.exec(address.trim())?.[1]), literalPort);
+    return candidate('Rust', 'cargo run --bin ' + name, 'Cargo.toml · src/main.rs', 'api', { port });
+  }
 }
 
 async function phpStartup(folder) {
@@ -128,7 +135,9 @@ async function phpStartup(folder) {
 async function rubyStartup(folder) {
   const gemfile = await localText(folder, 'Gemfile');
   if (/^[ \t]*gem\s+["']rails["']/m.test(gemfile) && await nestedText(folder, 'bin/rails')) {
-    return candidate('Rails', 'ruby bin/rails server', 'Gemfile · bin/rails', 'web');
+    const puma = await nestedText(folder, 'config/puma.rb');
+    const ports = [...puma.matchAll(/^[ \t]*port[ \t]+([^\r\n#]+)/gm)];
+    return candidate('Rails', 'ruby bin/rails server', 'Gemfile · bin/rails', 'web', { port: uniqueValue(ports.map(([, value]) => value.trim()), literalPort) });
   }
 }
 
@@ -147,7 +156,8 @@ async function gradleStartup(folder, root) {
       if (!match || /\bapply\s*(?:\(\s*)?false\b/.test(match[0])) continue;
       if (name === 'Ktor' && !/\bapplication\s*\{[^}]*\bmainClass(?:Name)?\b/.test(text)) continue;
       const wrapper = await findBuildWrapper(folder, root, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
-      return candidate(name, (wrapper ?? 'gradle') + ' ' + task, file + ' · ' + plugin, 'api');
+      const endpoint = name === 'Ktor' ? await ktorEndpoint(folder, text) : await jvmEndpoint(folder, name);
+      return candidate(name, (wrapper ?? 'gradle') + ' ' + task, file + ' · ' + plugin, 'api', endpoint);
     }
   }
 }
@@ -157,5 +167,13 @@ export async function detectBackendLaunchers(folder, root) {
     projectProcess(folder), pythonStartup(folder), dotnetStartup(folder), goStartup(folder, root),
     rustStartup(folder), phpStartup(folder), rubyStartup(folder), gradleStartup(folder, root)
   ]);
+  if (declared?.choice.port) {
+    const target = /^(?:python3?\s+-m\s+)?uvicorn\s+([\w.]+:app)(?:\s|$)/.exec(declared.choice.command)?.[1];
+    const fastapi = target && launchers.find(launcher => launcher?.name === 'FastAPI' && launcher.choice.command.includes(`uvicorn ${target} `));
+    if (fastapi && !/--(?:root-path|app-dir|factory)\b/.test(declared.choice.command)) {
+      declared.choice.kind = 'api';
+      if (fastapi.choice.openPath) declared.choice.openPath = fastapi.choice.openPath;
+    }
+  }
   return { declared, launchers: launchers.filter(Boolean) };
 }

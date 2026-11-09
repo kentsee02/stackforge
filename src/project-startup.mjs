@@ -2,6 +2,7 @@ import { lstat, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, win32 } from 'node:path';
 import { directoryIdentity, sameDirectory } from './project-identity.mjs';
 import { checkNames } from './project-toolchains.mjs';
+import { localAccessPath } from './startup-endpoints.mjs';
 
 function workingDirectory(directory) {
   const folder = typeof directory === 'string' ? directory.trim().replaceAll('\\', '/') || '.' : '';
@@ -42,7 +43,7 @@ export function validateStartup(input) {
     if (!script && port !== undefined) throw new Error('An HTTP port requires a startup command.');
     if (port !== undefined && (!Number.isInteger(port) || port < 1024 || port > 65535 || ports.has(port))) throw new Error('Use a different HTTP port from 1024 to 65535 for each service.');
     if (!['', 'web', 'api'].includes(kind)) throw new Error('Choose a valid service type.');
-    if (typeof openPath !== 'string' || (openPath && (openPath.length > 240 || !/^\/(?!\/)/.test(openPath) || /[\\\s\x00-\x1f\x7f]/.test(openPath)))) throw new Error('Enter a local access path starting with a single slash.');
+    if (openPath !== '' && !localAccessPath(openPath)) throw new Error('Enter a local access path starting with a single slash.');
     names.add(label.toLowerCase());
     if (port !== undefined) ports.add(port);
     return { name: label, directory: folder, ...(script && { command: script }), ...(port !== undefined && { port }), ...(installer && { installCommand: installer }), ...(kind && { kind }), ...(openPath && { openPath }) };

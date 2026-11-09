@@ -173,6 +173,68 @@ test('declared cross-framework commands work and ambiguous entries stay manual',
   assert.deepEqual(groups[1].choices.map(choice => choice.kind), ['web', 'api']);
 });
 
+test('startup suggestions read literal endpoints from framework config, CLI flags and entry points', async t => {
+  const pkg = (dev, dependencies) => ({ packageManager: 'npm@11.0.0', scripts: { dev }, dependencies });
+  const pom = plugin => `<project><build><plugins><plugin><artifactId>${plugin}-maven-plugin</artifactId></plugin></plugins></build></project>`;
+  const root = await fixture(t, {
+    'frontend/package.json': { ...pkg('vite'), scripts: { dev: 'vite', start: 'vite --port 4179 --base=/override/' } },
+    'frontend/vite.config.ts': "export default defineConfig({ server: { port: 4178, proxy: { '/api': { port: 9999 } } }, base: '/workspace/' })",
+    'services/next/package.json': pkg('next dev -p 3012'),
+    'services/next/next.config.ts': "const nextConfig: NextConfig = { basePath: '/portal' };\nexport default nextConfig;",
+    'services/angular/package.json': pkg('ng serve --configuration local'),
+    'services/angular/angular.json': { projects: { app: { architect: { serve: { options: { servePath: '/angular' }, configurations: { local: { port: 4207 } } } } } } },
+    'services/nest/package.json': pkg('nest start --watch', { '@nestjs/core': '11.0.0' }),
+    'services/nest/src/main.ts': "SwaggerModule.setup('reference', app, document);\nawait app.listen(3033);",
+    'backend/pom.xml': pom('spring-boot'),
+    'backend/src/main/resources/application.yml': 'server:\n  port: 8081\n  servlet:\n    context-path: /sales\nspringdoc:\n  swagger-ui:\n    path: /reference\n',
+    'services/quarkus/pom.xml': pom('quarkus'),
+    'services/quarkus/src/main/resources/application.properties': 'quarkus.http.port=8080\n%dev.quarkus.http.port=8082\nquarkus.swagger-ui.path=/local-docs',
+    'services/net/Demo.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web" />',
+    'services/net/Properties/launchSettings.json': { profiles: { http: { commandName: 'Project', applicationUrl: 'http://localhost:5117', launchUrl: 'swagger/index.html' } } },
+    'services/python/Procfile.dev': 'web: uvicorn main:app --port 8004\n',
+    'services/python/main.py': "from fastapi import FastAPI\napp = FastAPI(docs_url='/reference')\n",
+    'services/go/go.mod': 'module example.com/http\n',
+    'services/go/main.go': 'package main\nimport "net/http"\nfunc main() { http.HandleFunc("/health", handler); http.ListenAndServe(":8099", nil) }',
+    'services/rust/Cargo.toml': '[package]\nname = "api"\n[dependencies]\naxum = "0.8"\n',
+    'services/rust/src/main.rs': 'async fn main() { TcpListener::bind("127.0.0.1:3034").await; }',
+    'services/ruby/Gemfile': 'gem "rails"\n',
+    'services/ruby/bin/rails': 'require "rails/commands"',
+    'services/ruby/config/puma.rb': 'port 3035\n',
+    'services/ktor/build.gradle.kts': 'plugins { id("io.ktor.plugin") }\napplication { mainClass.set("io.ktor.server.netty.EngineMain") }',
+    'services/ktor/src/main/resources/application.conf': 'ktor { deployment { port = 8083 } application { modules = [] } }'
+  });
+  const { groups, limited } = await detectStartupSuggestions({ path: root });
+  const pairs = Object.fromEntries(groups.map(group => [group.directory, group.choices.map(({ port, openPath }) => [port, openPath])]));
+  assert.equal(limited, false);
+  assert.deepEqual(pairs, {
+    frontend: [[4178, '/workspace/'], [4179, '/override/']], backend: [[8081, '/sales/reference']],
+    'services/next': [[3012, '/portal']], 'services/angular': [[4207, '/angular']], 'services/nest': [[3033, '/reference']],
+    'services/quarkus': [[8082, '/local-docs']], 'services/net': [[5117, '/swagger/index.html']], 'services/python': [[8004, '/reference']],
+    'services/go': [[8099, '/health']], 'services/rust': [[3034, undefined]], 'services/ruby': [[3035, undefined]], 'services/ktor': [[8083, undefined]]
+  });
+});
+
+test('startup endpoints leave dynamic, ambiguous and non-local values for manual entry', async t => {
+  const root = await fixture(t, {
+    'frontend/package.json': { packageManager: 'npm@11.0.0', scripts: { dev: 'vite --port $PORT' } },
+    'frontend/vite.config.ts': 'export default defineConfig({ server: { port: 4444 }, base: "/ignored/" })',
+    'services/spread/package.json': { packageManager: 'npm@11.0.0', scripts: { dev: 'vite' } },
+    'services/spread/vite.config.ts': 'export default { server: { port: 4445 }, ...environmentSettings }',
+    'services/net/Demo.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web" />',
+    'services/net/Properties/launchSettings.json': { profiles: { https: { commandName: 'Project', applicationUrl: 'https://localhost:5117', launchUrl: '//external.example/path' } } },
+    'services/tls/pom.xml': '<project><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>',
+    'services/tls/src/main/resources/application.properties': 'server.port=8443\nserver.ssl.enabled=true\nspringdoc.swagger-ui.path=/reference',
+    'services/go/go.mod': 'module example.com/http\n',
+    'services/go/main.go': 'package main\nimport "net/http"\nfunc main() { http.HandleFunc("/one", handler); http.HandleFunc("/two", handler); http.ListenAndServe(":8082", nil); http.ListenAndServe(":8083", nil) }'
+  });
+  const { groups } = await detectStartupSuggestions({ path: root });
+  assert.equal(groups.length, 5);
+  for (const { choices: [choice] } of groups) {
+    assert.equal(choice.port, undefined);
+    assert.equal(choice.openPath, undefined);
+  }
+});
+
 test('reading suggestions leaves saved custom configuration and project files untouched', async t => {
   const root = await fixture(t, {
     'package.json': { name: 'fixture', scripts: { dev: 'node should-not-run.mjs' } },

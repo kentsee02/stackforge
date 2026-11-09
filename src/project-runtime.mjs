@@ -12,11 +12,12 @@ const logLimit = 64 * 1024;
 const active = new Set(['starting', 'running', 'stopping']);
 export const recordedProjectChanged = 'The recorded StackForge project is missing, has moved, or no longer matches its record.';
 
-async function probeService(url, signal, custom) {
+async function probeService(url, signal, custom, requireRoute) {
   try {
     const response = await fetch(url, { redirect: custom ? 'manual' : 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(1500)]) });
     if (custom || !response.ok || !url.endsWith('/api/health')) {
       await response.body?.cancel();
+      if (custom && requireRoute) return (response.status >= 200 && response.status < 400) || [401, 403].includes(response.status);
       return custom || response.ok;
     }
     const chunks = [];
@@ -30,13 +31,17 @@ async function probeService(url, signal, custom) {
   } catch { return false; }
 }
 
-export function startupDiagnostic(project, output) {
+export function startupDiagnostic(_project, output) {
   if (/EADDRINUSE|address already in use|port [^\r\n]{1,32}(?:already in use|already allocated)|ports are not available/i.test(output)) return 'port';
-  if (project.backend === 'spring' && /JAVA_HOME[^\r\n]*(?:not|incorrect|invalid)|(?:invalid (?:target|source) release|release version \d+ not supported)|UnsupportedClassVersionError|(?:java|javac)[^\r\n]*(?:not found|not recognized|不是内部或外部命令)/i.test(output)) return 'java';
-  if (project.database !== 'none') {
-    if (/cannot connect to the docker daemon|is the docker daemon running|dockerDesktopLinuxEngine|docker_engine.*(?:cannot|not find|denied)|spawn docker ENOENT|docker[^\r\n]*(?:not recognized|command not found|不是内部或外部命令)/i.test(output)) return 'docker';
-    if (/Database startup failed/i.test(output)) return 'database';
-  }
+  if (/(?:cannot resolve environment variable|missing required environment variable|environment variable not found)\s*:\s*["']?DATABASE_URL\b|\bDATABASE_URL\b[^\r\n]{0,10}\b(?:is (?:not set|missing|required|undefined)|must be set)\b/i.test(output)) return 'databaseUrl';
+  if (/\bP1001\s*:|can.t reach database server/i.test(output)) return 'databaseConnection';
+  if (/\bJAVA_HOME\b[^\r\n]*(?:not set|not defined|not found|incorrect|invalid|not correctly|does not)|invalid (?:target|source) release|release version \d+ not supported|UnsupportedClassVersionError|Unsupported class file major version|No compiler is provided in this environment|(?:cannot|could not) find a Java installation|\b(?:java|javac)\b[^\r\n]*(?:not found|not recognized|不是内部或外部命令)/i.test(output)) return 'java';
+  if (/NETSDK1045|compatible \.NET SDK (?:was not found|could not be found)|no \.NET SDKs were found/i.test(output)) return 'dotnetSdk';
+  if (/ERR_PNPM_OUTDATED_LOCKFILE|\bYN0028\b|(?:package-lock\.json|npm-shrinkwrap\.json)[^\r\n]*(?:in sync|out of sync)|the lock file [^\r\n]*needs to be updated but --locked/i.test(output)) return 'lockfile';
+  if (/cannot connect to the docker daemon|is the docker daemon running|dockerDesktopLinuxEngine|docker_engine.*(?:cannot|not find|denied)|spawn docker ENOENT|\bdocker\b[^\r\n]*(?:not recognized|command not found|不是内部或外部命令)/i.test(output)) return 'docker';
+  if (/Database startup failed/i.test(output)) return 'database';
+  if (/ModuleNotFoundError:\s*No module named|\bpython(?:3|\.exe)?\s*:\s*No module named/i.test(output)) return 'pythonDependencies';
+  if (/(?:\bspawn\s+(?:dotnet|go|cargo|composer|bundle|gradle|mvn|uv|python3?)\s+ENOENT|\b(?:dotnet|go|cargo|composer|bundle|gradle|mvn|uv|python3?)\b["']?\s*:?\s*(?:command not found|is not recognized|不是内部或外部命令))/i.test(output)) return 'toolMissing';
   if (/Cannot find (?:package|module) ['"](?:vite|vue|react|express|mysql2|pg|@vitejs\/[^'"]+|@nestjs\/[^'"]+)['"]|(?:vite|\bnest)['"]?[^\r\n]{0,32}(?:not recognized|not found|不是内部或外部命令)|failed to load config[^\r\n]*\n[^\r\n]*Cannot find package/i.test(output)) return 'dependencies';
 }
 
@@ -116,7 +121,9 @@ export class ProjectRuntime {
     }
     if (entry && (runtime.status === 'failed' || runtime.status === 'running' && !runtime.ready)) {
       runtime.diagnostic = startupDiagnostic(project, (entry.error || '') + '\n' + entry.log.slice(-12000));
-      if (!runtime.diagnostic && runtime.status === 'running' && Date.now() - entry.launchedAt > 30000) runtime.diagnostic = 'waiting';
+      if (!runtime.diagnostic && runtime.status === 'running' && Date.now() - entry.launchedAt > 30000) {
+        runtime.diagnostic = Object.values(entry.services).some(service => service.openUrl && !service.ready) ? 'waitingLink' : 'waiting';
+      }
     }
     if (includeLogs) Object.assign(runtime, { log: entry?.log ?? '', truncated: entry?.truncated ?? false });
     return runtime;
@@ -215,7 +222,7 @@ export class ProjectRuntime {
     const signal = entry.readiness.signal;
     const services = Object.values(entry.services);
     while (!signal.aborted) {
-      const checks = await Promise.all(services.map(service => this.probeEndpoint(service.url, signal, Boolean(service.name))));
+      const checks = await Promise.all(services.map(service => this.probeEndpoint(service.openUrl ?? service.url, signal, Boolean(service.name), Boolean(service.openUrl))));
       if (signal.aborted) return;
       for (const [index, service] of services.entries()) service.ready = checks[index];
       const ready = checks.every(Boolean);

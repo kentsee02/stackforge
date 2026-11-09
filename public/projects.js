@@ -8,11 +8,18 @@ const stackNames = { vue: 'Vue', react: 'React', express: 'Express', nestjs: 'Ne
 const removesFiles = project => !project.removeOnly;
 const diagnosticMessages = {
   port: 'Free the occupied port, or choose a different one under Development ports if this project supports it.',
-  java: 'Set JAVA_HOME and PATH to a JDK that supports Java 21, then restart StackForge and try again.',
+  java: 'Java is missing or incompatible. Set JAVA_HOME and PATH to the JDK version required by this project, then restart StackForge.',
+  databaseUrl: 'DATABASE_URL is missing. Set it in the project’s environment file or shell, then retry.',
+  databaseConnection: 'Prisma could not reach the database. Start the database and check the host and port in DATABASE_URL.',
+  dotnetSdk: 'The .NET SDK is missing or incompatible. Check the project’s target framework and any global.json version pin.',
+  lockfile: 'The dependency lockfile does not match the project. Update it with the project’s package manager, then retry.',
+  pythonDependencies: 'Python could not import a module. Check the service’s virtual environment and install its dependencies.',
+  toolMissing: 'A required command was not found. Check the tool named in the log and make sure it is on PATH.',
   docker: 'Start Docker Desktop or the Docker Engine, wait until it is ready, then start the project again.',
   database: 'Check the database startup output for Docker, port, or configuration errors, then try again.',
   dependencies: 'Use Install dependencies, then start the project again.',
-  waiting: 'The process is still running. Check the log for progress, especially on a first build or database download.'
+  waiting: 'The process is still running. Check the log for progress, especially on a first build or database download.',
+  waitingLink: 'The configured access URL has not responded successfully. Check its HTTP port and access path in Startup configuration.'
 };
 const rows = new Map();
 let projects = [];
@@ -107,9 +114,21 @@ function startupDirectoryKey(directory) {
   return (directory || '.').split('/').filter(part => part && part !== '.').join('/') || '.';
 }
 
+function matchingStartup(group, choice, draft) {
+  const folder = startupDirectoryKey(group.directory);
+  return draft.findIndex(service => startupDirectoryKey(service.directory) === folder && service.command === choice.command);
+}
+
+function missingLinkFields(service, choice, draft) {
+  const port = !service.port && choice.port && !draft.some(item => item.port === choice.port) ? choice.port : undefined;
+  const openPath = !service.openPath && choice.openPath;
+  return { ...(port && { port }), ...(openPath && { openPath }) };
+}
+
 function startupSuggestionConflict(group, choice, draft) {
   const folder = startupDirectoryKey(group.directory);
-  if (draft.some(service => startupDirectoryKey(service.directory) === folder && service.command === choice.command)) return 'Already in the configuration.';
+  const existing = matchingStartup(group, choice, draft);
+  if (existing !== -1) return Object.keys(missingLinkFields(draft[existing], choice, draft)).length ? undefined : 'Already in the configuration.';
   if (choice.orchestrates && draft.some(service => {
     const path = startupDirectoryKey(service.directory);
     return service.command && (folder === '.' || path === folder || path.startsWith(folder + '/'));
@@ -136,11 +155,23 @@ function suggestionRow(group, id) {
     const draft = startupDraft();
     const choice = group.choices[Number(select.value)];
     if (startupSuggestionConflict(group, choice, draft)) return;
+    const existing = matchingStartup(group, choice, draft);
+    if (existing !== -1) {
+      const service = draft[existing];
+      const fields = missingLinkFields(service, choice, draft);
+      if (!service.kind && choice.kind) fields.kind = choice.kind;
+      const target = $('project-startup-services').children[existing];
+      for (const [name, value] of Object.entries(fields)) target.querySelector(`[name="${name}"]`).value = value;
+      startupMessage = { id, message: 'Missing link settings were added to the draft. Save to use them.' };
+      render();
+      target.querySelector('[name="port"]').focus();
+      return;
+    }
     const names = new Set(draft.map(service => service.name.toLowerCase()));
     let name = group.name;
     for (let count = 2; names.has(name.toLowerCase()); count++) name = group.name.slice(0, 35) + ' (' + count + ')';
     const portInUse = choice.port && draft.some(service => service.port === choice.port);
-    const added = addStartupService({ name, directory: group.directory, command: choice.command, port: portInUse ? undefined : choice.port, kind: choice.kind });
+    const added = addStartupService({ name, directory: group.directory, command: choice.command, port: portInUse ? undefined : choice.port, kind: choice.kind, openPath: choice.openPath });
     startupMessage = { id, message: portInUse ? 'Suggestion added. Its port is already configured, so the port field was left blank.' : 'Suggestion added to the draft. Save to use it.' };
     render();
     added.querySelector('input').focus();
@@ -175,10 +206,12 @@ function renderStartupSuggestions(project, locked, draft) {
     if (command.textContent !== choice.command) command.textContent = choice.command;
     const evidence = choice.source ?? `package.json · scripts.${choice.script}`;
     const kind = choice.kind === 'web' ? 'Web app' : choice.kind === 'api' ? 'API service' : '';
-    const notes = [evidence, translate(kind), choice.orchestrates && translate('Workspace launcher'), choice.port && translate(`Port ${choice.port}`)].filter(Boolean);
+    const notes = [evidence, translate(kind), choice.orchestrates && translate('Workspace launcher'), choice.port && translate(`Port ${choice.port}`), choice.openPath && translate(`Path ${choice.openPath}`)].filter(Boolean);
     const source = row.querySelector('.startup-suggestion-source');
     if (source.textContent !== notes.join(' · ')) source.textContent = notes.join(' · ');
-    row.querySelector('button').disabled = locked || Boolean(conflict);
+    const button = row.querySelector('button');
+    setText(button, matchingStartup(group, choice, draft) !== -1 && !conflict ? 'Fill missing link settings' : 'Add to draft');
+    button.disabled = locked || Boolean(conflict);
     const hint = row.querySelector('.startup-suggestion-conflict');
     hint.hidden = !conflict;
     showMessage(hint, conflict);
@@ -304,7 +337,10 @@ function renderDependencies(project, busy, unavailable, startupDirty) {
   $('refresh-dependencies').disabled = Boolean(view?.loading);
   $('cancel-install').hidden = !installing;
   $('cancel-install').disabled = Boolean(pending) || task?.status === 'cancelling';
-  const error = actionError?.id === project.id && actionError.action?.startsWith('install') ? actionError.message : task?.error;
+  const installError = actionError?.id === project.id && actionError.action?.startsWith('install') ? actionError : undefined;
+  const issue = installError ? installError.diagnostic : task?.diagnostic;
+  const hintText = issue === 'dependencies' ? 'An installation script could not find a dependency. Check the failing script and package in the installation log.' : diagnosticMessages[issue];
+  const error = hintText ?? installError?.message ?? task?.error;
   showMessage($('dependency-error'), error);
   $('dependency-error').hidden = !error;
   const details = $('dependency-log');
@@ -665,7 +701,7 @@ function render() {
   const error = devError?.message ?? project.error;
   $('runtime-error').hidden = !error;
   showMessage($('runtime-error'), error);
-  const issue = devError?.diagnostic ?? project.diagnostic;
+  const issue = devError ? devError.diagnostic : project.diagnostic;
   const diagnostic = issue === 'dependencies' && project.unmanaged && !project.hasInstallCommands
     ? 'Add an install command under Startup configuration if this project needs one.'
     : issue === 'dependencies' && project.dependencies?.status === 'succeeded' ? undefined : diagnosticMessages[issue];
