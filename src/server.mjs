@@ -189,7 +189,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         } finally { transfer = undefined; }
         return;
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|ports|install|install-cancel|database-start|database-stop|run-check|check-cancel)$/.exec(url.pathname);
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|run-check|check-cancel)$/.exec(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
@@ -228,7 +228,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const project = managedProjects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
           if (transfer?.path === project.path) return send(res, 409, { error: 'Wait for the current project operation to finish.' });
-          if (project.unmanaged && !['start', 'stop', 'startup', 'install', 'install-cancel', 'run-check', 'check-cancel', 'trash'].includes(action)) {
+          if (project.unmanaged && !['start', 'stop', 'startup', 'install', 'install-cancel', 'run-check', 'check-cancel', 'trash', 'remove'].includes(action)) {
             return send(res, 409, { error: 'This action requires a StackForge project.' });
           }
           if (project.unmanaged && action === 'start' && !project.startup?.services.some(service => service.command)) return send(res, 409, { error: 'Save a startup configuration before starting this project.' });
@@ -285,11 +285,12 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             catch (error) { return send(res, 400, { error: error.message }); }
             finally { configWrites.delete(project.path); }
           }
-          if (action === 'trash') {
+          if (action === 'trash' || action === 'remove') {
             if (payload.confirmName !== project.name) return send(res, 400, { error: 'Enter the exact project name to confirm deletion.' });
+            if (action === 'remove' && !project.imported) return send(res, 409, { error: 'Only imported projects can be removed from the list.' });
             if (jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
             if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before moving it to the trash.' });
-            if (removeOnly(project)) {
+            if (action === 'remove' || removeOnly(project)) {
               await projectConfig.removeImport(project.id);
               return send(res, 200, { removed: true });
             }
@@ -306,6 +307,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
                 if (databaseDeleted) throw new Error('The database was deleted, but the project folder could not be moved to the trash.');
                 throw error;
               }
+              if (project.cloneId) await projectConfig.removeImport(project.id);
               return { trashed: true, databaseDeleted };
             })();
             removals.set(project.path, moving);

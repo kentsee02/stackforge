@@ -31,6 +31,12 @@ function storedStartup(value) {
   } catch { /* keep the project registered if its startup settings are damaged */ }
 }
 
+function withoutImport(value, id) {
+  const ports = { ...value.ports };
+  delete ports[id];
+  return { ...value, ports, imports: value.imports.filter(item => item.id !== id) };
+}
+
 export function defaultPorts(project) {
   return {
     ...(project.frontend !== 'none' && { frontend: 5173 }),
@@ -95,13 +101,16 @@ export class ProjectConfig {
 
   async addProject(project) {
     await this.update(value => {
-      if (value.imports.some(item => projectPathKey(item.path) === projectPathKey(project.path))) throw new Error('This folder is already in Projects.');
-      return { ...value, imports: [project, ...value.imports] };
+      const previous = value.imports.find(item => projectPathKey(item.path) === projectPathKey(project.path));
+      // A successful clone claims an unused destination before registering it.
+      if (previous && !(project.cloneId && previous.cloneId)) throw new Error('This folder is already in Projects.');
+      const next = previous ? withoutImport(value, previous.id) : value;
+      return { ...next, imports: [project, ...next.imports] };
     });
   }
 
   removeImport(id) {
-    return this.update(value => ({ ...value, imports: value.imports.filter(item => item.id !== id) }));
+    return this.update(value => withoutImport(value, id));
   }
 
   update(change) {

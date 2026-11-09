@@ -26,7 +26,7 @@ export function validateStartup(input) {
 }
 
 export async function resolveStartup(project, services, expectedIdentity) {
-  const changed = 'The startup project folder was moved or replaced. Import it again to configure startup.';
+  const changed = 'The startup project folder was moved or replaced. Remove it from Projects and import the current folder again.';
   const info = await lstat(project.path, { bigint: true }).catch(() => null);
   const identity = info && directoryIdentity(info);
   if (!identity || (expectedIdentity && !sameDirectory(info, expectedIdentity))) throw new Error(changed);

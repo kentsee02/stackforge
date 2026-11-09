@@ -619,6 +619,8 @@ function render() {
   showMessage(diagnosticField, diagnostic);
   diagnosticField.hidden = !diagnostic;
   $('project-delete').disabled = busy || unavailable;
+  $('project-remove').hidden = !project.imported || !removesFiles(project);
+  $('project-remove').disabled = busy || unavailable;
   setText($('project-delete').querySelector('span'), removesFiles(project) ? 'Delete project' : 'Remove from Projects');
   $('project-delete-hint').hidden = !busy && !deleting && !project.operation;
   setText($('project-delete-hint'), deleting ? 'Moving to trash…' : project.operation ? 'Wait for the current project operation to finish.' : 'Stop the project first.');
@@ -657,6 +659,7 @@ async function refresh() {
 
 async function act(id, action, body = {}) {
   if (!id || pending) return;
+  const removing = action === 'trash' || action === 'remove';
   pending = { id, action };
   actionError = undefined;
   $('project-feedback').dataset.status = 'ok';
@@ -665,7 +668,7 @@ async function act(id, action, body = {}) {
   try {
     const { token } = await request('/api/state');
     const runtime = await post(`/api/projects/${id}/${action}`, token, body, action === 'trash' ? 180_000 : 5000);
-    if (action === 'trash') {
+    if (removing) {
       projects = projects.filter(item => item.id !== id);
       if (selected === id) selected = projects[0]?.id;
       setText($('project-feedback'), runtime.removed ? 'Project removed from Projects.' :
@@ -688,7 +691,7 @@ async function act(id, action, body = {}) {
       if (project) Object.assign(project, { status: runtime.status, error: runtime.error, services: runtime.services, ready: runtime.ready, initialized: runtime.initialized, diagnostic: runtime.diagnostic });
     }
   } catch (error) {
-    if (action === 'trash') {
+    if (removing) {
       $('project-feedback').dataset.status = 'error';
       setText($('project-feedback'), error.message);
     } else if (action === 'ports') portMessage = { id, message: error.message };
@@ -698,7 +701,7 @@ async function act(id, action, body = {}) {
   finally {
     pending = undefined;
     render();
-    if (action === 'trash') $('project-feedback').focus();
+    if (removing) $('project-feedback').focus();
     refresh();
   }
 }
@@ -832,16 +835,16 @@ $('check-form').addEventListener('submit', event => {
   act(selected, 'run-check', { check: $('check-command').value });
 });
 $('check-cancel').addEventListener('click', () => act(selected, 'check-cancel'));
-$('project-delete').addEventListener('click', () => {
+function confirmProjectRemoval(action) {
   const project = projects.find(item => item.id === selected);
   if (!project || pending) return;
-  confirming = project;
+  confirming = { ...project, action };
   transferMessage = undefined;
   $('project-trash-path').textContent = project.path;
   $('project-trash-expected').textContent = project.name;
   $('project-trash-name').value = '';
   $('project-trash-confirm').disabled = true;
-  const deleteFiles = removesFiles(project);
+  const deleteFiles = action === 'trash' && removesFiles(project);
   $('project-trash-backup').hidden = !deleteFiles || project.database === 'none';
   setText($('project-trash-title'), deleteFiles ? 'Delete project?' : 'Remove project from Projects?');
   setText($('project-trash-instruction'), deleteFiles ? 'Type the project name below to confirm deletion.' : 'Type the project name below to confirm removal.');
@@ -851,7 +854,9 @@ $('project-delete').addEventListener('click', () => {
     : 'The entire local project folder will move to the system trash. You can restore it from there.');
   $('project-trash-dialog').showModal();
   render();
-});
+}
+$('project-delete').addEventListener('click', () => confirmProjectRemoval('trash'));
+$('project-remove').addEventListener('click', () => confirmProjectRemoval('remove'));
 $('project-trash-backup').addEventListener('click', () => backupAction(confirming));
 $('project-trash-cancel').addEventListener('click', () => $('project-trash-dialog').close());
 $('project-trash-name').addEventListener('input', event => {
@@ -862,7 +867,7 @@ $('project-trash-form').addEventListener('submit', event => {
   const confirmName = $('project-trash-name').value;
   if (!confirming || pending || confirmName !== confirming.name) return;
   $('project-trash-dialog').close();
-  act(confirming.id, 'trash', { confirmName });
+  act(confirming.id, confirming.action, { confirmName });
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else refresh(); });
 refresh();

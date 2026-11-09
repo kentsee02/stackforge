@@ -88,6 +88,10 @@ test('GitHub clone detects frameworks and recycles only a verified cloned direct
   assert.deepEqual(await deleted.json(), { trashed: true, databaseDeleted: false });
   await assert.rejects(access(project.path), { code: 'ENOENT' });
   await access(join(project.path + '-recycled', 'package.json'));
+  assert.equal((await post(route + '/trash', confirm)).status, 404);
+  const clonedAgain = await clone('https://github.com/owner/Demo');
+  assert.equal(clonedAgain.status, 201);
+  assert.notEqual((await clonedAgain.json()).id, project.id);
 
   const local = await post('/api/projects/import', { path: project.path + '-recycled' });
   assert.equal(local.status, 201);
@@ -96,6 +100,46 @@ test('GitHub clone detects frameworks and recycles only a verified cloned direct
   assert.equal(imported.cloned, undefined);
   assert.deepEqual(await post(`/api/projects/${imported.id}/trash`, { confirmName: imported.name }).then(response => response.json()), { removed: true });
   await access(join(imported.path, 'package.json'));
+});
+
+test('stale clone records can be replaced by a new clone or removed without touching the folder', async t => {
+  const command = async (name, args) => {
+    const checkout = args.at(-1);
+    await mkdir(join(checkout, '.git'), { recursive: true });
+    await writeFile(join(checkout, 'package.json'), '{"packageManager":"npm@11.0.0","scripts":{"dev":"node serve.js"}}');
+  };
+  const desktop = { ...createDesktop(), trashProject: () => assert.fail('The replacement directory must not be recycled') };
+  const { directory, post, get } = await fixture(t, { desktop, clone: (repo, parent, options) => cloneGithub(repo, parent, { ...options, command }) });
+  const clone = async () => {
+    const response = await post('/api/projects/clone', { repository: 'https://github.com/owner/demo', parentDir: directory });
+    assert.equal(response.status, 201);
+    return response.json();
+  };
+  const first = await clone();
+  await rename(first.path, join(directory, 'first-clone'));
+  const second = await clone();
+  assert.notEqual(second.id, first.id);
+  assert.deepEqual((await get('/api/projects')).projects.map(project => project.id), [second.id]);
+
+  await rename(second.path, join(directory, 'second-clone'));
+  await mkdir(second.path);
+  await writeFile(join(second.path, 'package.json'), '{"packageManager":"npm@11.0.0","scripts":{"dev":"node local.js"}}');
+  await writeFile(join(second.path, 'keep.txt'), 'user file');
+  const route = '/api/projects/' + second.id;
+  const confirm = { confirmName: second.name };
+  assert.match((await get(route + '/startup-suggestions')).error, /Remove it from Projects/);
+  assert.equal((await post(route + '/trash', confirm)).status, 409);
+  assert.equal((await post(route + '/remove', { confirmName: 'wrong' })).status, 400);
+  const removed = await post(route + '/remove', confirm);
+  assert.equal(removed.status, 200);
+  assert.deepEqual(await removed.json(), { removed: true });
+  assert.equal(await readFile(join(second.path, 'keep.txt'), 'utf8'), 'user file');
+
+  const imported = await post('/api/projects/import', { path: second.path });
+  assert.equal(imported.status, 201);
+  const local = await imported.json();
+  assert.equal(local.cloned, undefined);
+  assert.equal((await get('/api/projects/' + local.id + '/startup-suggestions')).groups[0].choices[0].command, 'npm run dev');
 });
 
 test('unrecognized directories can be imported and old external records acquire detected frameworks', async t => {
