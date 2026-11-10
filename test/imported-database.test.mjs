@@ -37,6 +37,7 @@ test('imported Compose controls verify the container and dedicated volume before
       return JSON.stringify(model);
     }
     if (args[0] === 'ps') return args.at(-1).startsWith('volume=') && shared ? `${id}\n${foreign}` : container ? id : '';
+    if (args.includes('{{json .Config.Env}}')) return '["POSTGRES_PASSWORD=import-secret-canary"]';
     if (args[0] === 'inspect') return [id, JSON.stringify(labels), '"postgres:17"', JSON.stringify({ Status: state }),
       JSON.stringify([{ Type: 'volume', Name: 'example_data', Destination: '/var/lib/postgresql/data', RW: true }])].join('\t');
     if (args[0] === 'volume' && args[1] === 'ls') return volume ? 'example_data\n' : '';
@@ -72,7 +73,7 @@ test('imported Compose controls verify the container and dedicated volume before
     }
     if (args[0] === 'logs') {
       assert.equal(args.at(-1), id);
-      options.log('postgres is ready');
+      options.log('postgres is ready\nimport-secret-canary\npassword="unknown secret"');
       return;
     }
     if (args[0] === 'exec') {
@@ -123,7 +124,7 @@ test('imported Compose controls verify the container and dedicated volume before
   assert.equal((await task('start')).status, 'succeeded');
   assert.deepEqual(await (await get('/database')).json(), { engine: 'postgres', status: 'starting' });
   sqlReady = true;
-  assert.deepEqual(await (await get('/database?logs=1')).json(), { engine: 'postgres', status: 'running', log: 'postgres is ready' });
+  assert.deepEqual(await (await get('/database?logs=1')).json(), { engine: 'postgres', status: 'running', log: 'postgres is ready\n[redacted]\npassword=[redacted]' });
   assert.deepEqual(Buffer.from(await (await post(route + '/database-backup')).arrayBuffer()), dump);
   const restoreHeaders = { 'Content-Type': 'application/octet-stream', 'X-StackForge-Confirm-Name': imported.name };
   assert.equal((await post(route + '/database-restore', dump, restoreHeaders)).status, 200);

@@ -7,6 +7,7 @@ import { projectPathKey } from './project-config.mjs';
 import { inspectRecordedProject, startupDiagnostic } from './project-runtime.mjs';
 import { projectChecks, projectGitStatus } from './project-tools.mjs';
 import { databaseReady, transferDatabase } from './database-backup.mjs';
+import { databaseRedactor } from './database-secrets.mjs';
 import { resolveStartup } from './project-startup.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
 import { inspectImportedDatabase } from './imported-database.mjs';
@@ -22,6 +23,32 @@ const composeStatusFormat = [
   '{{.State.Status}}',
   '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
 ].join('\t');
+
+function databaseTaskOutput(append, redact) {
+  let line = '';
+  let discard = false;
+  return {
+    write(chunk) {
+      if (discard) {
+        const end = chunk.indexOf('\n');
+        if (end < 0) return;
+        chunk = chunk.slice(end + 1);
+        discard = false;
+      }
+      line += chunk;
+      const end = line.lastIndexOf('\n') + 1;
+      if (end) {
+        append(redact.text(line.slice(0, end)));
+        line = line.slice(end);
+      }
+      if (line.length > logLimit) {
+        line = '';
+        discard = true;
+      }
+    },
+    flush() { if (line) append(redact.text(line)); }
+  };
+}
 
 async function databaseOptions(project, ports, info) {
   if (project.database === 'none') throw new Error('This project has no database.');
@@ -72,7 +99,10 @@ export class ProjectOperations {
     const task = { kind, phase: kind === 'checkTask' ? checkId : action, status: 'running', controller, log: '' };
     entry.active = entry[kind] = task;
     this.projects.set(key, entry);
-    const options = { signal: controller.signal, log: chunk => { task.log = (task.log + chunk).slice(-logLimit); } };
+    const append = chunk => { task.log = (task.log + chunk).slice(-logLimit); };
+    const redact = kind === 'databaseTask' ? databaseRedactor(process.env) : undefined;
+    const output = redact && databaseTaskOutput(append, redact);
+    const options = { signal: controller.signal, log: output?.write ?? append, addDatabaseSecrets: redact?.add };
     const work = {
       dependencies: () => project.unmanaged
         ? installPlanId ? this.installDetectedDependencies(project, task, options, installPlanId) : this.installConfiguredDependencies(project, task, options)
@@ -87,13 +117,14 @@ export class ProjectOperations {
       .catch(error => {
         task.status = error.name === 'AbortError' ? 'cancelled' : 'failed';
         if (task.status === 'failed') {
+          const message = redact ? redact.text(error.message) : error.message;
           task.error = kind === 'checkTask' && Number.isInteger(error.exitCode)
             ? `Check command exited with code ${error.exitCode}.`
-            : error.message.split('\n')[0].trim();
-          task.diagnostic = startupDiagnostic(project, `${error.message}\n${task.log.slice(-12000)}`);
+            : message.split('\n')[0].trim();
+          task.diagnostic = startupDiagnostic(project, `${message}\n${task.log.slice(-12000)}`);
         }
       })
-      .finally(() => { entry.active = undefined; });
+      .finally(() => { output?.flush(); entry.active = undefined; });
   }
 
   cancel(project, kind) {
@@ -197,8 +228,8 @@ export class ProjectOperations {
     }] : []);
   }
 
-  async databaseState(config, engine) {
-    const containers = await this.databaseContainers(config);
+  async databaseState(config, engine, containers) {
+    containers ??= await this.databaseContainers(config);
     const states = containers.map(container => container.status);
     if (!states.length) return { status: 'absent' };
     const status = ['unhealthy', 'restarting', 'starting', 'running', 'paused'].find(state => states.includes(state)) ?? 'stopped';
@@ -209,6 +240,34 @@ export class ProjectOperations {
     return { status };
   }
 
+  async databaseLogs(config, { id }) {
+    const redact = databaseRedactor(config.env);
+    try {
+      const probe = await this.command('docker', ['inspect', '--type', 'container', '--format', '{{json .Config.Env}}', id],
+        { ...config, stdoutOnly: true, timeout: dockerProbeTimeout, stdoutLimit: 512 * 1024 });
+      const env = (JSON.parse(probe) ?? []).flatMap(entry => {
+        const split = entry.indexOf('=');
+        return split > 0 ? [[entry.slice(0, split), entry.slice(split + 1)]] : [];
+      });
+      redact.add(Object.fromEntries(env));
+    } catch { throw new Error('Could not verify database log redaction.'); }
+    let output = '';
+    let truncated = false;
+    await this.command('docker', ['logs', '--tail', '100', id], { ...config, timeout: dockerProbeTimeout, log: chunk => {
+      output += chunk;
+      if (output.length > logLimit) {
+        output = output.slice(-logLimit);
+        truncated = true;
+      }
+    } }).catch(error => {
+      error.message = redact.text(error.message);
+      throw error;
+    });
+    const firstLineEnd = output.indexOf('\n');
+    if (truncated) output = firstLineEnd < 0 ? '' : output.slice(firstLineEnd + 1);
+    return redact.text(output);
+  }
+
   async database(project, ports, logs = false) {
     if (project.unmanaged) {
       const { config, container, engine } = await inspectImportedDatabase(project, this.command);
@@ -217,29 +276,25 @@ export class ProjectOperations {
         state.status = 'starting';
       }
       if (logs && container) {
-        let output = '';
-        await this.command('docker', ['logs', '--tail', '100', container.id], {
-          ...config, timeout: dockerProbeTimeout, log: chunk => { output = (output + chunk).slice(-logLimit); }
-        });
-        state.log = output;
+        state.log = await this.databaseLogs(config, container);
       }
       return state;
     }
     const config = await databaseOptions(project, ports);
-    const state = await this.databaseState(config, project.database);
+    const containers = await this.databaseContainers(config);
+    const state = await this.databaseState(config, project.database, containers);
     if (logs && state.status !== 'absent') {
-      let output = '';
-      await this.command('docker', ['compose', 'logs', '--no-color', '--tail', '100', 'db'], {
-        ...config, timeout: dockerProbeTimeout, log: chunk => { output = (output + chunk).slice(-logLimit); }
-      });
-      state.log = output;
+      const logsByContainer = await Promise.all(containers.map(container => this.databaseLogs(config, container)));
+      state.log = logsByContainer.join('\n').slice(-logLimit);
     }
     return state;
   }
 
   async changeDatabase(project, action, ports, options) {
     if (project.unmanaged) {
-      const { config, container, start } = await inspectImportedDatabase(project, this.command, options.signal);
+      const { config, container, start, environment } = await inspectImportedDatabase(project, this.command, options.signal);
+      options.addDatabaseSecrets?.(config.env);
+      options.addDatabaseSecrets?.(environment);
       throwIfCancelled(options.signal);
       if (action === 'database-start') await start(options);
       else if (container && !['created', 'exited', 'dead'].includes(container.status)) {
@@ -248,6 +303,7 @@ export class ProjectOperations {
       return;
     }
     const config = await databaseOptions(project, ports);
+    options.addDatabaseSecrets?.(config.env);
     const state = await this.databaseState({ ...config, signal: options.signal });
     throwIfCancelled(options.signal);
     if (action === 'database-stop' && state.status === 'absent') return;

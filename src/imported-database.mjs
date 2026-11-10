@@ -116,7 +116,7 @@ export async function inspectImportedDatabase(project, command, signal) {
   else if (container) throw new Error(notOwned);
   await resolveStartup(project, [], identity);
 
-  return { engine, container, config, async start(options) {
+  return { engine, container, config, environment: spec.environment, async start(options) {
     if (container) {
       if (!['running', 'starting', 'unhealthy'].includes(container.status)) await command('docker', ['container', 'start', container.id], { ...config, ...options });
       return;

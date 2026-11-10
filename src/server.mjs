@@ -23,6 +23,7 @@ import { resolveStartup, validateCustomChecks, validateStartup } from './project
 import { detectDependencyPlan } from './dependency-plan.mjs';
 import { detectStartupSuggestions } from './startup-suggestions.mjs';
 import { backupLimit } from './database-backup.mjs';
+import { databaseRedactor } from './database-secrets.mjs';
 import { hasImportedCompose } from './imported-database.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -50,6 +51,7 @@ function projectDetails(project) {
 
 export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations() } = {}) {
   const token = randomBytes(32).toString('hex');
+  const redactDatabase = databaseRedactor(process.env);
   const jobs = new Jobs({ directory: stateDir, generate, check, publish });
   const settings = new Settings(settingsFile);
   const projectConfig = new ProjectConfig(stateDir ? join(dirname(stateDir), 'projects.json') : false);
@@ -150,7 +152,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           }
           return send(res, 200, await operations.database(project, projectConfig.ports(project), url.searchParams.has('logs')));
         } catch (error) {
-          return send(res, 409, { error: error.message.split('\n')[0].trim(), diagnostic: view === 'database' ? startupDiagnostic(project, error.message) : undefined });
+          const message = view.startsWith('database') ? redactDatabase.text(error.message) : error.message;
+          return send(res, 409, { error: message.split('\n')[0].trim(), diagnostic: view === 'database' ? startupDiagnostic(project, message) : undefined });
         }
       }
       if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, jobs.list());
@@ -197,7 +200,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             'Content-Disposition': `attachment; filename="${result.filename}"`, 'Content-Length': result.data.length });
           return res.end(result.data);
         } catch (error) {
-          if (!res.destroyed) return send(res, 409, { error: error.message.split('\n')[0].trim() });
+          if (!res.destroyed) return send(res, 409, { error: redactDatabase.text(error.message).split('\n')[0].trim() });
         } finally { transfer = undefined; }
         return;
       }

@@ -306,7 +306,7 @@ test('project operations cancel and retry installation, manage the configured da
     writeFile(join(directory, 'stackforge.json'), JSON.stringify({ generator: 'StackForge', portConfig: 1, options: project })),
     writeFile(join(directory, 'package.json'), '{}'),
     writeFile(join(directory, 'compose.yaml'), 'services: {}'),
-    writeFile(join(directory, '.env'), 'DB_PORT=5432\n'),
+    writeFile(join(directory, '.env'), 'DB_PORT=5432\nDB_PASSWORD=project-log-canary\n'),
     writeFile(join(directory, 'backend', process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw'), '')
   ]);
   let attempts = 0;
@@ -331,10 +331,19 @@ test('project operations cancel and retry installation, manage the configured da
       }
       assert.equal(config.env.DB_PORT, '15432');
       if ((args[0] === 'inspect' || args[1] === 'ps') && config.timeout < minimumDockerProbeTime) throw new Error('Docker status probe timed out.');
+      if (args.includes('{{json .Config.Env}}')) return '["POSTGRES_PASSWORD=container-log-canary"]';
       if (args[0] === 'inspect') return `${JSON.stringify(owner)}\tdb\t${container}\thealthy\n`;
       if (args[0] === 'exec') return sqlReady ? '1' : '';
       if (args[1] === 'ps') return container ? 'abcdef123456\n' : '';
-      if (args[1] === 'logs') { config.log('ready to accept connections\n'); return; }
+      if (args[0] === 'logs') {
+        config.log('ready to accept connections\ncontainer-log-');
+        config.log('canary postgresql://app:unknown@localhost/app\n');
+        return;
+      }
+      if (args[1] === 'up') {
+        config.log('starting project-log-');
+        config.log('canary\n');
+      }
       databaseWrites.push(args);
       container = args[1] === 'up' ? 'running' : 'exited';
     }
@@ -371,9 +380,10 @@ test('project operations cancel and retry installation, manage the configured da
     return databaseTask.status !== 'running' && databaseTask;
   });
   assert.equal(started.status, 'succeeded', started.error);
+  assert.equal(started.log, 'starting [redacted]\n');
   assert.equal((await get(`${route}/database`)).status, 'starting');
   sqlReady = true;
-  assert.deepEqual(await get(`${route}/database?logs=1`), { status: 'running', log: 'ready to accept connections\n' });
+  assert.deepEqual(await get(`${route}/database?logs=1`), { status: 'running', log: 'ready to accept connections\n[redacted] [redacted]\n' });
   owner = parent;
   assert.equal((await post(`${route}/database-stop`)).status, 202);
   await until(async () => (await detail()).databaseTask.status === 'failed');

@@ -63,7 +63,7 @@ For imported and cloned projects, the Dependencies panel previews detected comma
 
 The same preview supports Gradle Wrapper `classes` for recognized JVM builds, `dotnet restore` for an unambiguous project or solution, `go mod download`, `cargo fetch`, Composer, and Bundler. Gradle's preparation step compiles the main sources and may write build output. The corresponding SDK or package manager needs to be available on the machine.
 
-**Database controls** shows the Docker Compose database status and the last 100 lines of container output. A running container shows as starting until its configured database responds to a SQL query. The panel uses the project's saved database port and can start or stop the database separately. Stopping the database keeps its data volume.
+**Database controls** shows the Docker Compose database status and the last 100 lines of container output. The panel masks known environment credentials and common database connection strings in that output. A running container shows as starting until its configured database responds to a SQL query. The panel uses the project's saved database port and can start or stop the database separately. Stopping the database keeps its data volume.
 
 Imported and cloned projects can use these controls when a single root Compose file defines one official MySQL or PostgreSQL service with a dedicated local named data volume. StackForge checks the recorded project directory, Compose labels, actual mounts and volume users. External volumes, shared volumes and ambiguous configurations are rejected. For older imports without a recorded directory identity, remove the registration and import the folder again. The database starts independently of the other Compose services.
 

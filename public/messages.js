@@ -120,6 +120,7 @@ export const messages = [
   ['此操作会永久删除下方数据卷及其中的所有数据。项目文件会保留。', 'This permanently deletes the volume below and all of its data. Your project files are kept.'],
   ['输入下方数据卷名称以确认删除。', 'Type the volume name below to confirm deletion.'],
   ['数据库数据卷已删除。', 'Database data volume deleted.'],
+  ['无法验证数据库日志脱敏。', 'Could not verify database log redaction.'],
   ['请先停止项目，再删除数据库。', 'Stop the project before deleting its database.'],
   ['请先停止数据库，再删除其数据卷。', 'Stop the database before deleting its data volume.'],
   ['没有可删除的项目数据库数据卷。', 'There is no project database volume to delete.'],
