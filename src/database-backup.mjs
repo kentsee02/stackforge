@@ -9,6 +9,8 @@ SELECT NOT EXISTS (
   SELECT 1 FROM pg_proc WHERE pronamespace = to_regnamespace('public')
   UNION ALL
   SELECT 1 FROM pg_type WHERE typnamespace = to_regnamespace('public')
+  UNION ALL
+  SELECT 1 FROM pg_largeobject_metadata
 );`;
 const mysqlEmpty = `
 SELECT NOT EXISTS (
@@ -40,6 +42,27 @@ const mysqlReady = `${mysqlDatabase} ${mysqlSocket} if [ -n "\${MYSQL_USER:-}" ]
 // mysql uses account qualifiers in CREATE statements and versioned SQL comments.
 // Keep quoted SQL data byte-for-byte while letting objects use the restore account.
 const account = "(?:`(?:``|[^`])*`|'(?:\\\\.|''|[^'\\\\])*'|\"(?:\\\\.|\"\"|[^\"\\\\])*\")";
+const mysqlGrant = /^GRANT ([A-Z_, ]+) ON (\*\.\*|`(?:``|[^`])+`\.\*) TO `(?:``|[^`])*`@`(?:``|[^`])*`$/;
+const mysqlScopeQuery = "SELECT CONCAT('STACKFORGE_SCOPE:', @@GLOBAL.partial_revokes), DATABASE(); SHOW GRANTS";
+const mysqlScopeError = 'MySQL restore requires an account with grants restricted to the target database.';
+
+function mysqlRestoreIsScoped(output) {
+  const [header, ...grants] = output.trimEnd().split(/\r?\n/);
+  const [mode, database, extra] = header.split('\t');
+  if (!database || extra !== undefined || !['STACKFORGE_SCOPE:0', 'STACKFORGE_SCOPE:1'].includes(mode) || /[\\\r\n]/.test(database)) return false;
+  // MySQL treats unescaped underscores and percent signs as grant wildcards
+  // unless partial_revokes is enabled.
+  const exactName = mode === 'STACKFORGE_SCOPE:0' ? database.replace(/[%_]/g, '\\$&') : database;
+  const scope = '`' + exactName.replaceAll('`', '``') + '`.*';
+  let targetGrant = false;
+  for (const grant of grants) {
+    const [, privileges, grantedScope] = mysqlGrant.exec(grant) ?? [];
+    if (grantedScope === scope && privileges !== 'USAGE') targetGrant = true;
+    else if (grantedScope !== '*.*' || privileges !== 'USAGE') return false;
+  }
+  return targetGrant;
+}
+
 const definer = `\\bDEFINER\\s*=\\s*${account}\\s*@\\s*${account}`;
 const dumpTokens = () => new RegExp(`${account}|/\\*![0-9]+[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/|--(?=\\s)[^\\r\\n]*|#[^\\r\\n]*|${definer}`, 'gi');
 function removeDefiners(sql) {
@@ -67,6 +90,7 @@ const commands = {
     ready: `${mysqlReady} exec mysql ${mysqlTarget} --batch --skip-column-names --user="$user" --database="$MYSQL_DATABASE" --execute="SELECT @@GLOBAL.skip_networking = 0"`,
     backup: `${mysqlRoot} exec mysqldump ${mysqlTarget} --single-transaction --skip-add-drop-table --skip-add-locks --no-tablespaces --set-gtid-purged=OFF --hex-blob --routines --events --triggers --user=root -- "$MYSQL_DATABASE"`,
     empty: [`${mysqlRoot} exec mysql ${mysqlTarget} --batch --skip-column-names --user=root --database="$MYSQL_DATABASE" --execute="$1"`, mysqlEmpty],
+    scope: [`${mysqlUser} exec mysql ${mysqlTarget} --batch --raw --skip-column-names --user="$MYSQL_USER" --database="$MYSQL_DATABASE" --execute="$1"`, mysqlScopeQuery],
     restore: `${mysqlUser} exec mysql ${mysqlTarget} --batch --binary-mode --local-infile=0 --user="$MYSQL_USER" --database="$MYSQL_DATABASE"`,
     portable: data => Buffer.from(removeDefiners(data.toString('latin1')), 'latin1'),
     emptyValue: '1',
@@ -117,6 +141,15 @@ export async function transferDatabase(options) {
     throw new Error('Could not verify that the target database is empty.');
   }
   if (empty !== format.emptyValue) throw new Error('Restore requires an empty database. Start a fresh project database and retry.');
+  if (format.scope) {
+    let grants;
+    try { grants = await docker(format.scope[0], { stdoutOnly: true, timeout: 15000, stdoutLimit: 64 * 1024 }, format.scope[1]); }
+    catch (error) {
+      if (error.name === 'AbortError') throw error;
+      throw new Error(mysqlScopeError);
+    }
+    if (!mysqlRestoreIsScoped(grants)) throw new Error(mysqlScopeError);
+  }
   try { await docker(format.restore, { input: format.portable ? format.portable(file) : file }); }
   catch (error) {
     if (error.name === 'AbortError') throw error;

@@ -81,7 +81,10 @@ test('imported Compose controls verify the container and dedicated volume before
       assert.match(script, /unset PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGOPTIONS/);
       assert.match(script, /--host="\$socket" --port="\$port"/);
       if (args.at(-1).includes('pg_dump')) return dump;
-      if (args.includes('stackforge')) return 't';
+      if (args.includes('stackforge')) {
+        assert.match(args.at(-1), /pg_largeobject_metadata/);
+        return 't';
+      }
       if (script.includes('SELECT 1')) return sqlReady ? '1' : '';
       assert.deepEqual(options.input, dump);
       mutations.push(args);
@@ -168,6 +171,7 @@ test('MySQL dump includes routines and events and rebinds their definers without
     assert.match(args[args.indexOf('-c') + 1], /--no-defaults --no-login-paths --protocol=SOCKET --socket="\$socket"/u);
     if (args.at(-1).includes('skip_networking')) return '1';
     if (args.at(-1).includes('mysqldump')) return dump;
+    if (args.at(-1).includes('SHOW GRANTS')) return 'STACKFORGE_SCOPE:0\tapp\nGRANT USAGE ON *.* TO `app`@`%`\nGRANT ALL PRIVILEGES ON `app`.* TO `app`@`%`';
     if (args.includes('stackforge')) return '1';
   };
   const input = { engine: 'mysql', project: 'demo', container: 'id', config: {}, command };
@@ -183,6 +187,35 @@ test('MySQL dump includes routines and events and rebinds their definers without
   assert.doesNotMatch(text, /CREATE DEFINER|50013 DEFINER|50117 DEFINER/);
   await transferDatabase({ ...input, file: dump });
   assert.match(calls[3].args.join(' '), /information_schema\.routines/);
-  assert.match(calls[4].args.at(-1), /--user="\$MYSQL_USER"/);
-  assert.deepEqual(calls[4].options.input, data);
+  assert.match(calls[4].args.at(-1), /SHOW GRANTS/);
+  assert.match(calls[5].args.at(-1), /--user="\$MYSQL_USER"/);
+  assert.deepEqual(calls[5].options.input, data);
+});
+
+test('MySQL restore accepts exact database grants and rejects roles, wildcards and broader privileges', async () => {
+  const usage = 'GRANT USAGE ON *.* TO `app`@`%`';
+  const target = 'GRANT ALL PRIVILEGES ON `my_app`.* TO `app`@`%`';
+  const escaped = target.replace('my_app', 'my\\_app');
+  const file = Buffer.from('-- MySQL dump fixture');
+  let writes = 0;
+  let mode = 0;
+  let grants;
+  const command = async (_name, args, options) => {
+    if (options.input) { writes++; return; }
+    if (args.at(-1).includes('SHOW GRANTS')) return [`STACKFORGE_SCOPE:${mode}\tmy_app`, usage, ...grants].join('\n');
+    return '1';
+  };
+  const restore = () => transferDatabase({ engine: 'mysql', project: 'demo', container: 'id', config: {}, command, file });
+  for (grants of [[target], [escaped, 'GRANT INSERT ON `other`.`data` TO `app`@`%`'],
+    [escaped, 'GRANT SELECT ON *.* TO `app`@`%`'], [escaped, 'GRANT `admin`@`%` TO `app`@`%`'],
+    [escaped + ' WITH GRANT OPTION'], []]) {
+    await assert.rejects(restore(), /grants restricted to the target database/);
+  }
+  assert.equal(writes, 0);
+  grants = [escaped];
+  await restore();
+  mode = 1;
+  grants = [target];
+  await restore();
+  assert.equal(writes, 2);
 });

@@ -152,6 +152,7 @@ export const messages = [
   ['请选择与数据库类型匹配的备份文件。', 'Choose a backup file for this database engine.'],
   ['无法确认目标数据库为空。', 'Could not verify that the target database is empty.'],
   ['恢复要求目标数据库为空。请启动一个新的项目数据库后再试。', 'Restore requires an empty database. Start a fresh project database and retry.'],
+  ['MySQL 恢复要求使用授权范围仅限目标数据库的账户。', 'MySQL restore requires an account with grants restricted to the target database.'],
   ['MySQL 恢复中断或失败。目标数据库可能包含已恢复的部分对象。', 'MySQL restore was interrupted or failed. The database may contain partially restored objects.'],
   ['PostgreSQL 恢复失败。请检查备份是否有效，以及是否与目标数据库兼容。', 'PostgreSQL restore failed. Check that the backup is valid and compatible with the target database.'],
   ['NestJS 全栈', 'NestJS full stack'],

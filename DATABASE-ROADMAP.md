@@ -5,7 +5,7 @@ This checklist tracks the proposed Database Architecture Specification against S
 ## P0 · Protect existing data
 
 - [x] Separate project file deletion from permanent database volume deletion. Keep the volume when project recycling fails. Require explicit confirmation of the verified volume, a stopped project and database, and revalidate ownership before removal.
-- [ ] Scope restores to the selected database. Reject MySQL restores with broader effective privileges, include PostgreSQL large objects in the empty-target check, and test both against real disposable databases.
+- [x] Reject MySQL restores with grants outside the selected database. Include PostgreSQL large objects in the empty-target check and verify both protections against real disposable databases.
 - [ ] Redact known credentials and credential-bearing connection strings before exposing database logs, operation errors, and diagnostics. Keep raw secrets out of operation records.
 - [ ] Verify Docker capabilities consistently across inspection and mutation. Review custom Compose commands and lifecycle hooks before starting imported services. Preserve support for verified existing volumes.
 
@@ -21,5 +21,5 @@ This checklist tracks the proposed Database Architecture Specification against S
 
 - [ ] Add remote connection profiles with secure credential references, explicit connection tests and per-operation capabilities. Keep database permissions and provider permissions separate.
 - [ ] Add SQLite discovery, schema inspection, explicit creation, and backup/restore that handles locks and WAL files.
-- [ ] Verify backup integrity, record checksums and metadata, validate engine and version compatibility, preview restore impact, and verify restored objects.
+- [ ] Verify backup integrity, record checksums and metadata, validate engine and version compatibility, preview restore impact, and verify restored objects in an isolated target.
 - [ ] Run real database integration tests on Windows and Linux. Cover shared bindings, database initialization, unsupported operations and the existing Docker workflows as release gates.
