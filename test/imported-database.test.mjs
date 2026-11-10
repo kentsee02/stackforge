@@ -28,7 +28,7 @@ test('imported Compose controls verify the container and dedicated volume before
     'com.docker.compose.project': 'example', 'com.docker.compose.service': 'postgres',
     'com.docker.compose.project.working_dir': root, 'com.docker.compose.project.config_files': composeFile
   };
-  let owner, state = 'exited', container = true, volume = true, shared = false, volumeDriver = 'local';
+  let owner, state = 'exited', container = true, volume = true, shared = false, volumeDriver = 'local', sqlReady = false;
   const mutations = [];
   const docker = async (name, args, options) => {
     assert.equal(name, 'docker');
@@ -77,8 +77,12 @@ test('imported Compose controls verify the container and dedicated volume before
     }
     if (args[0] === 'exec') {
       assert.ok(args.includes(id));
+      const script = args[args.indexOf('-c') + 1];
+      assert.match(script, /unset PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGOPTIONS/);
+      assert.match(script, /--host="\$socket" --port="\$port"/);
       if (args.at(-1).includes('pg_dump')) return dump;
       if (args.includes('stackforge')) return 't';
+      if (script.includes('SELECT 1')) return sqlReady ? '1' : '';
       assert.deepEqual(options.input, dump);
       mutations.push(args);
       return;
@@ -114,6 +118,8 @@ test('imported Compose controls verify the container and dedicated volume before
   };
   assert.deepEqual(await (await get('/database')).json(), { engine: 'postgres', status: 'stopped' });
   assert.equal((await task('start')).status, 'succeeded');
+  assert.deepEqual(await (await get('/database')).json(), { engine: 'postgres', status: 'starting' });
+  sqlReady = true;
   assert.deepEqual(await (await get('/database?logs=1')).json(), { engine: 'postgres', status: 'running', log: 'postgres is ready' });
   assert.deepEqual(Buffer.from(await (await post(route + '/database-backup')).arrayBuffer()), dump);
   const restoreHeaders = { 'Content-Type': 'application/octet-stream', 'X-StackForge-Confirm-Name': imported.name };
@@ -159,13 +165,15 @@ test('MySQL dump includes routines and events and rebinds their definers without
   const calls = [];
   const command = async (_name, args, options) => {
     calls.push({ args, options });
+    assert.match(args[args.indexOf('-c') + 1], /--no-defaults --no-login-paths --protocol=SOCKET --socket="\$socket"/u);
+    if (args.at(-1).includes('skip_networking')) return '1';
     if (args.at(-1).includes('mysqldump')) return dump;
     if (args.includes('stackforge')) return '1';
   };
   const input = { engine: 'mysql', project: 'demo', container: 'id', config: {}, command };
   const { data } = await transferDatabase(input);
-  assert.match(calls[0].args.at(-1), /--routines --events --triggers --user=root/);
-  assert.match(calls[0].args.at(-1), /MYSQL_ROOT_PASSWORD_FILE/);
+  assert.match(calls[1].args.at(-1), /--routines --events --triggers --user=root/);
+  assert.match(calls[1].args.at(-1), /MYSQL_ROOT_PASSWORD_FILE/);
   const text = data.toString();
   assert.match(text, /literal DEFINER=`root`@`localhost`', '你好'/);
   assert.match(text, /CREATE\s+PROCEDURE/);
@@ -174,7 +182,7 @@ test('MySQL dump includes routines and events and rebinds their definers without
   assert.match(text, /SQL SECURITY DEFINER/);
   assert.doesNotMatch(text, /CREATE DEFINER|50013 DEFINER|50117 DEFINER/);
   await transferDatabase({ ...input, file: dump });
-  assert.match(calls[1].args.join(' '), /information_schema\.routines/);
-  assert.match(calls[2].args.at(-1), /--user="\$MYSQL_USER"/);
-  assert.deepEqual(calls[2].options.input, data);
+  assert.match(calls[3].args.join(' '), /information_schema\.routines/);
+  assert.match(calls[4].args.at(-1), /--user="\$MYSQL_USER"/);
+  assert.deepEqual(calls[4].options.input, data);
 });

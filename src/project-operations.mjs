@@ -6,7 +6,7 @@ import { installMavenDependencies, installNodeDependencies, maven, npm, run, thr
 import { projectPathKey } from './project-config.mjs';
 import { inspectRecordedProject, startupDiagnostic } from './project-runtime.mjs';
 import { projectChecks, projectGitStatus } from './project-tools.mjs';
-import { transferDatabase } from './database-backup.mjs';
+import { databaseReady, transferDatabase } from './database-backup.mjs';
 import { resolveStartup } from './project-startup.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
 import { inspectImportedDatabase } from './imported-database.mjs';
@@ -195,10 +195,15 @@ export class ProjectOperations {
     }] : []);
   }
 
-  async databaseState(config) {
-    const states = (await this.databaseContainers(config)).map(container => container.status);
+  async databaseState(config, engine) {
+    const containers = await this.databaseContainers(config);
+    const states = containers.map(container => container.status);
     if (!states.length) return { status: 'absent' };
     const status = ['unhealthy', 'restarting', 'starting', 'running', 'paused'].find(state => states.includes(state)) ?? 'stopped';
+    if (engine && status === 'running') {
+      const container = containers.find(item => item.status === 'running');
+      if (!await databaseReady({ engine, container: container.id, config, command: this.command })) return { status: 'starting' };
+    }
     return { status };
   }
 
@@ -206,6 +211,9 @@ export class ProjectOperations {
     if (project.unmanaged) {
       const { config, container, engine } = await inspectImportedDatabase(project, this.command);
       const state = { engine, status: container?.status === 'exited' || container?.status === 'created' || container?.status === 'dead' ? 'stopped' : container?.status ?? 'absent' };
+      if (state.status === 'running' && !await databaseReady({ engine, container: container.id, config, command: this.command })) {
+        state.status = 'starting';
+      }
       if (logs && container) {
         let output = '';
         await this.command('docker', ['logs', '--tail', '100', container.id], {
@@ -216,7 +224,7 @@ export class ProjectOperations {
       return state;
     }
     const config = await databaseOptions(project, ports);
-    const state = await this.databaseState(config);
+    const state = await this.databaseState(config, project.database);
     if (logs && state.status !== 'absent') {
       let output = '';
       await this.command('docker', ['compose', 'logs', '--no-color', '--tail', '100', 'db'], {
@@ -251,8 +259,8 @@ export class ProjectOperations {
       if (container?.status !== 'running') throw new Error('Start the project database before backing it up or restoring it.');
       return transferDatabase({ engine, project: project.name, container: container.id, config, command: this.command, file, signal });
     }
-    const config = await databaseOptions(project, ports);
-    const containers = await this.databaseContainers({ ...config, signal });
+    const info = await inspectRecordedProject(project);
+    const { config, containers } = await this.verifiedManagedDatabase(project, ports, info, signal);
     if (containers.length !== 1 || containers[0].status !== 'running') {
       throw new Error('Start the project database before backing it up or restoring it.');
     }
@@ -260,44 +268,44 @@ export class ProjectOperations {
       config, command: this.command, file, signal });
   }
 
-  async removeDatabase(project, ports, info) {
+  async verifiedManagedDatabase(project, ports, info, signal) {
     const config = await databaseOptions(project, ports, info);
-    const docker = async args => {
-      try {
-        return await this.command('docker', args, { ...config, timeout: dockerProbeTimeout, stdoutOnly: true, stdoutLimit: 128 * 1024 });
-      } catch {
-        throw new Error('Docker could not finish deleting the database. Check that Docker is running and retry.');
-      }
-    };
+    const docker = args => this.command('docker', args, {
+      ...config, signal, timeout: dockerProbeTimeout, stdoutOnly: true, stdoutLimit: 128 * 1024
+    });
     let model;
     try { model = JSON.parse(await docker(['compose', 'config', '--format', 'json'])); }
-    catch { throw new Error('The database Compose configuration could not be read. Check compose.yaml and .env before retrying.'); }
+    catch (error) {
+      if (error.name === 'AbortError') throw error;
+      throw new Error('The database Compose configuration could not be read. Check compose.yaml and .env before retrying.');
+    }
     const mounts = model.services?.db?.volumes ?? [];
     const [mount] = mounts;
     const volume = model.volumes?.[mount?.source];
     const name = volume?.name;
     if (mounts.length !== 1 || mount?.type !== 'volume' || volume?.external || volume?.driver_opts ||
         (volume?.driver && volume.driver !== 'local') || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/.test(name ?? '')) {
-      throw new Error('Only a dedicated, Compose-managed database volume can be deleted with a project.');
+      throw new Error('This operation requires a dedicated, Compose-managed database volume.');
     }
     for (const [service, options] of Object.entries(model.services)) {
       if (service !== 'db' && options.volumes?.some(item => item.type === 'volume' && model.volumes?.[item.source]?.name === name)) {
         throw new Error('The database volume is shared with another container.');
       }
     }
-    const containers = await this.databaseContainers(config, true);
+    const containers = await this.databaseContainers({ ...config, signal }, true);
     if (containers.some(container => container.mounts.length !== 1 ||
-        !container.mounts.some(item => item.Type === 'volume' && item.Name === name && item.Destination === mount.target))) {
+        !container.mounts.some(item => item.Type === 'volume' && item.Name === name && item.Destination === mount.target && item.RW === true))) {
       throw new Error(unverifiedDatabase);
     }
     const names = (await docker(['volume', 'ls', '--filter', `name=${name}`, '--format', '{{.Name}}'])).trim().split(/\r?\n/);
     if (!names.includes(name)) {
       if (containers.length) throw new Error(unverifiedDatabase);
-      return false;
+      return { config, containers };
     }
-    const details = await docker(['volume', 'inspect', '--format', '{{json .CreatedAt}}\t{{json .Labels}}', name]);
-    const [createdAt, labels] = details.trim().split('\t').map(value => JSON.parse(value));
-    if (labels?.['com.docker.compose.project'] !== model.name || labels?.['com.docker.compose.volume'] !== mount.source) {
+    const details = await docker(['volume', 'inspect', '--format', '{{json .CreatedAt}}\t{{json .Labels}}\t{{json .Driver}}\t{{json .Options}}', name]);
+    const [createdAt, labels, driver, options] = details.trim().split('\t').map(value => JSON.parse(value));
+    if (driver !== 'local' || Object.keys(options ?? {}).length ||
+        labels?.['com.docker.compose.project'] !== model.name || labels?.['com.docker.compose.volume'] !== mount.source) {
       throw new Error(unverifiedDatabase);
     }
     const databaseId = info.manifest.databaseId;
@@ -310,8 +318,19 @@ export class ProjectOperations {
     if (users.some(id => !containers.some(container => id.startsWith(container.id)))) {
       throw new Error('The database volume is shared with another container.');
     }
-    if (containers.length) await docker(['container', 'rm', '--force', ...containers.map(container => container.id)]);
-    await docker(['volume', 'rm', name]);
+    if (containers.some(container => !users.some(id => id.startsWith(container.id)))) throw new Error(unverifiedDatabase);
+    return { config, containers, docker, volume: name };
+  }
+
+  async removeDatabase(project, ports, info) {
+    const { containers, docker, volume } = await this.verifiedManagedDatabase(project, ports, info);
+    if (!volume) return false;
+    try {
+      if (containers.length) await docker(['container', 'rm', '--force', ...containers.map(container => container.id)]);
+      await docker(['volume', 'rm', volume]);
+    } catch {
+      throw new Error('Docker could not finish deleting the database. Check that Docker is running and retry.');
+    }
     return true;
   }
 

@@ -313,6 +313,7 @@ test('project operations cancel and retry installation, manage the configured da
   let owner = directory;
   let container = '';
   let mavenFolder;
+  let sqlReady = false;
   let minimumDockerProbeTime = 0;
   const databaseWrites = [];
   const operations = new ProjectOperations({
@@ -331,6 +332,7 @@ test('project operations cancel and retry installation, manage the configured da
       assert.equal(config.env.DB_PORT, '15432');
       if ((args[0] === 'inspect' || args[1] === 'ps') && config.timeout < minimumDockerProbeTime) throw new Error('Docker status probe timed out.');
       if (args[0] === 'inspect') return `${JSON.stringify(owner)}\tdb\t${container}\thealthy\n`;
+      if (args[0] === 'exec') return sqlReady ? '1' : '';
       if (args[1] === 'ps') return container ? 'abcdef123456\n' : '';
       if (args[1] === 'logs') { config.log('ready to accept connections\n'); return; }
       databaseWrites.push(args);
@@ -369,6 +371,8 @@ test('project operations cancel and retry installation, manage the configured da
     return databaseTask.status !== 'running' && databaseTask;
   });
   assert.equal(started.status, 'succeeded', started.error);
+  assert.equal((await get(`${route}/database`)).status, 'starting');
+  sqlReady = true;
   assert.deepEqual(await get(`${route}/database?logs=1`), { status: 'running', log: 'ready to accept connections\n' });
   owner = parent;
   assert.equal((await post(`${route}/database-stop`)).status, 202);
@@ -403,11 +407,11 @@ test('project deletion verifies Docker volume ownership before removing data and
     const [resource, action] = args;
     if (resource === 'compose' && action === 'config') return JSON.stringify(model);
     if (resource === 'compose' && action === 'ps') return attached ? containerId : '';
-    if (resource === 'inspect') return `${JSON.stringify(directory)}\tdb\texited\t\t${JSON.stringify([{ Type: 'volume', Name: name, Destination: target }])}`;
+    if (resource === 'inspect') return `${JSON.stringify(directory)}\tdb\texited\t\t${JSON.stringify([{ Type: 'volume', Name: name, Destination: target, RW: true }])}`;
     if (resource === 'volume' && action === 'ls') return volumeExists ? name : '';
     if (resource === 'volume' && action === 'inspect') {
       const labels = { 'com.docker.compose.project': project.name, 'com.docker.compose.volume': 'db_data', 'io.stackforge.database-id': manifest.databaseId };
-      return `${JSON.stringify(volumeCreated)}\t${JSON.stringify(labels)}`;
+      return `${JSON.stringify(volumeCreated)}\t${JSON.stringify(labels)}\t"local"\tnull`;
     }
     if (resource === 'ps') return [attached && containerId, shared && 'b'.repeat(64)].filter(Boolean).join('\n');
     writes.push(args);

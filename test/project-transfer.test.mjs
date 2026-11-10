@@ -211,16 +211,29 @@ test('a local import rejects a replacement directory before any startup configur
 test('database transfer locks the project, preserves binary output and requires an empty target', async t => {
   const dump = Buffer.from([80, 71, 68, 77, 80, 0, 255]);
   const name = 'backup-fixture';
+  const volume = `${name}_data`, target = '/var/lib/postgresql/data', databaseId = '1234567890abcdef12345678';
   let directory;
-  let isEmpty = false, restores = 0;
+  let isEmpty = false, restores = 0, sqlReady = false, mountName = volume;
   let releaseBackup;
   const backupGate = new Promise(resolve => { releaseBackup = resolve; });
   let markBackupStarted;
   const backupStarted = new Promise(resolve => { markBackupStarted = resolve; });
   const operations = new ProjectOperations({ command: async (command, args, options) => {
     assert.equal(command, 'docker');
-    if (args[0] === 'compose') return 'abcdef123456\n';
-    if (args[0] === 'inspect') return `${JSON.stringify(directory)}\tdb\trunning\thealthy\n`;
+    if (args[1] === 'config') return JSON.stringify({ name, services: { db: {
+      volumes: [{ type: 'volume', source: 'data', target }]
+    } }, volumes: { data: { name: volume } } });
+    if (args[0] === 'compose' || args[0] === 'ps') return 'abcdef123456\n';
+    if (args[0] === 'inspect') {
+      const mounts = [{ Type: 'volume', Name: mountName, Destination: target, RW: true }];
+      return `${JSON.stringify(directory)}\tdb\trunning\thealthy\t${JSON.stringify(mounts)}\n`;
+    }
+    if (args[0] === 'volume' && args[1] === 'ls') return volume;
+    if (args[0] === 'volume' && args[1] === 'inspect') return ['null', JSON.stringify({
+      'com.docker.compose.project': name, 'com.docker.compose.volume': 'data', 'io.stackforge.database-id': databaseId
+    }), '"local"', 'null'].join('\t');
+    if (args.includes('stackforge')) return isEmpty ? 't\n' : 'f\n';
+    if (args.at(-1).includes('SELECT 1')) return sqlReady ? '1' : '';
     if (args.includes('-i')) {
       restores++;
       assert.deepEqual(options.input, dump);
@@ -232,7 +245,7 @@ test('database transfer locks the project, preserves binary output and requires 
       await backupGate;
       return dump;
     }
-    return isEmpty ? 't\n' : 'f\n';
+    assert.fail(args[0]);
   } });
   const app = await fixture(t, { operations });
   directory = join(app.directory, name);
@@ -241,7 +254,7 @@ test('database transfer locks the project, preserves binary output and requires 
     writeFile(join(directory, 'compose.yaml'), 'services: {}'),
     writeFile(join(directory, 'scripts/dev.mjs'), ''),
     writeFile(join(directory, 'stackforge.json'), JSON.stringify({
-      generator: 'StackForge', options: { name, frontend: 'none', backend: 'express', database: 'postgres' }
+      generator: 'StackForge', databaseId, options: { name, frontend: 'none', backend: 'express', database: 'postgres' }
     }))
   ]);
   const imported = await app.post('/api/projects/import', { path: directory });
@@ -249,6 +262,15 @@ test('database transfer locks the project, preserves binary output and requires 
   const { id } = await imported.json();
   const route = `/api/projects/${id}`;
   assert.equal((await app.post(route + '/database-backup', {}, { Origin: 'https://example.com' })).status, 403);
+  const starting = await app.post(route + '/database-backup');
+  assert.equal(starting.status, 409);
+  assert.match((await starting.json()).error, /SQL is not ready/);
+  sqlReady = true;
+  mountName = 'unrelated-volume';
+  const unverified = await app.post(route + '/database-backup');
+  assert.equal(unverified.status, 409);
+  assert.match((await unverified.json()).error, /could not be verified/);
+  mountName = volume;
   const backup = app.post(route + '/database-backup');
   try {
     await Promise.race([backupStarted, backup.then(() => assert.fail('Backup ended before Docker ran'))]);
