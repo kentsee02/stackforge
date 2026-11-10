@@ -135,8 +135,10 @@ test('custom checks persist separately, run only by saved ID, and reject replace
   assert.match(task.log, /\r?\ncustom check passed/);
   await rename(project, join(root, 'moved'));
   await mkdir(join(project, 'service'), { recursive: true });
-  assert.deepEqual((await second.get(route + '/checks')).checks, []);
+  assert.match((await second.get(route + '/checks')).error, /moved or replaced/);
   assert.equal((await second.post(route + '/check-config', { commands })).status, 400);
   assert.equal((await second.post(route + '/check-config', { commands: [] })).status, 200);
+  await rename(project, join(root, 'replacement'));
+  await rename(join(root, 'moved'), project);
   assert.deepEqual((await second.get(route + '/checks')).customChecks, []);
 });

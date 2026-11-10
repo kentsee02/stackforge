@@ -180,6 +180,34 @@ test('unrecognized directories can be imported and old external records acquire 
   assert.deepEqual(saved.value.imports[0].frameworks.sort(), expected);
 });
 
+test('a local import rejects a replacement directory before any startup configuration exists', async t => {
+  const { directory, base, post } = await fixture(t);
+  const root = join(directory, 'local');
+  const create = async () => {
+    await mkdir(root);
+    await writeFile(join(root, 'package.json'), '{"scripts":{"dev":"node dev.mjs","build":"node build.mjs"}}');
+    await writeFile(join(root, 'package-lock.json'), '{}');
+  };
+  await create();
+  const response = await post('/api/projects/import', { path: root });
+  assert.equal(response.status, 201);
+  const { id, name } = await response.json();
+  const route = `/api/projects/${id}`;
+  assert.equal((await fetch(base + route + '/dependencies')).status, 200);
+  await rename(root, root + '-original');
+  await create();
+  for (const view of ['dependencies', 'startup-suggestions', 'checks', 'git']) {
+    const rejected = await fetch(base + route + '/' + view);
+    assert.equal(rejected.status, 409, view);
+    assert.match((await rejected.json()).error, /moved or replaced/);
+  }
+  const config = await post(route + '/startup', { services: [{ name: 'API', directory: '.', command: 'node dev.mjs' }] });
+  assert.equal(config.status, 400);
+  assert.match((await config.json()).error, /moved or replaced/);
+  assert.equal((await post(route + '/remove', { confirmName: name })).status, 200);
+  await access(join(root, 'package.json'));
+});
+
 test('database transfer locks the project, preserves binary output and requires an empty target', async t => {
   const dump = Buffer.from([80, 71, 68, 77, 80, 0, 255]);
   const name = 'backup-fixture';

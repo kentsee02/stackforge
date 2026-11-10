@@ -62,12 +62,12 @@ export async function readProjectFolder(path) {
 }
 
 export async function inspectRecordedProject(project) {
+  if (project.unmanaged) {
+    const { root: directory } = await resolveStartup(project, []);
+    if (projectPathKey(directory) !== projectPathKey(project.path)) throw new Error(recordedProjectChanged);
+    return { directory, manifest: {} };
+  }
   try {
-    if (project.unmanaged) {
-      const directory = await projectDirectory(project.path);
-      if (projectPathKey(directory) !== projectPathKey(project.path)) throw new Error();
-      return { directory, manifest: {} };
-    }
     const info = await readProjectFolder(project.path);
     if (project.folderIdentity && !sameDirectory(await lstat(info.directory, { bigint: true }), project.folderIdentity)) throw new Error();
     if (['name', 'frontend', 'backend', 'database'].some(key => info.manifest.options?.[key] !== project[key])) throw new Error();

@@ -54,8 +54,10 @@ export async function resolveStartup(project, services, expectedIdentity) {
   const changed = 'The startup project folder was moved or replaced. Remove it from Projects and import the current folder again.';
   const info = await lstat(project.path, { bigint: true }).catch(() => null);
   const identity = info && directoryIdentity(info);
-  if (!identity || (expectedIdentity && !sameDirectory(info, expectedIdentity))) throw new Error(changed);
-  const root = await realpath(project.path);
+  const recorded = [project.folderIdentity, project.cloneIdentity, project.startup?.identity, expectedIdentity].filter(Boolean);
+  if (!identity || recorded.some(expected => !sameDirectory(info, expected))) throw new Error(changed);
+  const root = await realpath(project.path).catch(() => null);
+  if (!root) throw new Error(changed);
   const commands = await Promise.all(services.map(async service => {
     const cwd = await realpath(resolve(root, service.directory)).catch(() => null);
     const within = cwd && relative(root, cwd);
@@ -64,5 +66,7 @@ export async function resolveStartup(project, services, expectedIdentity) {
     }
     return { ...service, cwd };
   }));
+  const current = await lstat(root, { bigint: true }).catch(() => null);
+  if (!current || !sameDirectory(current, identity)) throw new Error(changed);
   return { identity, root, commands };
 }

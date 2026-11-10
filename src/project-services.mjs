@@ -15,7 +15,7 @@ export function childOf(folder, root) {
 
 export async function scanProjectServices(project) {
   const saved = project.startup;
-  const { root, identity } = await resolveStartup(project, [], saved?.identity ?? project.cloneIdentity);
+  const { root, identity } = await resolveStartup(project, []);
   const budget = { left: 2048 };
   const pending = new Set([root, ...await workspaceFolders(root, serviceFolders, budget)]);
   for (const service of saved?.services ?? []) {

@@ -74,7 +74,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
       const { name, frontend, backend, database } = manifest.options ?? {};
       project = importedProject(randomUUID(), directory, { name, frontend, backend, database, folderIdentity, ...clone });
     } catch {
-      project = importedProject(randomUUID(), directory, { unmanaged: true, folderIdentity, ...clone, frameworks: await detectFrameworks({ path: directory, ...clone }) });
+      project = importedProject(randomUUID(), directory, { unmanaged: true, folderIdentity, ...clone, frameworks: await detectFrameworks({ path: directory, folderIdentity, ...clone }) });
     }
     const existing = await Promise.all(jobs.projects().map(item => realpath(item.path).catch(() => item.path)));
     if (existing.some(item => projectPathKey(item) === projectPathKey(project.path))) throw new Error('This folder is already in Projects.');
@@ -279,7 +279,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
               let config;
               if (commands.length) {
                 await inspectRecordedProject(project);
-                const previous = projectConfig.checks(project)?.identity ?? project.startup?.identity ?? project.cloneIdentity ?? project.folderIdentity;
+                const previous = projectConfig.checks(project)?.identity;
                 const { identity } = await resolveStartup(project, commands, previous);
                 config = { identity, commands };
               }
@@ -298,7 +298,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
               const services = validateStartup(payload.services);
               let startup;
               if (services.length) {
-                const { identity } = await resolveStartup(project, services, project.startup?.identity ?? project.cloneIdentity);
+                const { identity } = await resolveStartup(project, services);
                 startup = { identity, services };
               }
               const frameworks = await detectFrameworks({ ...project, startup }).catch(() => project.frameworks);
