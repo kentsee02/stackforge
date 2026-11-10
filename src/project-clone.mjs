@@ -36,8 +36,33 @@ export async function verifyClone(directory, cloneId, identity) {
   throw new Error(cloneFolderChanged);
 }
 
-export async function cloneGithub(repository, parentDir, { signal, command = run } = {}) {
+function cloneFailure(error) {
+  const output = error.message;
+  if (error.code === 'ENOENT' || /spawn git ENOENT/i.test(output)) return 'Git was not found. Install Git and make sure it is on PATH.';
+  if (/repository not found|requested URL returned error: 404/i.test(output)) {
+    return 'GitHub could not find the repository. Check the URL and your access to it.';
+  }
+  if (/authentication failed|could not read username|terminal prompts disabled|requested URL returned error: (?:401|403)/i.test(output)) {
+    return 'GitHub authentication failed. Check the Git credentials and repository access, then retry.';
+  }
+  if (/SSL certificate|certificate verify failed|certificate problem|TLS handshake/i.test(output)) {
+    return 'Git could not establish a secure connection to GitHub. Check your TLS or proxy configuration.';
+  }
+  if (/执行超时|timed? out|could not resolve (?:host|proxy)|failed to connect|connection (?:reset|refused)|early EOF|HTTP\/2 stream/i.test(output)) {
+    return 'Git could not reach GitHub or the download was interrupted. Check your network and retry.';
+  }
+  if (/no space left on device|disk full|not enough (?:space|disk space)/i.test(output)) {
+    return 'There is not enough disk space to clone the repository.';
+  }
+  if (/could not create work tree|unable to create file|could not create leading directories|permission denied/i.test(output)) {
+    return 'Git could not write the checkout. Check the destination folder permissions or choose another folder.';
+  }
+  return 'Git could not clone the repository. Check the URL, network, and Git credentials.';
+}
+
+export async function cloneGithub(repository, parentDir, { signal, command = run, onPromote } = {}) {
   const { name, url } = githubRepository(repository);
+  throwIfCancelled(signal);
   const parent = absoluteDirectory(parentDir);
   await mkdir(parent, { recursive: true });
   const directory = await realpath(parent);
@@ -50,11 +75,13 @@ export async function cloneGithub(repository, parentDir, { signal, command = run
     try {
       await command('git', ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always',
         '-c', 'core.hooksPath=' + join(staging, 'disabled-hooks'), 'clone', '--no-recurse-submodules', '--', url, checkout], {
-        cwd: staging, signal, timeout: 180_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' }
+        cwd: staging, signal, timeout: 180_000,
+        env: { ...process.env, LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' }
       });
     } catch (error) {
       if (error.name === 'AbortError') throw error;
-      throw new Error('Git could not clone the repository. Check the URL, network, and Git credentials.');
+      throwIfCancelled(signal);
+      throw new Error(cloneFailure(error));
     }
     throwIfCancelled(signal);
     const cloneId = randomBytes(16).toString('hex');
@@ -67,6 +94,8 @@ export async function cloneGithub(repository, parentDir, { signal, command = run
     });
     try {
       await requireUnused(target);
+      throwIfCancelled(signal);
+      onPromote?.();
       await rename(checkout, target);
     } finally {
       await lock.close();
@@ -74,6 +103,6 @@ export async function cloneGithub(repository, parentDir, { signal, command = run
     }
     return { path: target, cloneId, cloneIdentity };
   } finally {
-    await rm(staging, { recursive: true, force: true });
+    await rm(staging, { recursive: true, force: true, maxRetries: 3 });
   }
 }

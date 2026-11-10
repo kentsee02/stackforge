@@ -29,6 +29,7 @@ let confirming;
 let restoring;
 let transferMessage;
 let importing = false;
+let cloneRequest;
 let actionError;
 let portMessage;
 let startupMessage;
@@ -820,6 +821,9 @@ async function importAction(browse, clone = false) {
   const controls = ['project-import-toggle', 'project-import-browse', 'project-import-submit', 'project-clone-browse', 'project-clone-submit'].map($);
   for (const control of controls) control.disabled = true;
   path.readOnly = true;
+  const repository = $('project-clone-url');
+  const cancel = $('project-clone-cancel');
+  if (clone) repository.readOnly = true;
   const message = $(clone ? 'project-clone-message' : 'project-import-message');
   setText(message, browse ? 'Choose a folder in the system dialog.' : clone ? 'Cloning repository…' : 'Adding project…');
   try {
@@ -829,12 +833,19 @@ async function importAction(browse, clone = false) {
       if (result.path) path.value = result.path;
       setText(message, result.path ? 'Folder selected.' : 'Folder selection cancelled.');
     } else {
-      const project = clone ? await post('/api/projects/clone', token, { repository: $('project-clone-url').value.trim(), parentDir: path.value.trim() }, 190000)
-        : await post('/api/projects/import', token, { path: path.value.trim() });
+      let project;
+      if (clone) {
+        const requestId = crypto.randomUUID();
+        cloneRequest = { requestId, token };
+        cancel.hidden = false;
+        project = await post('/api/projects/clone', token, { repository: repository.value.trim(), parentDir: path.value.trim(), requestId }, 190000);
+      } else {
+        project = await post('/api/projects/import', token, { path: path.value.trim() });
+      }
       selected = project.id;
       projects = [{ ...project, status: 'stopped' }, ...projects.filter(item => item.id !== project.id)];
       $('project-search').value = '';
-      if (clone) $('project-clone-url').value = '';
+      if (clone) repository.value = '';
       else path.value = '';
       showImport(false);
       setText(message, '');
@@ -849,6 +860,12 @@ async function importAction(browse, clone = false) {
     importing = false;
     for (const control of controls) control.disabled = false;
     path.readOnly = false;
+    if (clone) {
+      cloneRequest = undefined;
+      cancel.hidden = true;
+      cancel.disabled = false;
+      repository.readOnly = false;
+    }
   }
 }
 
@@ -858,6 +875,22 @@ $('project-import-browse').addEventListener('click', () => importAction(true));
 $('project-import-form').addEventListener('submit', event => { event.preventDefault(); importAction(false); });
 $('project-clone-browse').addEventListener('click', () => importAction(true, true));
 $('project-clone-form').addEventListener('submit', event => { event.preventDefault(); importAction(false, true); });
+$('project-clone-cancel').addEventListener('click', async event => {
+  const cancel = event.currentTarget;
+  const current = cloneRequest;
+  if (!current || cancel.disabled) return;
+  const message = $('project-clone-message');
+  cancel.disabled = true;
+  setText(message, 'Cancelling clone…');
+  try {
+    await post('/api/projects/clone-cancel', current.token, { requestId: current.requestId });
+  } catch (error) {
+    if (cloneRequest === current) {
+      setText(message, error.message);
+      cancel.disabled = false;
+    }
+  }
+});
 $('project-port-form').addEventListener('submit', event => {
   event.preventDefault();
   const ports = {};

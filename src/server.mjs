@@ -8,7 +8,7 @@ import { catalog, validateOptions } from './catalog.mjs';
 import { generateProject } from './generator.mjs';
 import { checkEnvironment } from './environment.mjs';
 import { publishProject } from './git.mjs';
-import { run } from './process.mjs';
+import { run, throwIfCancelled } from './process.mjs';
 import { Jobs } from './jobs.mjs';
 import { absoluteDirectory, defaultProjectsDirectory } from './paths.mjs';
 import { Settings } from './settings.mjs';
@@ -195,7 +195,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         return;
       }
       const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|run-check|check-cancel|check-config)$/.exec(url.pathname);
-      if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
+      if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
         const chunks = []; let size = 0;
@@ -205,20 +205,41 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         let payload;
         try { payload = JSON.parse(body); if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error(); }
         catch { return send(res, 400, { error: 'Invalid JSON request.' }); }
+        if (url.pathname === '/api/projects/clone-cancel') {
+          if (typeof payload.requestId !== 'string' || cloneTask?.requestId !== payload.requestId) {
+            return send(res, 409, { error: 'This clone is no longer running.' });
+          }
+          if (!cloneTask.cancellable) return send(res, 409, { error: 'The repository is ready and StackForge is adding it to Projects.' });
+          cloneTask.controller.abort();
+          return send(res, 202, { cancelling: true });
+        }
         if (cloneTask && (['/api/projects', '/api/projects/import', '/api/projects/clone'].includes(url.pathname) || /\/api\/jobs\/[^/]+\/retry$/.test(url.pathname))) {
           return send(res, 409, { error: 'Wait for the GitHub clone to finish.' });
         }
         if (url.pathname === '/api/projects/clone') {
           if (jobs.busy || removals.size) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
+          const { requestId } = payload;
+          if (requestId !== undefined && (typeof requestId !== 'string' || !/^[a-f0-9-]{36}$/.test(requestId))) {
+            return send(res, 400, { error: 'Invalid JSON request.' });
+          }
           const controller = new AbortController();
-          res.once('close', () => { if (!res.writableFinished) controller.abort(); });
-          const done = (async () => {
-            const { path, cloneId, cloneIdentity } = await clone(payload.repository, payload.parentDir, { signal: controller.signal });
+          const task = { requestId, controller, cancellable: true };
+          cloneTask = task;
+          res.once('close', () => { if (!res.writableFinished && task.cancellable) controller.abort(); });
+          task.done = (async () => {
+            const { path, cloneId, cloneIdentity } = await clone(payload.repository, payload.parentDir, {
+              signal: controller.signal, onPromote: () => { task.cancellable = false; }
+            });
+            throwIfCancelled(controller.signal);
+            task.cancellable = false;
             return registerProject(path, { cloneId, cloneIdentity });
           })();
-          cloneTask = { done, controller };
-          try { return send(res, 201, await done); }
-          catch (error) { if (!res.destroyed) return send(res, 409, { error: error.message }); }
+          try {
+            const project = await task.done;
+            if (!res.destroyed) return send(res, 201, project);
+          } catch (error) {
+            if (!res.destroyed) return send(res, 409, { error: error.name === 'AbortError' ? 'Cloning cancelled.' : error.message });
+          }
           finally { cloneTask = undefined; }
           return;
         }
@@ -397,7 +418,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   server.shutdownTasks = async () => {
     closing = true;
     desktop.shutdown();
-    cloneTask?.controller.abort();
+    if (cloneTask?.cancellable) cloneTask.controller.abort();
     transfer?.controller.abort();
     await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), operations.shutdown(),
       cloneTask?.done, transfer?.done, ...removals.values(), ...configWrites.values()]);

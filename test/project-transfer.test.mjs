@@ -10,6 +10,7 @@ import { ProjectOperations } from '../src/project-operations.mjs';
 import { ProjectConfig } from '../src/project-config.mjs';
 import { detectFrameworks } from '../src/project-services.mjs';
 import { createDesktop } from '../src/desktop.mjs';
+import { run } from '../src/process.mjs';
 
 async function fixture(t, options) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-transfer-')));
@@ -100,6 +101,82 @@ test('GitHub clone detects frameworks and recycles only a verified cloned direct
   assert.equal(imported.cloned, undefined);
   assert.deepEqual(await post(`/api/projects/${imported.id}/trash`, { confirmName: imported.name }).then(response => response.json()), { removed: true });
   await access(join(imported.path, 'package.json'));
+});
+
+test('cancelling a GitHub clone stops its command, clears staging and permits a retry', { timeout: 15000 }, async t => {
+  let commandStarted;
+  const started = new Promise(resolve => { commandStarted = resolve; });
+  let attempts = 0;
+  const command = async (_name, args, options) => {
+    await mkdir(join(args.at(-1), '.git'), { recursive: true });
+    if (++attempts === 1) {
+      await run(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { ...options, onSpawn: commandStarted });
+    }
+  };
+  const { directory, post, get } = await fixture(t, { clone: (repo, parent, options) => cloneGithub(repo, parent, { ...options, command }) });
+  const requestId = '1b78f45e-c25d-4af2-8602-bea2bcd52044';
+  const cancel = '/api/projects/clone-cancel';
+  const payload = { repository: 'https://github.com/owner/demo', parentDir: directory, requestId };
+  const inProgress = post('/api/projects/clone', payload);
+  await Promise.race([started, inProgress.then(() => assert.fail('Clone exited before Git ran'))]);
+  assert.equal((await post(cancel, { requestId }, { Origin: 'https://example.com' })).status, 403);
+  assert.equal((await post(cancel, { requestId: '79e52baa-bdb6-414a-96be-fec56a17743f' })).status, 409);
+  assert.equal((await post(cancel, { requestId })).status, 202);
+  const aborted = await inProgress;
+  assert.equal(aborted.status, 409);
+  assert.deepEqual(await aborted.json(), { error: 'Cloning cancelled.' });
+  assert.deepEqual(await readdir(directory), []);
+  assert.deepEqual((await get('/api/projects')).projects, []);
+  assert.equal((await post(cancel, { requestId })).status, 409);
+  assert.equal((await post('/api/projects/clone', payload)).status, 201);
+  assert.deepEqual(await readdir(directory), ['demo']);
+});
+
+test('a clone already moved to its destination finishes registration', async t => {
+  let finish, markPromoted;
+  const finishing = new Promise(resolve => { finish = resolve; });
+  const promoted = new Promise(resolve => { markPromoted = resolve; });
+  const { directory, post, get } = await fixture(t, { clone: async (repo, parent, options) => {
+    const result = await cloneGithub(repo, parent, { ...options,
+      command: (_name, args) => mkdir(join(args.at(-1), '.git'), { recursive: true })
+    });
+    markPromoted();
+    await finishing;
+    return result;
+  } });
+  const requestId = '79e52baa-bdb6-414a-96be-fec56a17743f';
+  const inProgress = post('/api/projects/clone', { repository: 'https://github.com/owner/demo', parentDir: directory, requestId });
+  try {
+    await Promise.race([promoted, inProgress.then(() => assert.fail('Clone finished before promotion'))]);
+    const late = await post('/api/projects/clone-cancel', { requestId });
+    assert.equal(late.status, 409);
+    assert.match((await late.json()).error, /adding it to Projects/);
+  } finally { finish(); }
+  assert.equal((await inProgress).status, 201);
+  assert.equal((await get('/api/projects')).projects.length, 1);
+});
+
+test('clone failure messages distinguish common Git errors without returning Git output', async t => {
+  const { directory } = await fixture(t);
+  const cases = [
+    ['spawn git ENOENT', /Git was not found/],
+    ['remote: Repository not found', /Check the URL and your access/],
+    ['fatal: could not read Username (terminal prompts disabled)', /authentication failed/],
+    ['SSL certificate problem', /secure connection/],
+    ['Could not resolve host', /check your network/i],
+    ['No space left on device', /disk space/],
+    ['Permission denied', /destination folder permissions/],
+    ['unexpected error', /Check the URL, network, and Git credentials/]
+  ];
+  for (const [output, message] of cases) {
+    const command = async () => { throw new Error(`${output} sensitive-test-token`); };
+    await assert.rejects(cloneGithub('https://github.com/owner/demo', directory, { command }), error => {
+      assert.match(error.message, message);
+      assert.doesNotMatch(error.message, /sensitive-test-token/);
+      return true;
+    });
+    assert.deepEqual(await readdir(directory), []);
+  }
 });
 
 test('stale clone records can be replaced by a new clone or removed without touching the folder', async t => {
