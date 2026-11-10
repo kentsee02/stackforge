@@ -386,7 +386,7 @@ test('project operations cancel and retry installation, manage the configured da
   assert.deepEqual(databaseWrites, [['compose', 'up', '-d', '--wait', '--no-deps', 'db'], ['compose', 'stop', 'db']]);
 });
 
-test('project deletion verifies Docker volume ownership before removing data and can retry a failed recycle', async t => {
+test('recycling a project preserves its volume and database deletion separately verifies the stopped target', async t => {
   const parent = await workspace(t);
   const project = await createProject(parent, 'database-app', '', { backend: 'express', database: 'postgres' });
   const directory = await realpath(project.path);
@@ -400,14 +400,16 @@ test('project deletion verifies Docker volume ownership before removing data and
   await writeFile(manifestPath, JSON.stringify(manifest));
   const model = { name: project.name, services: { db: { volumes: [{ type: 'volume', source: 'db_data', target }] } }, volumes: { db_data: { name } } };
   await writeFile(join(directory, 'compose.yaml'), '');
-  let attached = false, volumeExists = true, shared = false, rejectRecycle = true;
+  let attached = false, volumeExists = true, shared = false, rejectRecycle = true, containerStatus = 'exited';
   let volumeCreated = '2026-01-02T00:00:00Z';
+  let dockerCalls = 0;
   const writes = [];
   const operations = new ProjectOperations({ command: async (_, args) => {
+    dockerCalls++;
     const [resource, action] = args;
     if (resource === 'compose' && action === 'config') return JSON.stringify(model);
     if (resource === 'compose' && action === 'ps') return attached ? containerId : '';
-    if (resource === 'inspect') return `${JSON.stringify(directory)}\tdb\texited\t\t${JSON.stringify([{ Type: 'volume', Name: name, Destination: target, RW: true }])}`;
+    if (resource === 'inspect') return `${JSON.stringify(directory)}\tdb\t${containerStatus}\t\t${JSON.stringify([{ Type: 'volume', Name: name, Destination: target, RW: true }])}`;
     if (resource === 'volume' && action === 'ls') return volumeExists ? name : '';
     if (resource === 'volume' && action === 'inspect') {
       const labels = { 'com.docker.compose.project': project.name, 'com.docker.compose.volume': 'db_data', 'io.stackforge.database-id': manifest.databaseId };
@@ -432,9 +434,19 @@ test('project deletion verifies Docker volume ownership before removing data and
   const { token } = await fetch(base + '/api/state').then(response => response.json());
   const post = (route, body) => fetch(base + route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, body: JSON.stringify(body) });
   const { id } = await post('/api/projects/import', { path: directory }).then(response => response.json());
-  const remove = () => post(`/api/projects/${id}/trash`, { confirmName: project.name });
+  const route = `/api/projects/${id}`;
+  const remove = () => post(route + '/trash', { confirmName: project.name });
+  const preview = () => fetch(base + route + '/database-delete');
+  const deleteVolume = async confirmVolume => {
+    assert.equal((await post(route + '/database-delete', { confirmVolume })).status, 202);
+    return until(async () => {
+      const { projects } = await fetch(base + '/api/projects?logs=' + id).then(response => response.json());
+      const task = projects[0].databaseTask;
+      return ['failed', 'succeeded'].includes(task?.status) && task;
+    });
+  };
   const conflict = async pattern => {
-    const response = await remove();
+    const response = await preview();
     assert.equal(response.status, 409);
     assert.match((await response.json()).error, pattern);
   };
@@ -448,23 +460,39 @@ test('project deletion verifies Docker volume ownership before removing data and
   model.volumes.db_data.external = true;
   await conflict(/dedicated, Compose-managed/);
   delete model.volumes.db_data.external;
+  shared = false;
+  assert.deepEqual(await (await preview()).json(), { volume: name });
+  assert.equal((await post(route + '/database-delete', {})).status, 400);
+  assert.match((await deleteVolume('wrong-volume')).error, /exact volume name/);
+  containerStatus = 'running';
+  assert.match((await deleteVolume(name)).error, /Stop the database/);
+  containerStatus = 'exited';
+  shared = true;
+  assert.match((await deleteVolume(name)).error, /shared with another container/);
+  shared = false;
   assert.deepEqual(writes, []);
 
-  shared = false;
-  await conflict(/database was deleted, but the project folder/);
-  assert.deepEqual(writes, [['container', 'rm', '--force', containerId], ['volume', 'rm', name]]);
+  const beforeRecycle = dockerCalls;
+  const failedRecycle = await remove();
+  assert.equal(failedRecycle.status, 409);
+  assert.match((await failedRecycle.json()).error, /Recycle failed/);
   assert.ok(await readFile(manifestPath, 'utf8'));
 
   rejectRecycle = false;
   const retried = await remove();
   assert.equal(retried.status, 200);
   assert.deepEqual(await retried.json(), { trashed: true, databaseDeleted: false });
+  assert.equal(dockerCalls, beforeRecycle);
+  assert.equal(volumeExists, true);
   await rename(join(parent, 'recycled'), directory);
+  assert.equal((await deleteVolume(name)).status, 'succeeded');
+  assert.deepEqual(writes, [['container', 'rm', containerId], ['volume', 'rm', name]]);
+  assert.ok(await readFile(manifestPath, 'utf8'));
+  await conflict(/no project database volume/);
+
   manifest.databaseId = databaseId;
   await writeFile(manifestPath, JSON.stringify(manifest));
   volumeExists = true;
-  const removed = await remove();
-  assert.equal(removed.status, 200);
-  assert.deepEqual(await removed.json(), { trashed: true, databaseDeleted: true });
+  assert.equal((await deleteVolume(name)).status, 'succeeded');
   assert.deepEqual(writes.slice(2), [['volume', 'rm', name]]);
 });

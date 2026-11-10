@@ -59,7 +59,7 @@ export class ProjectOperations {
     return result;
   }
 
-  start(project, action, ports, checkId, installPlanId) {
+  start(project, action, ports, { checkId, installPlanId, confirmVolume } = {}) {
     if (this.closing) throw new Error('StackForge is shutting down.');
     const key = projectPathKey(project.path);
     const entry = this.projects.get(key) ?? {};
@@ -77,7 +77,9 @@ export class ProjectOperations {
       dependencies: () => project.unmanaged
         ? installPlanId ? this.installDetectedDependencies(project, task, options, installPlanId) : this.installConfiguredDependencies(project, task, options)
         : this.installDependencies(project, task, options),
-      databaseTask: () => this.changeDatabase(project, action, ports, options),
+      databaseTask: () => action === 'database-delete'
+        ? this.removeDatabase(project, ports, confirmVolume, options.signal)
+        : this.changeDatabase(project, action, ports, options),
       checkTask: () => this.runCheck(project, checkId, options)
     };
     task.done = work[kind]()
@@ -302,7 +304,8 @@ export class ProjectOperations {
       if (containers.length) throw new Error(unverifiedDatabase);
       return { config, containers };
     }
-    const details = await docker(['volume', 'inspect', '--format', '{{json .CreatedAt}}\t{{json .Labels}}\t{{json .Driver}}\t{{json .Options}}', name]);
+    const inspectVolume = () => docker(['volume', 'inspect', '--format', '{{json .CreatedAt}}\t{{json .Labels}}\t{{json .Driver}}\t{{json .Options}}', name]);
+    const details = await inspectVolume();
     const [createdAt, labels, driver, options] = details.trim().split('\t').map(value => JSON.parse(value));
     if (driver !== 'local' || Object.keys(options ?? {}).length ||
         labels?.['com.docker.compose.project'] !== model.name || labels?.['com.docker.compose.volume'] !== mount.source) {
@@ -319,19 +322,41 @@ export class ProjectOperations {
       throw new Error('The database volume is shared with another container.');
     }
     if (containers.some(container => !users.some(id => id.startsWith(container.id)))) throw new Error(unverifiedDatabase);
-    return { config, containers, docker, volume: name };
+    return { config, containers, docker, volume: name, async recheckVolume() {
+      if ((await inspectVolume()).trim() !== details.trim()) throw new Error(unverifiedDatabase);
+    } };
   }
 
-  async removeDatabase(project, ports, info) {
-    const { containers, docker, volume } = await this.verifiedManagedDatabase(project, ports, info);
-    if (!volume) return false;
+  async databaseDeletionTarget(project, ports, signal) {
+    if (project.unmanaged) throw new Error('This action requires a StackForge project.');
+    const info = await inspectRecordedProject(project);
+    const target = await this.verifiedManagedDatabase(project, ports, info, signal);
+    if (!target.volume) throw new Error('There is no project database volume to delete.');
+    if (target.containers.some(container => !['exited', 'created', 'dead'].includes(container.status))) {
+      throw new Error('Stop the database before deleting its data volume.');
+    }
+    return target;
+  }
+
+  async removeDatabase(project, ports, confirmVolume, signal) {
+    const { containers, docker, volume, recheckVolume } = await this.databaseDeletionTarget(project, ports, signal);
+    if (confirmVolume !== volume) throw new Error('Enter the exact volume name to confirm database deletion.');
+    await inspectRecordedProject(project);
+    await recheckVolume();
+    throwIfCancelled(signal);
     try {
-      if (containers.length) await docker(['container', 'rm', '--force', ...containers.map(container => container.id)]);
-      await docker(['volume', 'rm', volume]);
-    } catch {
+      if (containers.length) await docker(['container', 'rm', ...containers.map(container => container.id)]);
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
       throw new Error('Docker could not finish deleting the database. Check that Docker is running and retry.');
     }
-    return true;
+    await recheckVolume();
+    throwIfCancelled(signal);
+    try { await docker(['volume', 'rm', volume]); }
+    catch (error) {
+      if (error.name === 'AbortError') throw error;
+      throw new Error('Docker could not finish deleting the database. Check that Docker is running and retry.');
+    }
   }
 
   async shutdown() {

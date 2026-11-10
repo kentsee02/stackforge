@@ -27,6 +27,7 @@ let selected;
 let pending;
 let confirming;
 let restoring;
+let deletingDatabase;
 let transferMessage;
 let importing = false;
 let cloneRequest;
@@ -420,7 +421,7 @@ function renderDatabase(project, busy, unavailable) {
   if (view.taskStatus !== task?.status) view.next = 0;
   view.taskStatus = task?.status;
   const changing = project.operation === 'databaseTask';
-  const state = changing ? (task?.phase === 'database-stop' ? 'stopping' : 'starting') : view.status;
+  const state = changing && task?.phase !== 'database-delete' ? (task?.phase === 'database-stop' ? 'stopping' : 'starting') : view.status;
   $('database-engine').textContent = stackNames[view.engine ?? project.database] ?? '';
   showMessage($('database-status'), databaseLabels[state] ?? (view.error ? 'Database status unavailable' : 'Checking database…'));
   const transitioning = project.unmanaged ? ['starting', 'stopping'].includes(project.status) : busy && !project.initialized;
@@ -430,7 +431,11 @@ function renderDatabase(project, busy, unavailable) {
   $('database-logs').disabled = view.loading || !view.status || state === 'absent' || Boolean(view.error);
   $('database-backup').disabled = unavailable || Boolean(view.error) || state !== 'running';
   $('database-restore').disabled = unavailable || busy || Boolean(view.error) || state !== 'running';
-  const transfer = transferMessage?.id === project.id ? transferMessage.message : '';
+  const deleteVolume = $('database-delete');
+  deleteVolume.hidden = project.unmanaged || project.database === 'none';
+  deleteVolume.disabled = disabled || busy || !['absent', 'stopped'].includes(state);
+  const transfer = transferMessage?.id === project.id ? transferMessage.message :
+    task?.phase === 'database-delete' && task.status === 'succeeded' ? 'Database data volume deleted.' : '';
   showMessage($('database-transfer-message'), transfer);
   $('database-transfer-message').hidden = !transfer;
   const issue = task?.diagnostic ?? view.diagnostic;
@@ -662,12 +667,7 @@ function renderRows() {
 
 function render() {
   if ($('project-trash-dialog').open) {
-    const backingUp = pending?.action === 'database-backup';
-    $('project-trash-backup').disabled = Boolean(pending);
-    $('project-trash-confirm').disabled = backingUp || $('project-trash-name').value !== confirming?.name;
-    const message = confirming?.database !== 'none' && transferMessage?.id === confirming?.id ? transferMessage?.message : '';
-    showMessage($('project-trash-backup-message'), message);
-    $('project-trash-backup-message').hidden = !message;
+    $('project-trash-confirm').disabled = Boolean(pending) || $('project-trash-name').value !== confirming?.name;
   }
   $('project-manager').hidden = !projects.length;
   $('project-empty').hidden = projects.length > 0;
@@ -762,8 +762,7 @@ async function act(id, action, body = {}) {
     if (removing) {
       projects = projects.filter(item => item.id !== id);
       if (selected === id) selected = projects[0]?.id;
-      setText($('project-feedback'), runtime.removed ? 'Project removed from Projects.' :
-        runtime.databaseDeleted ? 'Project moved to the system trash and its database was deleted.' : 'Project moved to the system trash.');
+      setText($('project-feedback'), runtime.removed ? 'Project removed from Projects.' : 'Project moved to the system trash.');
     } else if (action === 'ports') {
       const project = projects.find(item => item.id === id);
       if (project) project.ports = runtime.ports;
@@ -781,7 +780,7 @@ async function act(id, action, body = {}) {
         toolsView = { ...toolsView, checks: {} };
       }
       checkConfigMessage = { id, message: 'Custom check commands saved.' };
-    } else if (['install', 'install-cancel', 'database-start', 'database-stop', 'run-check', 'check-cancel'].includes(action)) {
+    } else if (['install', 'install-cancel', 'database-start', 'database-stop', 'database-delete', 'run-check', 'check-cancel'].includes(action)) {
       const project = projects.find(item => item.id === id);
       if (project) Object.assign(project, runtime);
     } else {
@@ -959,6 +958,38 @@ $('database-restore-form').addEventListener('submit', event => {
   backupAction(restoring, $('database-restore-file').files[0]);
 });
 $('database-restore-cancel').addEventListener('click', () => $('database-restore-dialog').close());
+$('database-delete').addEventListener('click', async () => {
+  const id = selected;
+  if (!id || pending) return;
+  pending = { id, action: 'database-delete' };
+  actionError = undefined;
+  transferMessage = undefined;
+  render();
+  try {
+    const { volume } = await request(`/api/projects/${id}/database-delete`, { signal: AbortSignal.timeout(90_000) });
+    if (id !== selected) return;
+    deletingDatabase = { id, volume };
+    $('database-delete-form').reset();
+    $('database-delete-expected').textContent = volume;
+    $('database-delete-submit').disabled = true;
+    $('database-delete-dialog').showModal();
+  } catch (error) {
+    actionError = { id, action: 'database-delete', message: error.message };
+  } finally {
+    pending = undefined;
+    render();
+  }
+});
+$('database-delete-name').addEventListener('input', event => {
+  $('database-delete-submit').disabled = event.target.value !== deletingDatabase?.volume;
+});
+$('database-delete-cancel').addEventListener('click', () => $('database-delete-dialog').close());
+$('database-delete-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!deletingDatabase || pending || $('database-delete-name').value !== deletingDatabase.volume) return;
+  $('database-delete-dialog').close();
+  act(deletingDatabase.id, 'database-delete', { confirmVolume: deletingDatabase.volume });
+});
 for (const tool of ['checks', 'git']) $('project-' + tool).addEventListener('toggle', () => loadProjectTool(tool, true));
 $('git-refresh').addEventListener('click', () => loadProjectTool('git', true));
 $('check-form').addEventListener('submit', event => {
@@ -995,19 +1026,17 @@ function confirmProjectRemoval(action) {
   $('project-trash-name').value = '';
   $('project-trash-confirm').disabled = true;
   const deleteFiles = action === 'trash' && removesFiles(project);
-  $('project-trash-backup').hidden = !deleteFiles || project.database === 'none';
   setText($('project-trash-title'), deleteFiles ? 'Delete project?' : 'Remove project from Projects?');
   setText($('project-trash-instruction'), deleteFiles ? 'Type the project name below to confirm deletion.' : 'Type the project name below to confirm removal.');
   setText($('project-trash-confirm'), deleteFiles ? 'Delete project' : 'Remove from Projects');
   setText($('project-trash-description'), !deleteFiles ? 'This removes the entry from the Projects list. Your files stay in this folder.' : project.database !== 'none'
-    ? 'The project folder will move to the system trash. Its local database and data volume will be permanently deleted.'
+    ? 'The project folder will move to the system trash. Its database and data volume will be kept.'
     : 'The entire local project folder will move to the system trash. You can restore it from there.');
   $('project-trash-dialog').showModal();
   render();
 }
 $('project-delete').addEventListener('click', () => confirmProjectRemoval('trash'));
 $('project-remove').addEventListener('click', () => confirmProjectRemoval('remove'));
-$('project-trash-backup').addEventListener('click', () => backupAction(confirming));
 $('project-trash-cancel').addEventListener('click', () => $('project-trash-dialog').close());
 $('project-trash-name').addEventListener('input', event => {
   $('project-trash-confirm').disabled = Boolean(pending) || event.target.value !== confirming?.name;

@@ -121,12 +121,19 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         }));
         return send(res, 200, { projects: projects.filter(Boolean) });
       }
-      const projectView = /^\/api\/projects\/([^/]+)\/(database|checks|git|dependencies|startup-suggestions)$/.exec(url.pathname);
+      const projectView = /^\/api\/projects\/([^/]+)\/(database|database-delete|checks|git|dependencies|startup-suggestions)$/.exec(url.pathname);
       if (req.method === 'GET' && projectView) {
         const [, id, view] = projectView;
         const project = managedProjects().find(item => item.id === id);
         if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
         try {
+          if (view === 'database-delete') {
+            if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
+              return send(res, 409, { error: 'Stop the project before deleting its database.' });
+            }
+            const { volume } = await operations.databaseDeletionTarget(project, projectConfig.ports(project));
+            return send(res, 200, { volume });
+          }
           if (view === 'checks') {
             const customChecks = projectConfig.checks(project);
             return send(res, 200, { checks: await operations.checks({ ...project, customChecks }), customChecks: customChecks?.commands ?? [] });
@@ -194,7 +201,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         } finally { transfer = undefined; }
         return;
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|run-check|check-cancel|check-config)$/.exec(url.pathname);
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|run-check|check-cancel|check-config)$/.exec(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
@@ -271,12 +278,20 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           if (action === 'install' || action === 'run-check' || action.startsWith('database-')) {
             const session = runtime.status(project);
             const inTransition = ['starting', 'stopping'].includes(session.status);
+            if (action === 'database-delete') {
+              if (inTransition || session.status === 'running') return send(res, 409, { error: 'Stop the project before deleting its database.' });
+              if (typeof payload.confirmVolume !== 'string' || !payload.confirmVolume) {
+                return send(res, 400, { error: 'Enter the exact volume name to confirm database deletion.' });
+              }
+            }
             if (action === 'install' && (inTransition || session.status === 'running')) return send(res, 409, { error: 'Stop the project before installing dependencies.' });
             if (action === 'run-check' && (inTransition || session.status === 'running')) return send(res, 409, { error: 'Stop the project before running checks.' });
             if (action.startsWith('database-') && (inTransition || !project.unmanaged && session.status === 'running' && !session.initialized)) return send(res, 409, { error: 'Wait for the project to become ready or stop it first.' });
             try {
               const target = action === 'run-check' ? { ...project, customChecks: projectConfig.checks(project) } : project;
-              operations.start(target, action, projectConfig.ports(project), payload.check, detectedInstall ? payload.planId : undefined);
+              operations.start(target, action, projectConfig.ports(project), {
+                checkId: payload.check, installPlanId: detectedInstall ? payload.planId : undefined, confirmVolume: payload.confirmVolume
+              });
               return send(res, 202, operations.status(project, true));
             } catch (error) { return send(res, 409, { error: error.message }); }
           }
@@ -343,18 +358,11 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             const moving = (async () => {
               const info = await inspectRecordedProject(project);
               if (project.cloneId) await verifyClone(info.directory, project.cloneId, project.cloneIdentity);
-              const databaseDeleted = project.database !== 'none' && await operations.removeDatabase(project, projectConfig.ports(project), info);
-              try {
-                if (project.cloneId && project.database !== 'none') await verifyClone(info.directory, project.cloneId, project.cloneIdentity);
-                if (project.cloneId) await desktop.trashProject(info.directory, project.cloneIdentity);
-                else await desktop.trashProject(info.directory, project.folderIdentity, recordedProjectChanged);
-                if (await locationExists(project.path)) throw new Error('The project is still at its original location. Check the system trash before retrying.');
-              } catch (error) {
-                if (databaseDeleted) throw new Error('The database was deleted, but the project folder could not be moved to the trash.');
-                throw error;
-              }
+              if (project.cloneId) await desktop.trashProject(info.directory, project.cloneIdentity);
+              else await desktop.trashProject(info.directory, project.folderIdentity, recordedProjectChanged);
+              if (await locationExists(project.path)) throw new Error('The project is still at its original location. Check the system trash before retrying.');
               if (project.cloneId) await projectConfig.removeImport(project.id);
-              return { trashed: true, databaseDeleted };
+              return { trashed: true, databaseDeleted: false };
             })();
             removals.set(project.path, moving);
             try { return send(res, 200, await moving); }

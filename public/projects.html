@@ -150,6 +150,7 @@
               <button id="database-logs" type="button" class="secondary" data-i18n="查看数据库日志">View database logs</button>
               <button id="database-backup" type="button" class="secondary" data-i18n="下载备份">Download backup</button>
               <button id="database-restore" type="button" class="secondary" data-i18n="恢复备份">Restore backup</button>
+              <button id="database-delete" type="button" class="secondary" data-i18n="删除数据卷" hidden>Delete data volume</button>
             </div>
             <p id="database-transfer-message" class="hint" role="status" hidden></p>
             <p class="hint" data-i18n="停止数据库会保留数据卷。">Stopping the database keeps its data volume.</p>
@@ -193,11 +194,24 @@
         <input id="project-trash-name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required autofocus>
       </label>
       <div class="project-trash-actions">
-        <button type="button" id="project-trash-backup" class="secondary" data-i18n="下载备份" hidden>Download backup</button>
         <button type="button" id="project-trash-cancel" class="secondary" data-i18n="返回">Go back</button>
         <button type="submit" id="project-trash-confirm" class="project-trash-confirm" data-i18n="删除项目" disabled>Delete project</button>
       </div>
-      <p id="project-trash-backup-message" class="hint" role="status" hidden></p>
+    </form>
+  </dialog>
+  <dialog id="database-delete-dialog" class="project-trash-dialog" aria-labelledby="database-delete-title" aria-describedby="database-delete-description">
+    <h2 id="database-delete-title" data-i18n="永久删除数据库数据卷？">Permanently delete database data volume?</h2>
+    <p id="database-delete-description" data-i18n="此操作会永久删除下方数据卷及其中的所有数据。项目文件会保留。">This permanently deletes the volume below and all of its data. Your project files are kept.</p>
+    <form id="database-delete-form" method="dialog">
+      <label class="inline-field project-trash-field" for="database-delete-name">
+        <span data-i18n="输入下方数据卷名称以确认删除。">Type the volume name below to confirm deletion.</span>
+        <strong id="database-delete-expected"></strong>
+        <input id="database-delete-name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required autofocus>
+      </label>
+      <div class="project-trash-actions">
+        <button type="button" id="database-delete-cancel" class="secondary" data-i18n="返回">Go back</button>
+        <button type="submit" id="database-delete-submit" class="project-trash-confirm" data-i18n="删除数据卷" disabled>Delete data volume</button>
+      </div>
     </form>
   </dialog>
   <dialog id="database-restore-dialog" class="project-trash-dialog" aria-labelledby="database-restore-title" aria-describedby="database-restore-description">
