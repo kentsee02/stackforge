@@ -289,6 +289,7 @@ test('database transfer locks the project, preserves binary output and requires 
   const dump = Buffer.from([80, 71, 68, 77, 80, 0, 255]);
   const name = 'backup-fixture';
   const volume = `${name}_data`, target = '/var/lib/postgresql/data', databaseId = '1234567890abcdef12345678';
+  const containerId = 'a'.repeat(64);
   let directory;
   let isEmpty = false, restores = 0, sqlReady = false, mountName = volume;
   let releaseBackup;
@@ -297,13 +298,14 @@ test('database transfer locks the project, preserves binary output and requires 
   const backupStarted = new Promise(resolve => { markBackupStarted = resolve; });
   const operations = new ProjectOperations({ command: async (command, args, options) => {
     assert.equal(command, 'docker');
-    if (args[1] === 'config') return JSON.stringify({ name, services: { db: {
-      volumes: [{ type: 'volume', source: 'data', target }]
+    if (args.includes('config')) return JSON.stringify({ name, services: { db: {
+      image: 'postgres:17', volumes: [{ type: 'volume', source: 'data', target }]
     } }, volumes: { data: { name: volume } } });
-    if (args[0] === 'compose' || args[0] === 'ps') return 'abcdef123456\n';
+    if (args[0] === 'ps') return containerId;
     if (args[0] === 'inspect') {
       const mounts = [{ Type: 'volume', Name: mountName, Destination: target, RW: true }];
-      return `${JSON.stringify(directory)}\tdb\trunning\thealthy\t${JSON.stringify(mounts)}\n`;
+      return [containerId, JSON.stringify({ 'com.docker.compose.project': name, 'com.docker.compose.service': 'db',
+        'com.docker.compose.project.working_dir': directory }), '"postgres:17"', 'running', 'healthy', JSON.stringify(mounts)].join('\t');
     }
     if (args[0] === 'volume' && args[1] === 'ls') return volume;
     if (args[0] === 'volume' && args[1] === 'inspect') return ['null', JSON.stringify({

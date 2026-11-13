@@ -7,8 +7,8 @@ This checklist tracks the proposed Database Architecture Specification against S
 - [x] Separate project file deletion from permanent database volume deletion. Keep the volume when project recycling fails. Require explicit confirmation of the verified volume, a stopped project and database, and revalidate ownership before removal.
 - [x] Reject MySQL restores with grants outside the selected database. Include PostgreSQL large objects in the empty-target check and verify both protections against real disposable databases.
 - [x] Redact known environment credentials and database connection strings in database container logs, task output, and errors. Verify masking with a real Docker container.
-- [ ] Cover file-backed credentials and apply redaction to persisted database operation records when those records are introduced.
-- [ ] Verify Docker capabilities consistently across inspection and mutation. Review custom Compose commands and lifecycle hooks before starting imported services. Preserve support for verified existing volumes.
+- [x] Redact file-backed Docker database credentials. Store database operation IDs, actions, timestamps, and outcomes without raw output, credentials, or backup data.
+- [x] Verify the Docker container and volume for status, logs, start, stop, backup, restore, and volume deletion. Restrict automatic starts to reviewed database commands and health checks. Block custom entrypoints and lifecycle hooks, and preserve verified existing volumes.
 
 ## P1 · Discovery, bindings and explicit initialization
 

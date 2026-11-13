@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -29,6 +29,8 @@ test('imported Compose controls verify the container and dedicated volume before
     'com.docker.compose.project.working_dir': root, 'com.docker.compose.project.config_files': composeFile
   };
   let owner, state = 'exited', container = true, volume = true, shared = false, volumeDriver = 'local', sqlReady = false;
+  let entrypoint = ['docker-entrypoint.sh'];
+  let secretFile = false, secretUnavailable = false;
   const mutations = [];
   const docker = async (name, args, options) => {
     assert.equal(name, 'docker');
@@ -37,7 +39,10 @@ test('imported Compose controls verify the container and dedicated volume before
       return JSON.stringify(model);
     }
     if (args[0] === 'ps') return args.at(-1).startsWith('volume=') && shared ? `${id}\n${foreign}` : container ? id : '';
-    if (args.includes('{{json .Config.Env}}')) return '["POSTGRES_PASSWORD=import-secret-canary"]';
+    if (args.includes('{{json .Config.Env}}')) return secretFile
+      ? '["POSTGRES_PASSWORD_FILE=/run/secrets/db_password"]' : '["POSTGRES_PASSWORD=import-secret-canary"]';
+    if (args.some(arg => arg.includes('.Config.Entrypoint'))) return [entrypoint, ['postgres'], null, false,
+      null, null, null, 'default', '', '', [], null, 'runc', null, null, null].map(value => JSON.stringify(value)).join('\t');
     if (args[0] === 'inspect') return [id, JSON.stringify(labels), '"postgres:17"', JSON.stringify({ Status: state }),
       JSON.stringify([{ Type: 'volume', Name: 'example_data', Destination: '/var/lib/postgresql/data', RW: true }])].join('\t');
     if (args[0] === 'volume' && args[1] === 'ls') return volume ? 'example_data\n' : '';
@@ -78,6 +83,10 @@ test('imported Compose controls verify the container and dedicated volume before
     }
     if (args[0] === 'exec') {
       assert.ok(args.includes(id));
+      if (args.at(-1) === '/run/secrets/db_password') {
+        if (secretUnavailable) throw new Error('failed with import-secret-canary');
+        return Buffer.from('import-secret-canary\n');
+      }
       const script = args[args.indexOf('-c') + 1];
       assert.match(script, /unset PGHOST PGHOSTADDR PGPORT PGSERVICE PGSERVICEFILE PGOPTIONS/);
       assert.match(script, /--host="\$socket" --port="\$port"/);
@@ -94,7 +103,7 @@ test('imported Compose controls verify the container and dedicated volume before
     assert.fail(args.join(' '));
   };
 
-  const app = createApp({ stateDir: false, operations: new ProjectOperations({ command: docker }) }).listen(0, '127.0.0.1');
+  const app = createApp({ stateDir: join(workspace, 'state', 'jobs'), operations: new ProjectOperations({ command: docker }) }).listen(0, '127.0.0.1');
   await once(app, 'listening');
   t.after(async () => {
     await app.shutdownTasks();
@@ -121,10 +130,21 @@ test('imported Compose controls verify the container and dedicated volume before
     assert.fail('Database task did not finish');
   };
   assert.deepEqual(await (await get('/database')).json(), { engine: 'postgres', status: 'stopped' });
+  entrypoint = ['sh'];
+  assert.match((await task('start')).error, /custom commands, hooks/);
+  assert.deepEqual(mutations, []);
+  entrypoint = ['docker-entrypoint.sh'];
   assert.equal((await task('start')).status, 'succeeded');
   assert.deepEqual(await (await get('/database')).json(), { engine: 'postgres', status: 'starting' });
   sqlReady = true;
   assert.deepEqual(await (await get('/database?logs=1')).json(), { engine: 'postgres', status: 'running', log: 'postgres is ready\n[redacted]\npassword=[redacted]' });
+  secretFile = true;
+  assert.deepEqual(await (await get('/database?logs=1')).json(), { engine: 'postgres', status: 'running', log: 'postgres is ready\n[redacted]\npassword=[redacted]' });
+  secretUnavailable = true;
+  const hiddenLogs = await get('/database?logs=1');
+  assert.equal(hiddenLogs.status, 409);
+  assert.deepEqual(await hiddenLogs.json(), { error: 'Could not verify database log redaction.' });
+  secretFile = false;
   assert.deepEqual(Buffer.from(await (await post(route + '/database-backup')).arrayBuffer()), dump);
   const restoreHeaders = { 'Content-Type': 'application/octet-stream', 'X-StackForge-Confirm-Name': imported.name };
   assert.equal((await post(route + '/database-restore', dump, restoreHeaders)).status, 200);
@@ -148,9 +168,31 @@ test('imported Compose controls verify the container and dedicated volume before
   assert.equal(mutations.length, before);
 
   volume = false;
+  const spec = model.services.postgres;
+  for (const [key, value] of Object.entries({ entrypoint: ['sh'], command: ['sh'], post_start: [{ command: 'true' }],
+    pre_start: [{ command: 'true' }], pre_stop: [{ command: 'true' }], healthcheck: { test: ['CMD-SHELL', 'pg_isready; true'] },
+    environment: { POSTGRES_INITDB_ARGS: '$(true)' } })) {
+    const previous = spec[key];
+    spec[key] = value;
+    assert.match((await task('start')).error, /custom commands, hooks/);
+    if (previous === undefined) delete spec[key];
+    else spec[key] = previous;
+  }
+  assert.equal(mutations.length, before);
   assert.equal((await task('start')).status, 'succeeded');
   assert.equal((await task('stop')).status, 'succeeded');
   assert.deepEqual(mutations.at(-1), ['container', 'stop', id]);
+  await app.shutdownTasks();
+  const audit = await readFile(join(workspace, 'state', 'database-operations.jsonl'), 'utf8');
+  assert.doesNotMatch(audit, /import-secret-canary|test\$\$literal|POSTGRES_PASSWORD|custom commands|PGDMPfixture/);
+  const records = audit.trim().split(/\r?\n/).map(line => JSON.parse(line));
+  assert.ok(records.some(record => record.action === 'database-start' && record.status === 'failed'));
+  assert.ok(records.some(record => record.action === 'database-restore' && record.status === 'succeeded'));
+  assert.ok(records.some(record => record.action === 'database-stop' && record.status === 'succeeded'));
+  for (const record of records) {
+    assert.equal(record.projectId, imported.id);
+    assert.deepEqual(Object.keys(record).sort(), ['action', 'finishedAt', 'id', 'projectId', 'startedAt', 'status']);
+  }
   await rename(root, root + '-old');
   await mkdir(root);
   await writeFile(composeFile, 'services: {}');

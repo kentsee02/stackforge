@@ -315,6 +315,13 @@ test('project operations cancel and retry installation, manage the configured da
   let mavenFolder;
   let sqlReady = false;
   let minimumDockerProbeTime = 0;
+  const dbId = 'd'.repeat(64);
+  const volume = 'operations-app_data';
+  const target = '/var/lib/postgresql/data';
+  const labels = { 'com.docker.compose.project': project.name, 'com.docker.compose.volume': 'data' };
+  const db = { image: 'postgres:17', volumes: [{ type: 'volume', source: 'data', target }] };
+  let volumeExists = false;
+  let foreignMount = false;
   const databaseWrites = [];
   const operations = new ProjectOperations({
     install: async (args, { log, signal }) => {
@@ -330,22 +337,36 @@ test('project operations cancel and retry installation, manage the configured da
         return;
       }
       assert.equal(config.env.DB_PORT, '15432');
-      if ((args[0] === 'inspect' || args[1] === 'ps') && config.timeout < minimumDockerProbeTime) throw new Error('Docker status probe timed out.');
+      if ((args[0] === 'inspect' || args[0] === 'ps') && config.timeout < minimumDockerProbeTime) throw new Error('Docker status probe timed out.');
+      if (args.includes('config')) return JSON.stringify({ name: project.name, services: { db }, volumes: { data: { name: volume } } });
+      if (args[0] === 'ps') return container ? dbId : '';
+      if (args[0] === 'volume') {
+        if (args[1] === 'ls') return volumeExists ? volume : '';
+        if (args[1] === 'inspect') return ['null', JSON.stringify(labels), '"local"', 'null'].join('\t');
+        const ownership = args.find(arg => arg.startsWith('io.stackforge.legacy-database-id='));
+        assert.ok(ownership);
+        labels['io.stackforge.legacy-database-id'] = ownership.split('=')[1];
+        volumeExists = true;
+        return volume;
+      }
       if (args.includes('{{json .Config.Env}}')) return '["POSTGRES_PASSWORD=container-log-canary"]';
-      if (args[0] === 'inspect') return `${JSON.stringify(owner)}\tdb\t${container}\thealthy\n`;
+      if (args[0] === 'inspect') return [dbId, JSON.stringify({ ...labels, 'com.docker.compose.service': 'db',
+        'com.docker.compose.project.working_dir': owner }), '"postgres:17"', container, 'healthy',
+        JSON.stringify([{ Type: 'volume', Name: foreignMount ? 'foreign_data' : volume, Destination: target, RW: true }])].join('\t');
       if (args[0] === 'exec') return sqlReady ? '1' : '';
-      if (args[1] === 'ps') return container ? 'abcdef123456\n' : '';
       if (args[0] === 'logs') {
         config.log('ready to accept connections\ncontainer-log-');
         config.log('canary postgresql://app:unknown@localhost/app\n');
         return;
       }
-      if (args[1] === 'up') {
+      if (args.includes('up')) {
+        assert.equal(args[args.indexOf('-f') + 1], '-');
+        assert.deepEqual(JSON.parse(config.input).volumes.data, { external: true, name: volume });
         config.log('starting project-log-');
         config.log('canary\n');
       }
       databaseWrites.push(args);
-      container = args[1] === 'up' ? 'running' : 'exited';
+      container = args.includes('up') ? 'running' : 'exited';
     }
   });
   const server = createApp({ stateDir: false, operations });
@@ -390,10 +411,17 @@ test('project operations cancel and retry installation, manage the configured da
   assert.match((await detail()).databaseTask.error, /another project folder/);
   assert.equal(databaseWrites.length, 1);
   owner = directory;
+  foreignMount = true;
+  assert.match((await get(`${route}/database?logs=1`)).error, /could not be verified/);
+  assert.equal((await post(`${route}/start`)).status, 202);
+  await until(async () => (await detail()).status === 'failed');
+  assert.match((await detail()).error, /could not be verified/);
+  foreignMount = false;
   assert.equal((await post(`${route}/database-stop`)).status, 202);
   await until(async () => (await detail()).databaseTask.status === 'succeeded');
   assert.equal((await get(`${route}/database`)).status, 'stopped');
-  assert.deepEqual(databaseWrites, [['compose', 'up', '-d', '--wait', '--no-deps', 'db'], ['compose', 'stop', 'db']]);
+  assert.deepEqual(databaseWrites[0].slice(-6), ['up', '-d', '--wait', '--no-deps', '--no-recreate', 'db']);
+  assert.deepEqual(databaseWrites.slice(1), [['container', 'stop', dbId]]);
 });
 
 test('recycling a project preserves its volume and database deletion separately verifies the stopped target', async t => {
@@ -408,7 +436,7 @@ test('recycling a project preserves its volume and database deletion separately 
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   manifest.createdAt = '2026-01-02T00:00:00.001Z';
   await writeFile(manifestPath, JSON.stringify(manifest));
-  const model = { name: project.name, services: { db: { volumes: [{ type: 'volume', source: 'db_data', target }] } }, volumes: { db_data: { name } } };
+  const model = { name: project.name, services: { db: { image: 'postgres:17', volumes: [{ type: 'volume', source: 'db_data', target }] } }, volumes: { db_data: { name } } };
   await writeFile(join(directory, 'compose.yaml'), '');
   let attached = false, volumeExists = true, shared = false, rejectRecycle = true, containerStatus = 'exited';
   let volumeCreated = '2026-01-02T00:00:00Z';
@@ -417,9 +445,11 @@ test('recycling a project preserves its volume and database deletion separately 
   const operations = new ProjectOperations({ command: async (_, args) => {
     dockerCalls++;
     const [resource, action] = args;
-    if (resource === 'compose' && action === 'config') return JSON.stringify(model);
-    if (resource === 'compose' && action === 'ps') return attached ? containerId : '';
-    if (resource === 'inspect') return `${JSON.stringify(directory)}\tdb\t${containerStatus}\t\t${JSON.stringify([{ Type: 'volume', Name: name, Destination: target, RW: true }])}`;
+    if (resource === 'compose' && args.includes('config')) return JSON.stringify(model);
+    if (resource === 'ps' && args.at(-1).startsWith('label=')) return attached ? containerId : '';
+    if (resource === 'inspect') return [containerId, JSON.stringify({ 'com.docker.compose.project': project.name,
+      'com.docker.compose.service': 'db', 'com.docker.compose.project.working_dir': directory }), '"postgres:17"', containerStatus, '',
+      JSON.stringify([{ Type: 'volume', Name: name, Destination: target, RW: true }])].join('\t');
     if (resource === 'volume' && action === 'ls') return volumeExists ? name : '';
     if (resource === 'volume' && action === 'inspect') {
       const labels = { 'com.docker.compose.project': project.name, 'com.docker.compose.volume': 'db_data', 'io.stackforge.database-id': manifest.databaseId };

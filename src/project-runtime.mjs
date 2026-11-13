@@ -129,7 +129,7 @@ export class ProjectRuntime {
     return runtime;
   }
 
-  start(project, overrides = {}) {
+  start(project, overrides = {}, verifyDatabase) {
     if (this.closing) throw new Error('StackForge is shutting down.');
     const key = projectPathKey(project.path);
     if (active.has(this.runs.get(key)?.status)) return;
@@ -148,7 +148,7 @@ export class ProjectRuntime {
     if (effective.backend) services.backend = { url: `http://127.0.0.1:${effective.backend}/api/health`, ready: false };
     const entry = { status: 'starting', ports, services, readiness: new AbortController(), log: '', truncated: false };
     this.runs.set(key, entry);
-    const launch = startup ? this.launchStartup(project, entry, startup) : this.launch(project, entry, effective, overrides);
+    const launch = startup ? this.launchStartup(project, entry, startup) : this.launch(project, entry, effective, overrides, verifyDatabase);
     entry.done = launch.catch(error => {
       if (entry.status !== 'stopping') entry.error = error.message;
     }).finally(() => { entry.readiness.abort(); entry.status = entry.error ? 'failed' : 'stopped'; entry.child = undefined; });
@@ -193,7 +193,7 @@ export class ProjectRuntime {
     }));
   }
 
-  async launch(project, entry, effective, overrides) {
+  async launch(project, entry, effective, overrides, verifyDatabase) {
     const { directory, manifest } = await inspectRecordedProject(project);
     if (Object.keys(overrides).length && manifest.portConfig !== 1) throw new Error('This project uses an older launcher with fixed app ports.');
     const script = await developmentScript(directory);
@@ -201,10 +201,12 @@ export class ProjectRuntime {
     // A database left running from the previous session may already own its port.
     for (const port of [effective.frontend, effective.backend].filter(Boolean)) if (!await this.probePort(port)) throw new Error(`Development port ${port} is already in use.`);
     if (entry.status === 'stopping') return;
+    const dockerEnv = await verifyDatabase?.(entry.readiness.signal);
+    if (entry.status === 'stopping') return;
 
     const child = spawn(process.execPath, [script], {
       cwd: directory, shell: false, detached: process.platform !== 'win32', windowsHide: true,
-      env: { ...process.env, STACKFORGE_FRONTEND_PORT: String(effective.frontend ?? ''), STACKFORGE_BACKEND_PORT: String(effective.backend ?? ''), STACKFORGE_DATABASE_PORT: String(overrides.database ?? '') },
+      env: { ...(dockerEnv ?? process.env), STACKFORGE_FRONTEND_PORT: String(effective.frontend ?? ''), STACKFORGE_BACKEND_PORT: String(effective.backend ?? ''), STACKFORGE_DATABASE_PORT: String(overrides.database ?? '') },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     entry.child = child;

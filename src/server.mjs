@@ -24,6 +24,8 @@ import { detectDependencyPlan } from './dependency-plan.mjs';
 import { detectStartupSuggestions } from './startup-suggestions.mjs';
 import { backupLimit } from './database-backup.mjs';
 import { databaseRedactor } from './database-secrets.mjs';
+import { databaseOperationLog } from './database-operation-log.mjs';
+import { databaseDockerEnvironment } from './database-compose.mjs';
 import { hasImportedCompose } from './imported-database.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -55,6 +57,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   const jobs = new Jobs({ directory: stateDir, generate, check, publish });
   const settings = new Settings(settingsFile);
   const projectConfig = new ProjectConfig(stateDir ? join(dirname(stateDir), 'projects.json') : false);
+  const databaseLog = databaseOperationLog(stateDir ? join(dirname(stateDir), 'database-operations.jsonl') : false);
   const removals = new Map();
   const configWrites = new Map();
   let cloneTask, transfer;
@@ -179,6 +182,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         }
         const controller = new AbortController();
         res.once('close', () => { if (!res.writableFinished) controller.abort(); });
+        const record = databaseLog.begin(project, `database-${action}`);
         const done = (async () => {
           let file;
           if (restore) {
@@ -191,7 +195,13 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             if (file.length !== size) throw new Error('The backup upload was incomplete.');
           } else req.resume();
           return operations.databaseBackup(project, projectConfig.ports(project), file, controller.signal);
-        })();
+        })().then(async result => {
+          await record('succeeded');
+          return result;
+        }, async error => {
+          await record(error.name === 'AbortError' || controller.signal.aborted ? 'cancelled' : 'failed');
+          throw error;
+        });
         transfer = { path: project.path, done, controller };
         try {
           const result = await done;
@@ -293,7 +303,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             try {
               const target = action === 'run-check' ? { ...project, customChecks: projectConfig.checks(project) } : project;
               operations.start(target, action, projectConfig.ports(project), {
-                checkId: payload.check, installPlanId: detectedInstall ? payload.planId : undefined, confirmVolume: payload.confirmVolume
+                checkId: payload.check, installPlanId: detectedInstall ? payload.planId : undefined, confirmVolume: payload.confirmVolume,
+                record: action.startsWith('database-') ? databaseLog.begin(project, action) : undefined
               });
               return send(res, 202, operations.status(project, true));
             } catch (error) { return send(res, 409, { error: error.message }); }
@@ -373,7 +384,14 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             finally { removals.delete(project.path); }
           }
           try {
-            if (action === 'start') runtime.start(project, projectConfig.ports(project));
+            if (action === 'start') {
+              const ports = projectConfig.ports(project);
+              runtime.start(project, ports, !project.unmanaged && project.database !== 'none' ? async signal => {
+                const target = await operations.databaseTarget(project, ports, signal);
+                await target.verifyLauncher();
+                return { ...databaseDockerEnvironment(), COMPOSE_FILE: target.config.composeFile };
+              } : undefined);
+            }
             else runtime.stop(project);
             return send(res, 202, runtime.status(project));
           } catch (error) { return send(res, 409, { error: error.message, diagnostic: startupDiagnostic(project, error.message) }); }
@@ -433,6 +451,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     transfer?.controller.abort();
     await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), operations.shutdown(),
       cloneTask?.done, transfer?.done, ...removals.values(), ...configWrites.values()]);
+    await databaseLog.pending;
   };
   server.jobs = jobs;
   return server;
