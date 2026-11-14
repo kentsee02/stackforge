@@ -147,7 +147,9 @@ test('imported Compose controls verify the container and dedicated volume before
   secretFile = false;
   assert.deepEqual(Buffer.from(await (await post(route + '/database-backup')).arrayBuffer()), dump);
   const restoreHeaders = { 'Content-Type': 'application/octet-stream', 'X-StackForge-Confirm-Name': imported.name };
-  assert.equal((await post(route + '/database-restore', dump, restoreHeaders)).status, 200);
+  const legacyRestore = await post(route + '/database-restore', dump, restoreHeaders);
+  assert.equal(legacyRestore.status, 409);
+  assert.match((await legacyRestore.json()).error, /Preview a verified/);
 
   const before = mutations.length;
   shared = true;
@@ -187,7 +189,7 @@ test('imported Compose controls verify the container and dedicated volume before
   assert.doesNotMatch(audit, /import-secret-canary|test\$\$literal|POSTGRES_PASSWORD|custom commands|PGDMPfixture/);
   const records = audit.trim().split(/\r?\n/).map(line => JSON.parse(line));
   assert.ok(records.some(record => record.action === 'database-start' && record.status === 'failed'));
-  assert.ok(records.some(record => record.action === 'database-restore' && record.status === 'succeeded'));
+  assert.ok(records.some(record => record.action === 'database-backup' && record.status === 'succeeded'));
   assert.ok(records.some(record => record.action === 'database-stop' && record.status === 'succeeded'));
   for (const record of records) {
     assert.equal(record.projectId, imported.id);

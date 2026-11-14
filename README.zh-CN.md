@@ -78,7 +78,13 @@ Windows PowerShell：`$env:PORT=4311; npm start`。
 
 StackForge 启动已验证的容器，并允许标准数据库命令和健康检查。使用自定义入口、命令、健康检查、生命周期钩子或特权设置的服务，请核对配置后通过 Docker Compose 启动。自动启动所用的文件型 Compose Secret 须引用项目内的普通文件，并以只读方式挂载到 `/run/secrets`。
 
-「下载备份」可导出已验证且正在运行的数据库，PostgreSQL 使用自定义归档，MySQL 使用 SQL 文件。备份和恢复都会校验容器实际挂载的项目数据卷，并通过容器内的 Unix 套接字连接数据库。MySQL 用容器的 root 密码导出，涵盖表结构、数据、视图、触发器、存储过程、函数和计划事件。备份移除对象中指定的旧账号，以便恢复时使用目标账号。「恢复备份」接受同一种数据库的可信文件，大小上限为 64 MiB。请先停止应用，启动空的项目数据库，再输入完整项目名确认。PostgreSQL 的大对象也视为已有数据。MySQL 恢复要求非 root 账户的授权范围仅限目标库。创建存储函数和触发器可能还需要服务器配置。恢复失败时可能留下部分已恢复的对象。
+「数据库发现」支持保存远程 PostgreSQL 或 MySQL 连接。StackForge 使用指定的 CA 证书验证 TLS 主机名，并测试账号权限。运行 StackForge 的电脑需要安装对应的数据库客户端。密码由 Windows DPAPI 或 Linux Secret Service 保护，Linux 需要 `secret-tool` 和已解锁的密钥环。远程服务的启停、建库及删除由供应商工具管理。PostgreSQL 恢复需要空的可写目标库、拥有 schema `CREATE` 权限的非超级用户，以及用于核对服务器身份的 `pg_control_system()` 执行权限。MySQL 恢复账号的授权范围须限制在目标库。
+
+MySQL 完整备份需要全局 `SELECT` 权限才能导出存储例程，还需要目标库的 `SHOW VIEW`、`TRIGGER` 和 `EVENT` 权限。恢复时请使用单独的、授权范围仅限目标库的账号。
+
+检测到项目内的 SQLite 路径后，可用「检查 SQLite 文件」查看结构。如果数据库文件尚不存在，且父目录已存在，可以显式创建。备份使用 SQLite 快照，包含 WAL 中已提交的数据。恢复在核验完整性后创建新文件。如目标旁存在活动或残留的 SQLite 日志文件，StackForge 会阻止创建和恢复。
+
+「下载备份」生成 `.sfdb` 文件，记录引擎、源版本和 SHA-256 校验值，数据库内容上限为 64 MiB。「恢复备份」会检查引擎、版本兼容性和校验值，在隔离环境中验证内容，再显示目标和对象数量。输入准确目标名称后，可写入空的 SQL 数据库或尚不存在的 SQLite 文件。旧版可信的 StackForge `.dump` 和 `.sql` 文件也可以预览，校验值根据本次提供的文件计算。PostgreSQL 和 MySQL 隔离验证需要在 Docker 中事先准备目标版本的官方镜像，例如 `docker pull postgres:17` 或 `docker pull mysql:8.4`。Compose 备份和恢复还会校验数据卷，并使用容器内的 Unix 套接字连接。MySQL 备份包含存储例程、触发器和计划事件。恢复结果受目标服务器配置影响，失败时可能留下部分对象。请按数据库原数据的安全要求保管下载的备份。
 
 「构建、测试与代码检查」会使用对应的 JavaScript 包管理器，无法识别时沿用 npm。含 Maven Wrapper 的 Maven 项目可以执行 `package` 和 `test`，包括导入的 Spring Boot。也支持 Gradle、.NET、Go、Rust 的构建和测试、Composer 脚本，以及具备对应配置的 Laravel 和 Rails 测试与代码检查。任意项目都可以在「自定义检查命令」中按目录保存可信的构建、测试或 Lint 命令，保存后在同一面板选择并运行。运行检查前请停止项目。面板会显示实时日志和最近一次结果，运行中可以取消。凭据请放在项目的环境文件里。
 

@@ -13,7 +13,7 @@
   <a class="skip-link" href="#main" data-i18n="跳到主要内容">Skip to content</a>
   <aside class="sidebar">
     <a class="brand" href="/" aria-label="StackForge home" data-i18n-aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
-    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.29</span></div>
+    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.30</span></div>
     <a class="side-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a>
     <a class="side-link" href="/#activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg><span data-i18n="任务记录">Task history</span></a>
     <a class="side-active projects-nav" href="/projects" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2h7v2"/></svg><span data-i18n="项目管理">Projects</span></a>
@@ -165,6 +165,31 @@
               </form>
             </div>
             <p id="database-initialization-message" class="hint" role="status"></p>
+            <div id="database-resources" hidden>
+              <label class="inline-field" for="database-resource"><span data-i18n="数据库文件或远程目标">Database file or remote target</span><select id="database-resource"></select></label>
+              <form id="database-remote-form" hidden>
+                <label class="inline-field" for="database-remote-user"><span data-i18n="数据库用户">Database user</span><input id="database-remote-user" type="text" autocomplete="off" maxlength="63" required></label>
+                <label class="inline-field" for="database-remote-password"><span data-i18n="数据库密码">Database password</span><input id="database-remote-password" type="password" autocomplete="off" maxlength="1024" required></label>
+                <label class="inline-field" for="database-remote-ca"><span data-i18n="可信 CA 证书的绝对路径">Absolute path to the trusted CA certificate</span><input id="database-remote-ca" type="text" spellcheck="false" required></label>
+                <div class="project-operation-actions">
+                  <button type="submit" class="secondary" data-i18n="测试并保存连接">Test and save connection</button>
+                  <button id="database-remote-test" type="button" class="secondary" data-i18n="测试已保存的连接">Test saved connection</button>
+                  <button id="database-remote-remove" type="button" class="secondary" data-i18n="移除已保存的连接">Remove saved connection</button>
+                </div>
+              </form>
+              <div class="project-operation-actions">
+                <button id="database-sqlite-inspect" type="button" class="secondary" data-i18n="检查 SQLite 文件">Inspect SQLite file</button>
+                <button id="database-sqlite-create" type="button" class="secondary" data-i18n="创建 SQLite 文件">Create SQLite file</button>
+                <button id="database-resource-backup" type="button" class="secondary" data-i18n="下载备份">Download backup</button>
+                <button id="database-resource-restore" type="button" class="secondary" data-i18n="恢复备份">Restore backup</button>
+              </div>
+              <form id="database-sqlite-confirm" hidden>
+                <label class="inline-field" for="database-sqlite-path"><span data-i18n="输入完整的相对文件路径以确认创建。">Type the exact relative file path to confirm creation.</span><strong id="database-sqlite-expected"></strong><input id="database-sqlite-path" type="text" autocomplete="off" required></label>
+                <button id="database-sqlite-confirm-submit" type="submit" class="secondary" data-i18n="创建 SQLite 文件" disabled>Create SQLite file</button>
+              </form>
+              <p id="database-resource-message" class="hint" role="status"></p>
+              <ul id="database-resource-objects" class="check-list" aria-label="SQLite schema"></ul>
+            </div>
           </details>
           <details id="project-database" class="project-ports" hidden>
             <summary data-i18n="数据库管理">Database controls</summary>
@@ -241,20 +266,21 @@
   </dialog>
   <dialog id="database-restore-dialog" class="project-trash-dialog" aria-labelledby="database-restore-title" aria-describedby="database-restore-description">
     <h2 id="database-restore-title" data-i18n="恢复数据库备份">Restore database backup</h2>
-    <p id="database-restore-description" data-i18n="请选择同一种数据库的可信备份，最大 64 MiB。恢复要求项目已停止、数据库正在运行且为空。">Choose a trusted backup from the same database engine, up to 64 MiB. Stop the project and start an empty database before restoring.</p>
+    <p id="database-restore-description" data-i18n="选择可信的 StackForge 备份。预览会核验备份和目标，确认后才会写入。">Choose a trusted StackForge backup. Preview verifies the backup and target before you confirm the write.</p>
     <form id="database-restore-form" method="dialog">
       <label class="inline-field project-trash-field" for="database-restore-file">
         <span data-i18n="备份文件">Backup file</span>
-        <input id="database-restore-file" type="file" required>
+        <input id="database-restore-file" type="file" accept=".sfdb,.dump,.sql" required>
       </label>
-      <label class="inline-field project-trash-field" for="database-restore-name">
-        <span data-i18n="输入下方项目名以确认恢复。">Type the project name below to confirm restoration.</span>
+      <p id="database-restore-preview" class="hint" role="status"></p>
+      <label id="database-restore-confirm-field" class="inline-field project-trash-field" for="database-restore-name" hidden>
+        <span data-i18n="输入下方目标名称以确认恢复。">Type the target name below to confirm restoration.</span>
         <strong id="database-restore-expected"></strong>
         <input id="database-restore-name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required>
       </label>
       <div class="project-trash-actions">
         <button type="button" id="database-restore-cancel" class="secondary" data-i18n="返回">Go back</button>
-        <button type="submit" id="database-restore-submit" class="secondary" data-i18n="恢复备份" disabled>Restore backup</button>
+        <button type="submit" id="database-restore-submit" class="secondary" data-i18n="预览恢复" disabled>Preview restore</button>
       </div>
     </form>
   </dialog>

@@ -344,6 +344,13 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 .project-operation-heading, .project-operation-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
 .project-operation-heading h3, .project-operation-heading strong { font-size: 13px; margin: 0; }
 #project-database .project-operation-heading { margin-top: 10px; }
+#database-resources { min-width: 0; }
+#database-resources .inline-field { display: block; margin-top: 14px; }
+#database-resources .inline-field input, #database-resource, #database-restore-file, #database-restore-name {
+  width: 100%; max-width: none; min-width: 0; margin-top: 6px;
+}
+#database-resource { display: block; min-height: 40px; padding: 7px 11px; border: 1px solid var(--control); border-radius: 6px; color: var(--text); background: var(--surface); font: inherit; }
+#database-restore-preview, #database-resource-message, #database-resource-objects { overflow-wrap: anywhere; }
 .project-operation-actions .secondary { margin-top: 6px; }
 .project-operation-error { color: var(--negative); overflow-wrap: anywhere; }
 .dependency-plan-list, .dependency-plan-issues { padding-left: 20px; margin: 7px 0 10px; }

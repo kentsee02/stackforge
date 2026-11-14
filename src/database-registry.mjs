@@ -28,12 +28,14 @@ export function databaseResource(project, requirement, port) {
 export class DatabaseRegistry {
   constructor(file) {
     this.file = file;
-    this.value = { requirements: {}, servers: {}, instances: {}, bindings: {}, migrations: [] };
+    this.value = { requirements: {}, servers: {}, instances: {}, bindings: {}, migrations: [], profiles: {}, backups: [] };
     this.pending = Promise.resolve();
     this.ready = file ? readFile(file, 'utf8').then(text => {
       const data = JSON.parse(text);
       if (data.version === 1 && ['requirements', 'servers', 'instances', 'bindings'].every(key =>
-        data[key] && typeof data[key] === 'object' && !Array.isArray(data[key])) && Array.isArray(data.migrations)) this.value = data;
+        data[key] && typeof data[key] === 'object' && !Array.isArray(data[key])) && Array.isArray(data.migrations)) {
+        this.value = { ...this.value, ...data };
+      }
     }).catch(error => { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }) : Promise.resolve();
   }
 
@@ -87,6 +89,24 @@ export class DatabaseRegistry {
       }),
       migrations: migrations.filter(item => item.projectId === project.id)
     };
+  }
+
+  profile(projectId, instanceId) {
+    return this.value.profiles[databaseKey(projectId, instanceId)];
+  }
+
+  saveProfile(projectId, instanceId, profile) {
+    return this.update(value => {
+      const profiles = { ...value.profiles };
+      const key = databaseKey(projectId, instanceId);
+      if (profile) profiles[key] = { ...profile, projectId, instanceId };
+      else delete profiles[key];
+      return { ...value, profiles };
+    });
+  }
+
+  recordBackup(projectId, instanceId, metadata) {
+    return this.update(value => ({ ...value, backups: [...value.backups, { projectId, instanceId, ...metadata }].slice(-500) }));
   }
 
   usesEndpoint(projectId, { engine, host, port }) {

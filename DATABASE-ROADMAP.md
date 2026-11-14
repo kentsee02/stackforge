@@ -1,6 +1,6 @@
 # Database implementation checklist
 
-This checklist tracks the proposed Database Architecture Specification against StackForge 0.26.0. The current baseline is Docker Compose management for one MySQL or PostgreSQL service per project. Windows Docker Desktop tests verified both engines' backup and restore paths. The Windows and Linux CI matrix currently runs automated tests with database command fixtures.
+This checklist tracks the proposed Database Architecture Specification against StackForge 0.30.0. The database CI jobs require real PostgreSQL, MySQL and SQLite tests in addition to command fixtures.
 
 ## P0 · Protect existing data
 
@@ -22,7 +22,9 @@ P1 initialization applies to loopback PostgreSQL and MySQL targets with verified
 
 ## P2 · Additional adapters and backup verification
 
-- [ ] Add remote connection profiles with secure credential references, explicit connection tests and per-operation capabilities. Keep database permissions and provider permissions separate.
-- [ ] Add SQLite discovery, schema inspection, explicit creation, and backup/restore that handles locks and WAL files.
-- [ ] Verify backup integrity, record checksums and metadata, validate engine and version compatibility, preview restore impact, and verify restored objects in an isolated target.
-- [ ] Run real database integration tests on Windows and Linux. Cover shared bindings, database initialization, unsupported operations and the existing Docker workflows as release gates.
+- [x] Add remote connection profiles with secure credential references, explicit connection tests and per-operation capabilities. Keep database permissions and provider permissions separate.
+- [x] Add SQLite discovery, schema inspection, explicit creation, and backup/restore that handles locks and WAL files.
+- [x] Verify backup integrity, record checksums and metadata, validate engine and version compatibility, preview restore impact, and verify restored objects in an isolated target.
+- [x] Add Windows and Linux database CI jobs. Test shared bindings, unsupported operations, native Windows PostgreSQL, real SQLite on both platforms, and PostgreSQL/MySQL TLS, initialization, backup, restore, and Compose ownership with Linux containers.
+
+Remote administration uses existing PostgreSQL and MySQL databases. SQLite creation requires a missing, project-relative database file. Remote infrastructure provisioning and management require provider tools.

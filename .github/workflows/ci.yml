@@ -16,3 +16,34 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm run check
       - run: npm test
+  database-integration:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test test/database-p1.test.mjs test/database-p2.test.mjs
+      - if: runner.os == 'Linux'
+        run: |
+          docker pull postgres:17
+          docker pull mysql:8.4
+          node scripts/database-integration.mjs
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:PGBIN;$env:PATH"
+          Set-Service postgresql-x64-17 -StartupType Manual
+          Start-Service postgresql-x64-17
+          for ($attempt = 0; $attempt -lt 30; $attempt++) {
+            pg_isready -h 127.0.0.1 -q
+            if ($LASTEXITCODE -eq 0) { break }
+            Start-Sleep -Seconds 1
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL did not become ready' }
+          $env:STACKFORGE_TEST_PG_PASSWORD = 'root'
+          node scripts/database-integration.mjs --windows-native

@@ -363,11 +363,11 @@ test('database transfer locks the project, preserves binary output and requires 
   const restore = (confirmName, data = dump) => fetch(app.base + route + '/database-restore', {
     method: 'POST', body: data, headers: { 'Content-Type': 'application/octet-stream', 'X-StackForge-Token': app.token, 'X-StackForge-Confirm-Name': confirmName }
   });
-  assert.equal((await restore('wrong')).status, 400);
+  assert.equal((await restore('wrong')).status, 409);
   assert.equal((await restore(name, Buffer.from('other format'))).status, 409);
   assert.equal((await restore(name)).status, 409);
   assert.equal(restores, 0);
   isEmpty = true;
-  assert.equal((await restore(name)).status, 200);
-  assert.equal(restores, 1);
+  assert.equal((await restore(name)).status, 409);
+  assert.equal(restores, 0);
 });

@@ -22,9 +22,12 @@ import { directoryIdentity, sameDirectory } from './project-identity.mjs';
 import { resolveStartup, validateCustomChecks, validateStartup } from './project-startup.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
 import { detectStartupSuggestions } from './startup-suggestions.mjs';
-import { backupLimit } from './database-backup.mjs';
 import { databaseRedactor } from './database-secrets.mjs';
 import { databaseOperationLog } from './database-operation-log.mjs';
+import { tmpdir } from 'node:os';
+import { archiveLimit } from './database-archive.mjs';
+import { databaseResources } from './database-resources.mjs';
+import { databaseVault } from './database-vault.mjs';
 import { databaseDockerEnvironment } from './database-compose.mjs';
 import { hasImportedCompose } from './imported-database.mjs';
 import { discoverDatabases } from './database-discovery.mjs';
@@ -55,7 +58,7 @@ function projectDetails(project) {
       hasInstallCommands: Boolean(startup?.services.some(service => service.installCommand)) }) };
 }
 
-export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations(), localDatabase = {} } = {}) {
+export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations(), localDatabase = {}, databaseAdapters = {} } = {}) {
   const token = randomBytes(32).toString('hex');
   const redactDatabase = databaseRedactor(process.env);
   const jobs = new Jobs({ directory: stateDir, generate, check, publish });
@@ -63,6 +66,9 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   const projectConfig = new ProjectConfig(stateDir ? join(dirname(stateDir), 'projects.json') : false);
   const databaseLog = databaseOperationLog(stateDir ? join(dirname(stateDir), 'database-operations.jsonl') : false);
   const databaseRegistry = new DatabaseRegistry(stateDir ? join(dirname(stateDir), 'databases.json') : undefined);
+  const resources = databaseResources({ registry: databaseRegistry, operations,
+    directory: stateDir ? join(dirname(stateDir), 'stackforge-backup-work') : tmpdir(),
+    vault: databaseVault(stateDir ? join(dirname(stateDir), 'credentials') : undefined), ...databaseAdapters });
   const removals = new Map();
   const configWrites = new Map();
   const databaseWrites = new Map();
@@ -96,6 +102,14 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     const binding = bindings.find(item => item.id === bindingId);
     const target = validateLocalTarget(binding?.server, binding?.instance);
     return { binding, target };
+  }
+
+  async function resourceBinding(project, id, provider) {
+    if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) throw new Error('Choose an available database binding.');
+    const { bindings } = await scanDatabases(project);
+    const binding = bindings.find(item => item.id === id && (!provider || item.instance.provider === provider));
+    if (!binding) throw new Error('Choose an available database binding.');
+    return binding;
   }
 
   async function verifyDatabaseDeletion(project, volumeTarget) {
@@ -210,7 +224,12 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         try {
           if (view === 'database-discovery') {
             await refreshDatabaseBindings(project.id);
-            return send(res, 200, await scanDatabases(project));
+            const discovery = await scanDatabases(project);
+            return send(res, 200, { ...discovery, bindings: discovery.bindings.map(item => ({
+              ...item, ...(item.instance.provider === 'remote' && {
+                profileSaved: Boolean(databaseRegistry.profile(project.id, item.instanceId))
+              })
+            })) });
           }
           if (view === 'database-delete') {
             if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
@@ -251,6 +270,71 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           return send(res, 409, { error: message.split('\n')[0].trim(), diagnostic: view === 'database' ? startupDiagnostic(project, message) : undefined });
         }
       }
+      const archiveRoute = /^\/api\/projects\/([^/]+)\/database-archive(?:\/(preview|restore))?$/.exec(url.pathname);
+      if (req.method === 'POST' && archiveRoute) {
+        const [, id, action = 'backup'] = archiveRoute;
+        if (!authorized(req, action === 'backup' ? 'application/json' : 'application/octet-stream')) {
+          return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
+        }
+        const project = managedProjects().find(item => item.id === id);
+        if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
+        if (closing || transfer || databaseWrites.size || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
+          return send(res, 409, { error: 'Wait for the current project operation to finish.' });
+        }
+        if (action !== 'backup' && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
+          return send(res, 409, { error: 'Stop the project before restoring its database.' });
+        }
+        const size = Number(req.headers['content-length']);
+        if (action !== 'backup' && (!Number.isSafeInteger(size) || size < 1 || size > archiveLimit)) {
+          return send(res, 413, { error: 'Choose a StackForge backup up to 64 MiB.' });
+        }
+        const controller = new AbortController();
+        res.once('close', () => { if (!res.writableFinished) controller.abort(); });
+        const done = (async () => {
+          const bindingId = req.headers['x-stackforge-binding'];
+          if (bindingId && action !== 'backup') await refreshDatabaseBindings(project.id, true);
+          const binding = bindingId ? await resourceBinding(project, bindingId) : undefined;
+          const ports = projectConfig.ports(project);
+          const signal = controller.signal;
+          const operation = action === 'preview' ? undefined : databaseLog.begin(project, 'database-' + action, binding?.instanceId);
+          try {
+            let result;
+            if (action === 'backup') {
+              req.resume();
+              result = await resources.backup(project, binding, ports, signal);
+            } else {
+              const chunks = [];
+              let bytes = 0;
+              for await (const chunk of req) {
+                bytes += chunk.length;
+                if (bytes > size) throw new Error('Choose a StackForge backup up to 64 MiB.');
+                chunks.push(chunk);
+              }
+              if (bytes !== size) throw new Error('The backup upload was incomplete.');
+              const file = Buffer.concat(chunks, bytes);
+              if (action === 'preview') result = await resources.preview(project, binding, ports, file, signal);
+              else result = await resources.restore(project, binding, ports, file, req.headers['x-stackforge-preview'],
+                Buffer.from(req.headers['x-stackforge-target'] ?? '', 'base64').toString(), signal);
+            }
+            await operation?.('succeeded');
+            return result;
+          } catch (error) {
+            await operation?.(controller.signal.aborted ? 'cancelled' : 'failed');
+            throw error;
+          }
+        })();
+        transfer = { path: project.path, done, controller };
+        try {
+          const result = await done;
+          if (action !== 'backup') return send(res, 200, result);
+          res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store',
+            'Content-Disposition': `attachment; filename="${result.filename}"`, 'Content-Length': result.data.length });
+          return res.end(result.data);
+        } catch (error) {
+          if (!res.destroyed) return send(res, 409, { error: redactDatabase.text(error.message).split('\n')[0] });
+        } finally { transfer = undefined; }
+        return;
+      }
       if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, jobs.list());
       if (req.method === 'GET' && url.pathname.startsWith('/api/jobs/')) {
         const job = jobs.view(url.pathname.slice('/api/jobs/'.length));
@@ -261,33 +345,20 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         const [, id, action] = databaseTransfer;
         const restore = action === 'restore';
         if (!authorized(req, restore ? 'application/octet-stream' : 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
+        if (restore) {
+          req.resume();
+          return send(res, 409, { error: 'Preview a verified StackForge backup before restoring.' });
+        }
         const project = managedProjects().find(item => item.id === id);
         if (!project || (project.database === 'none' && !await hasImportedCompose(project))) return send(res, 404, { error: 'This project has no database.' });
         if (closing || transfer || databaseWrites.size || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
           return send(res, 409, { error: 'Wait for the current project operation to finish.' });
         }
-        const size = Number(req.headers['content-length']);
-        if (restore) {
-          if (req.headers['x-stackforge-confirm-name'] !== project.name) return send(res, 400, { error: 'Enter the exact project name to confirm restoration.' });
-          if (!Number.isSafeInteger(size) || size < 1 || size > backupLimit) return send(res, 413, { error: 'Choose a backup file up to 64 MiB.' });
-          if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before restoring its database.' });
-        }
         const controller = new AbortController();
         res.once('close', () => { if (!res.writableFinished) controller.abort(); });
         const record = databaseLog.begin(project, `database-${action}`);
-        const done = (async () => {
-          let file;
-          if (restore) {
-            const chunks = [];
-            const cancelUpload = () => req.destroy();
-            controller.signal.addEventListener('abort', cancelUpload, { once: true });
-            try { for await (const chunk of req) chunks.push(chunk); }
-            finally { controller.signal.removeEventListener('abort', cancelUpload); }
-            file = Buffer.concat(chunks);
-            if (file.length !== size) throw new Error('The backup upload was incomplete.');
-          } else req.resume();
-          return operations.databaseBackup(project, projectConfig.ports(project), file, controller.signal);
-        })().then(async result => {
+        req.resume();
+        const done = operations.databaseBackup(project, projectConfig.ports(project), undefined, controller.signal).then(async result => {
           await record('succeeded');
           return result;
         }, async error => {
@@ -297,7 +368,6 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         transfer = { path: project.path, done, controller };
         try {
           const result = await done;
-          if (restore) return send(res, 200, { restored: true });
           res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store',
             'Content-Disposition': `attachment; filename="${result.filename}"`, 'Content-Length': result.data.length });
           return res.end(result.data);
@@ -306,7 +376,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         } finally { transfer = undefined; }
         return;
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|run-check|check-cancel|check-config)$/.exec(url.pathname);
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|database-remote-profile|database-sqlite-inspect|database-sqlite-create|run-check|check-cancel|check-config)$/.exec(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
@@ -365,6 +435,36 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const [, id, action] = projectAction;
           const project = managedProjects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
+          if (['database-remote-profile', 'database-sqlite-inspect', 'database-sqlite-create'].includes(action)) {
+            if (databaseWrites.size || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
+              return send(res, 409, { error: 'Wait for the current project operation to finish.' });
+            }
+            if (action === 'database-sqlite-create' && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
+              return send(res, 409, { error: 'Stop the project before initializing its database.' });
+            }
+            const controller = new AbortController();
+            res.once('close', () => { if (!res.writableFinished) controller.abort(); });
+            const done = (async () => {
+              const binding = await resourceBinding(project, payload.bindingId, action === 'database-remote-profile' ? 'remote' : 'sqlite');
+              if (action === 'database-remote-profile') return resources.profile(project, binding, payload, controller.signal);
+              if (action === 'database-sqlite-inspect') return resources.inspectSqlite(project, binding, controller.signal);
+              if (payload.confirmPath !== binding.instance.path) throw new Error('Type the exact SQLite file path to confirm creation.');
+              const record = databaseLog.begin(project, 'database-initialize', binding.instanceId);
+              try {
+                const result = await resources.createSqlite(project, binding, undefined, controller.signal);
+                await record('succeeded');
+                return result;
+              } catch (error) {
+                await record(controller.signal.aborted ? 'cancelled' : 'failed');
+                throw error;
+              }
+            })();
+            databaseWrites.set(project.path, { done, controller });
+            try { return send(res, 200, await done); }
+            catch (error) { if (!res.destroyed) return send(res, 409, { error: redactDatabase.text(error.message).split('\n')[0] }); }
+            finally { databaseWrites.delete(project.path); }
+            return;
+          }
           if (['database-local-check', 'database-initialization-plan', 'database-initialize'].includes(action)) {
             if (action === 'database-initialize' && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
               return send(res, 409, { error: 'Stop the project before initializing its database.' });
@@ -517,6 +617,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             if (jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
             if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before moving it to the trash.' });
             if (action === 'remove' || removeOnly(project)) {
+              await resources.removeProfiles(project);
               await projectConfig.removeImport(project.id);
               await databaseRegistry.remove(project.id);
               return send(res, 200, { removed: true });
@@ -527,6 +628,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
               if (project.cloneId) await desktop.trashProject(info.directory, project.cloneIdentity);
               else await desktop.trashProject(info.directory, project.folderIdentity, recordedProjectChanged);
               if (await locationExists(project.path)) throw new Error('The project is still at its original location. Check the system trash before retrying.');
+              const cleanup = databaseLog.begin(project, 'database-profile-cleanup');
+              await resources.removeProfiles(project).then(() => cleanup('succeeded'), () => cleanup('failed'));
               if (project.cloneId) await projectConfig.removeImport(project.id);
               await databaseRegistry.remove(project.id);
               return { trashed: true, databaseDeleted: false };

@@ -454,30 +454,40 @@ function renderDatabase(project, busy, unavailable) {
   renderOutput($('database-container-log'), project.id, view.log);
 }
 
-async function backupAction(project, file) {
+async function archiveRequest(project, action, binding, file, approval) {
+  const { token } = await request('/api/state');
+  const path = action === 'backup' ? '' : '/' + action;
+  const response = await fetch(`/api/projects/${project.id}/database-archive${path}`, {
+    method: 'POST', signal: AbortSignal.timeout(660_000),
+    headers: { 'X-StackForge-Token': token, 'Content-Type': file ? 'application/octet-stream' : 'application/json',
+      ...(binding && { 'X-StackForge-Binding': binding.id }),
+      ...(approval && { 'X-StackForge-Preview': approval.id,
+        'X-StackForge-Target': btoa(String.fromCharCode(...new TextEncoder().encode(approval.name))) }) },
+    body: file ?? '{}'
+  });
+  if (!response.ok) throw new Error((await response.json()).error);
+  return response;
+}
+
+async function backupAction(project, binding) {
   if (!project || pending) return;
-  pending = { id: project.id, action: file ? 'database-restore' : 'database-backup' };
-  transferMessage = { id: project.id, message: file ? 'Restoring database…' : 'Preparing backup…' };
+  pending = { id: project.id, action: 'database-backup' };
+  const message = value => {
+    if (binding && selected === project.id) showMessage($('database-resource-message'), value);
+    else transferMessage = { id: project.id, message: value };
+  };
+  message('Preparing backup…');
   render();
   try {
-    const { token } = await request('/api/state');
-    const response = await fetch(`/api/projects/${project.id}/${pending.action}`, {
-      method: 'POST', signal: AbortSignal.timeout(660_000),
-      headers: { 'X-StackForge-Token': token, 'Content-Type': file ? 'application/octet-stream' : 'application/json',
-        ...(file && { 'X-StackForge-Confirm-Name': project.name }) },
-      body: file ?? '{}'
-    });
-    if (!response.ok) throw new Error((await response.json()).error);
-    if (!file) {
-      const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition'))?.[1] ?? 'database-backup';
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-    }
-    transferMessage.message = file ? 'Database restored.' : 'Backup download started.';
-  } catch (error) { transferMessage.message = error.message; }
+    const response = await archiveRequest(project, 'backup', binding);
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition'))?.[1] ?? 'database-backup.sfdb';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    message('Backup download started.');
+  } catch (error) { message(error.message); }
   finally {
     pending = undefined;
     render();
@@ -505,6 +515,7 @@ async function loadDatabase(logs = false) {
 }
 
 const discoveredEngines = { ...stackNames, sqlite: 'SQLite', sqlserver: 'SQL Server', mongodb: 'MongoDB', redis: 'Redis' };
+const resourceBinding = () => databaseDiscovery?.bindings?.find(item => item.id === $('database-resource').value);
 const discoveryStates = { configured: 'Configured target', unverified: 'Unverified target', missing: 'Missing configuration or file',
   placeholder: 'Template or placeholder', ambiguous: 'Ambiguous configuration', declared: 'Declared dependency' };
 
@@ -525,12 +536,31 @@ function renderDatabaseDiscovery(project, busy) {
     $('database-requirements').replaceChildren();
     $('database-discovery-message').textContent = '';
     $('database-initialization-message').textContent = '';
+    $('database-resources').hidden = true;
+    $('database-resource').replaceChildren();
+    resetResource();
     resetInitialization();
     if ($('project-database-discovery').open) void loadDatabaseDiscovery();
   }
   const locked = busy || Boolean(databaseDiscovery.working);
   for (const control of ['database-local-check', 'database-local-preview', 'database-discovery-refresh']) $(control).disabled = locked;
   $('database-initialize-submit').disabled = locked || $('database-initialize-name').value !== databaseDiscovery.plan?.name;
+  const binding = resourceBinding();
+  const sqlite = binding?.instance.provider === 'sqlite';
+  const remote = binding?.instance.provider === 'remote';
+  const status = databaseDiscovery.resourceStatus;
+  const can = status?.capabilities ?? {};
+  $('database-remote-form').hidden = !remote;
+  $('database-remote-form').querySelector('button[type=submit]').disabled = locked;
+  $('database-remote-test').disabled = locked || !binding?.profileSaved;
+  $('database-remote-remove').disabled = locked || !binding?.profileSaved;
+  $('database-sqlite-inspect').hidden = !sqlite;
+  $('database-sqlite-inspect').disabled = locked;
+  $('database-sqlite-create').hidden = !sqlite || !can.create;
+  $('database-sqlite-create').disabled = locked;
+  $('database-resource-backup').disabled = locked || !can.backup;
+  $('database-resource-restore').disabled = locked || binding?.shared || !can.restore;
+  $('database-sqlite-confirm-submit').disabled = locked || $('database-sqlite-path').value !== binding?.instance.path;
 }
 
 async function loadDatabaseDiscovery() {
@@ -561,11 +591,73 @@ async function loadDatabaseDiscovery() {
     select.replaceChildren(...local.map(({ id, server, instance, shared }) => new Option(
       [discoveredEngines[instance.engine], `${server.host}:${server.port}/${instance.name}`, shared ? translate('Shared database') : ''].filter(Boolean).join(' · '), id)));
     $('database-local-form').hidden = !local.length;
+    const managed = [...new Map(data.bindings.filter(item => item.instance.provider === 'sqlite' ||
+      item.instance.provider === 'remote' && ['postgres', 'mysql'].includes(item.instance.engine))
+      .map(item => [item.instanceId, item])).values()];
+    const targets = $('database-resource');
+    const previous = targets.value;
+    targets.replaceChildren(...managed.map(item => new Option(item.instance.path ??
+      `${discoveredEngines[item.instance.engine]} · ${item.server.host}:${item.server.port}/${item.instance.name}`, item.id)));
+    if (managed.some(item => item.id === previous)) targets.value = previous;
+    $('database-resources').hidden = !managed.length;
+    if (targets.value !== previous) resetResource();
     showMessage($('database-discovery-message'), data.limited ? 'The scan reached its file limit.' :
       requirements.length ? '' : 'No database configuration was detected.');
   } catch (error) {
     if (view === databaseDiscovery) showMessage($('database-discovery-message'), error.message);
   } finally {
+    view.working = false;
+    if (view === databaseDiscovery) render();
+  }
+}
+
+function resetResource() {
+  if (databaseDiscovery) databaseDiscovery.resourceStatus = undefined;
+  $('database-remote-form').reset();
+  $('database-sqlite-confirm').reset();
+  $('database-sqlite-confirm').hidden = true;
+  $('database-resource-objects').replaceChildren();
+  showMessage($('database-resource-message'), '');
+}
+
+async function resourceAction(action, mode) {
+  const view = databaseDiscovery;
+  const binding = resourceBinding();
+  if (!binding || pending || view.working) return;
+  view.working = true;
+  render();
+  const payload = { bindingId: binding.id };
+  if (mode) payload.mode = mode;
+  if (mode === 'save') Object.assign(payload, { user: $('database-remote-user').value,
+    password: $('database-remote-password').value, ca: $('database-remote-ca').value.trim() });
+  if (action === 'database-sqlite-create') payload.confirmPath = $('database-sqlite-path').value;
+  const current = () => view === databaseDiscovery && binding.id === resourceBinding()?.id;
+  try {
+    const { token } = await request('/api/state');
+    let result = await post(`/api/projects/${view.id}/${action}`, token, payload, 45000);
+    if (action === 'database-sqlite-create') result = await post(`/api/projects/${view.id}/database-sqlite-inspect`, token, { bindingId: binding.id }, 45000);
+    if (!current()) return;
+    view.resourceStatus = result;
+    if (typeof result.saved === 'boolean') binding.profileSaved = result.saved;
+    $('database-sqlite-confirm').hidden = true;
+    $('database-resource-objects').replaceChildren(...(result.details?.objects ?? []).map(item => {
+      const row = document.createElement('li');
+      row.textContent = `${item.type} · ${item.name}`;
+      return row;
+    }));
+    if (action === 'database-remote-profile' && mode !== 'remove') {
+      $('database-resource-message').textContent = [
+        translate('Remote connection verified'), result.version,
+        translate(result.capabilities.backup ? 'Backup allowed' : 'Backup unavailable'),
+        translate(result.capabilities.restore ? 'Restore allowed' : 'Restore unavailable'),
+        translate('Provider management unavailable')
+      ].join(' · ');
+    } else showMessage($('database-resource-message'), mode === 'remove' ? 'Remote connection profile removed.' :
+      result.exists ? 'SQLite schema inspected.' : 'The SQLite file is missing.');
+  } catch (error) {
+    if (current()) { view.resourceStatus = undefined; showMessage($('database-resource-message'), error.message); }
+  } finally {
+    if (current()) $('database-remote-password').value = '';
     view.working = false;
     if (view === databaseDiscovery) render();
   }
@@ -1064,7 +1156,7 @@ $('cancel-install').addEventListener('click', () => act(selected, 'install-cance
 $('project-database').addEventListener('toggle', () => loadDatabase());
 $('project-database-discovery').addEventListener('toggle', event => {
   if (event.currentTarget.open) void loadDatabaseDiscovery();
-  else { $('database-local-password').value = ''; resetInitialization(); }
+  else { $('database-local-password').value = ''; $('database-remote-password').value = ''; resetInitialization(); }
 });
 $('database-discovery-refresh').addEventListener('click', loadDatabaseDiscovery);
 $('database-local-check').addEventListener('click', () => localDatabaseAction('database-local-check'));
@@ -1079,29 +1171,100 @@ $('database-initialize-form').addEventListener('submit', event => {
   event.preventDefault();
   void localDatabaseAction('database-initialize');
 });
+$('database-resource').addEventListener('change', () => { resetResource(); render(); });
+$('database-remote-form').addEventListener('submit', event => { event.preventDefault(); void resourceAction('database-remote-profile', 'save'); });
+$('database-remote-test').addEventListener('click', () => resourceAction('database-remote-profile', 'test'));
+$('database-remote-remove').addEventListener('click', () => resourceAction('database-remote-profile', 'remove'));
+$('database-sqlite-inspect').addEventListener('click', () => resourceAction('database-sqlite-inspect'));
+$('database-sqlite-create').addEventListener('click', () => {
+  const binding = resourceBinding();
+  if (!binding || pending) return;
+  $('database-sqlite-expected').textContent = binding.instance.path;
+  $('database-sqlite-confirm').hidden = false;
+  $('database-sqlite-path').focus();
+});
+$('database-sqlite-path').addEventListener('input', render);
+$('database-sqlite-confirm').addEventListener('submit', event => { event.preventDefault(); void resourceAction('database-sqlite-create'); });
+$('database-resource-backup').addEventListener('click', () => backupAction(projects.find(project => project.id === selected), resourceBinding()));
+$('database-resource-restore').addEventListener('click', () => openRestore(resourceBinding()));
 $('database-start').addEventListener('click', () => act(selected, 'database-start'));
 $('database-stop').addEventListener('click', () => act(selected, 'database-stop'));
 $('database-logs').addEventListener('click', () => loadDatabase(true));
 $('database-backup').addEventListener('click', () => backupAction(projects.find(project => project.id === selected)));
-$('database-restore').addEventListener('click', () => {
-  restoring = projects.find(project => project.id === selected);
-  if (!restoring || pending) return;
+function openRestore(binding) {
+  const project = projects.find(project => project.id === selected);
+  if (!project || pending) return;
+  restoring = { project, binding };
   $('database-restore-form').reset();
-  $('database-restore-file').accept = (databaseView?.engine ?? restoring.database) === 'postgres' ? '.dump' : '.sql';
-  $('database-restore-expected').textContent = restoring.name;
+  $('database-restore-name').required = false;
+  $('database-restore-confirm-field').hidden = true;
+  $('database-restore-preview').textContent = '';
+  setText($('database-restore-submit'), 'Preview restore');
   $('database-restore-submit').disabled = true;
   $('database-restore-dialog').showModal();
+}
+$('database-restore').addEventListener('click', () => openRestore());
+$('database-restore-dialog').addEventListener('cancel', event => {
+  if (pending?.action === 'database-restore') event.preventDefault();
 });
 function validRestore() {
   const file = $('database-restore-file').files[0];
-  return file?.size > 0 && file.size <= 64 * 1024 * 1024 && $('database-restore-name').value === restoring?.name && !pending;
+  return file?.size > 0 && file.size <= 64 * 1024 * 1024 + 4096 && !pending &&
+    (!restoring?.approval || $('database-restore-name').value === restoring.approval.name);
 }
+$('database-restore-file').addEventListener('change', () => {
+  if (!restoring) return;
+  restoring.approval = undefined;
+  $('database-restore-name').required = false;
+  $('database-restore-confirm-field').hidden = true;
+  $('database-restore-preview').textContent = '';
+  setText($('database-restore-submit'), 'Preview restore');
+  $('database-restore-submit').disabled = !validRestore();
+});
 $('database-restore-form').addEventListener('input', () => { $('database-restore-submit').disabled = !validRestore(); });
-$('database-restore-form').addEventListener('submit', event => {
+$('database-restore-form').addEventListener('submit', async event => {
   event.preventDefault();
-  if (!validRestore()) return;
-  $('database-restore-dialog').close();
-  backupAction(restoring, $('database-restore-file').files[0]);
+  if (!restoring || !validRestore()) return;
+  const { project, binding, approval } = restoring;
+  const file = $('database-restore-file').files[0];
+  pending = { id: project.id, action: 'database-restore' };
+  $('database-restore-submit').disabled = true;
+  $('database-restore-file').disabled = true;
+  $('database-restore-cancel').disabled = true;
+  showMessage($('database-restore-preview'), approval ? 'Restoring database…' : 'Verifying backup in isolation…');
+  render();
+  try {
+    const response = await archiveRequest(project, approval ? 'restore' : 'preview', binding, file, approval);
+    const result = await response.json();
+    if (approval) {
+      $('database-restore-dialog').close();
+      if (binding) showMessage($('database-resource-message'), 'Database restored and verified.');
+      else transferMessage = { id: project.id, message: 'Database restored and verified.' };
+      if (binding && databaseDiscovery) databaseDiscovery.resourceStatus = undefined;
+    } else {
+      restoring.approval = result;
+      $('database-restore-preview').textContent = [
+        result.name, `${discoveredEngines[result.metadata.engine]} ${result.metadata.version}`,
+        translate(result.limited ? '{count}+ objects verified in isolation' : '{count} objects verified in isolation').replace('{count}', result.objects),
+        ...(result.metadata.legacy ? [translate('Checksum calculated for this older backup')] : []),
+        `SHA-256 ${result.metadata.checksum}`
+      ].join(' · ');
+      $('database-restore-expected').textContent = result.name;
+      $('database-restore-name').value = '';
+      $('database-restore-name').required = true;
+      $('database-restore-confirm-field').hidden = false;
+      setText($('database-restore-submit'), 'Restore backup');
+      $('database-restore-name').focus();
+    }
+  } catch (error) { showMessage($('database-restore-preview'), error.message); }
+  finally {
+    pending = undefined;
+    $('database-restore-file').disabled = false;
+    $('database-restore-cancel').disabled = false;
+    $('database-restore-submit').disabled = !validRestore();
+    render();
+    refresh();
+  }
 });
 $('database-restore-cancel').addEventListener('click', () => $('database-restore-dialog').close());
 $('database-delete').addEventListener('click', async () => {
