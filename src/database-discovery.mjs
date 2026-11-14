@@ -15,6 +15,7 @@ const engines = Object.assign(Object.create(null), { postgres: 'postgres', postg
 const ports = { postgres: 5432, mysql: 3306, sqlserver: 1433, mongodb: 27017, redis: 6379 };
 const composeFiles = ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'];
 const envFiles = ['.env', '.env.local', '.env.example'];
+const prismaConfigs = ['ts', 'js', 'mts', 'mjs', 'cts', 'cjs'].flatMap(ext => [`prisma.config.${ext}`, `.config/prisma.${ext}`]);
 const connectionKey = /^(?:[A-Z0-9]+_)*(?:DATABASE_URL|DIRECT_URL|DB_URL|REDIS_URL)$/i;
 const placeholder = /(?:\$\{|\{\{|<[^>]+>|\b(?:changeme|placeholder|replace[_-]?(?:me|with)|your[_-](?:host|database|db|password)|example\.com)\b)/i;
 const clean = value => String(value ?? '').trim().replace(/^(['"])(.*)\1$/, '$2');
@@ -60,6 +61,23 @@ function sqlitePath(value, directory) {
 async function projectText(folder, file) {
   const path = join(folder, file);
   return await realpath(path).catch(() => '') === path ? localText(folder, file) : '';
+}
+
+async function prismaConnection(folder, files, runtimeEnv) {
+  if (!files.some(file => /^prisma\.config\./.test(file)) && !await lstat(join(folder, '.config')).then(info => info.isDirectory(), () => false)) return;
+  const sources = (await Promise.all(prismaConfigs.map(async file => ({ file, text: await projectText(folder, file) }))))
+    .filter(source => source.text.trim());
+  if (sources.length !== 1) return;
+  const { file, text } = sources[0];
+  if (!/\bexport\s+default\s+(?:defineConfig\s*\(\s*)?\{/.test(text)) return;
+  const schema = /\bschema\s*:\s*(['"])([\w./-]+)\1\s*[,}]/.exec(text)?.[2];
+  if (/\bschema\s*:/.test(text) && !schema) return;
+  const datasource = /\bdatasource\s*:\s*\{([^{}]*)\}/.exec(text)?.[1] ?? '';
+  const reference = /(?:^|,)\s*url\s*:\s*(?:env\s*\(\s*(['"])([A-Z_][A-Z0-9_]*)\1\s*\)|process\.env\.([A-Z_][A-Z0-9_]*))\s*(?:,|$)/.exec(datasource);
+  const variable = reference?.[2] ?? reference?.[3];
+  if (!variable) return;
+  const schemaPath = schema && relative(folder, resolve(folder, file.startsWith('.config/') ? '.config' : '.', schema)).split(sep).join('/');
+  return { file, schema: schemaPath, variable, value: Object.hasOwn(runtimeEnv, variable) ? runtimeEnv[variable] : undefined };
 }
 
 async function boundedFiles(folder) {
@@ -126,6 +144,7 @@ export async function discoverDatabases(project) {
       }
     }
     const prisma = ['prisma/schema.prisma', 'schema.prisma'];
+    const prismaConfig = await prismaConnection(folder, files, runtimeEnv);
     const configs = [...files.filter(file => /^(?:application(?:-[\w-]+)?\.(?:properties|ya?ml)|appsettings(?:\.[\w-]+)?\.json|settings\.py|database\.ya?ml|requirements\.txt|pyproject\.toml|Gemfile)$/i.test(file)).slice(0, 20),
       'src/main/resources/application.properties', 'src/main/resources/application.yml', 'src/main/resources/application.yaml', 'config/database.yml'];
     await Promise.all([...prisma, ...new Set(configs)].map(async file => {
@@ -139,6 +158,9 @@ export async function discoverDatabases(project) {
           const result = value || variable ? connection(value, engine) : { engine, status: 'declared' };
           if (result.path && !isAbsolute(result.path)) result.path = file.slice(0, -'schema.prisma'.length) + result.path;
           add(directory, file, key, { ...result, orm: 'Prisma' });
+          if (!value && !variable && prismaConfig && (prismaConfig.schema ?? prisma[0]) === file && ['postgres', 'mysql', 'sqlserver', 'mongodb'].includes(engine)) {
+            add(directory, prismaConfig.file, prismaConfig.variable, { ...connection(prismaConfig.value, engine), orm: 'Prisma', environmentVariable: prismaConfig.variable });
+          }
         }
       } else {
         if (/^appsettings(?:\.[\w-]+)?\.json$/i.test(file)) {

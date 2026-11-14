@@ -39,6 +39,9 @@ test('runtime diagnostics and legacy task logs translate while retaining names, 
   assert.equal(translate('解析技术栈与依赖版本\nadded 42 packages\nC:\\开发\\my-app'), 'Resolving stack and dependency versions\nadded 42 packages\nC:\\开发\\my-app');
   assert.equal(translate('下载失败（HTTP 503）：registry.npmjs.org'), 'Download failed (HTTP 503): registry.npmjs.org');
   assert.equal(translate('octocat/demo 已存在'), 'octocat/demo already exists');
+  assert.equal(translate('Declared dependency', 'zh-CN'), '声明的依赖');
+  assert.equal(translate('Environment variable DATABASE_URL is missing', 'zh-CN'), '缺少环境变量 DATABASE_URL');
+  assert.equal(translate('PostgreSQL · localhost:5432/portal · 共享数据库'), 'PostgreSQL · localhost:5432/portal · Shared database');
 });
 
 test('generated documentation, starter code and development messages are English', () => {

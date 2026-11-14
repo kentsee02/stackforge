@@ -579,17 +579,30 @@ async function loadDatabaseDiscovery() {
       const binding = sources.get(item.id);
       const target = [item.host && `${item.host}:${item.port}`, item.name, item.path].filter(Boolean).join(' / ');
       const verification = binding?.instance.verification?.status;
-      const status = translate(verification === 'connected' ? 'Connection previously verified' :
-        verification === 'missing' ? 'Database is missing' : discoveryStates[item.status] ?? 'Declared dependency');
-      row.textContent = [discoveredEngines[item.engine], item.source, target, status, binding?.shared ? translate('Shared database') : ''].filter(Boolean).join(' · ');
+      const status = verification === 'connected' ? 'Connection previously verified' : verification === 'missing' ? 'Database is missing' :
+        item.status === 'missing' && item.environmentVariable ? `Environment variable ${item.environmentVariable} is missing` :
+        discoveryStates[item.status] ?? 'Declared dependency';
+      row.append([discoveredEngines[item.engine], item.source, target].filter(Boolean).join(' · '), ' · ');
+      const label = document.createElement('span');
+      setText(label, status);
+      row.append(label);
+      if (binding?.shared) {
+        const shared = document.createElement('span');
+        setText(shared, 'Shared database');
+        row.append(' · ', shared);
+      }
       return row;
     });
     $('database-requirements').replaceChildren(...requirements);
     const local = [...new Map(data.bindings.filter(item => item.instance.provider === 'local' &&
       ['postgres', 'mysql'].includes(item.instance.engine)).map(item => [item.instanceId, item])).values()];
     const select = $('database-binding');
-    select.replaceChildren(...local.map(({ id, server, instance, shared }) => new Option(
-      [discoveredEngines[instance.engine], `${server.host}:${server.port}/${instance.name}`, shared ? translate('Shared database') : ''].filter(Boolean).join(' · '), id)));
+    select.replaceChildren(...local.map(({ id, server, instance, shared }) => {
+      const label = `${discoveredEngines[instance.engine]} · ${server.host}:${server.port}/${instance.name}`;
+      const option = new Option(label, id);
+      if (shared) setText(option, `${label} · Shared database`);
+      return option;
+    }));
     $('database-local-form').hidden = !local.length;
     const managed = [...new Map(data.bindings.filter(item => item.instance.provider === 'sqlite' ||
       item.instance.provider === 'remote' && ['postgres', 'mysql'].includes(item.instance.engine))

@@ -7,6 +7,30 @@ import { join } from 'node:path';
 import { createApp } from '../src/server.mjs';
 import { localInstallation } from '../src/database-local.mjs';
 import { ProjectOperations } from '../src/project-operations.mjs';
+import { discoverDatabases } from '../src/database-discovery.mjs';
+
+test('Prisma config reports its missing environment variable and discovers a configured target without running code', async t => {
+  const path = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-prisma-config-')));
+  t.after(() => rm(path, { recursive: true, force: true }));
+  await mkdir(join(path, 'prisma'));
+  await writeFile(join(path, 'package.json'), JSON.stringify({ dependencies: { pg: '8.0.0' } }));
+  await writeFile(join(path, 'prisma', 'schema.prisma'), 'datasource db { provider = "postgresql" }');
+  await writeFile(join(path, 'prisma.config.ts'), `import { defineConfig, env } from 'prisma/config';
+    throw new Error('discovery must not run this file');
+    export default defineConfig({ schema: 'prisma/schema.prisma', datasource: { url: env('DATABASE_URL') } });`);
+  const scan = () => discoverDatabases({ id: 'prisma-config', path });
+  const status = requirements => requirements.map(({ source, status, environmentVariable }) => [source, status, environmentVariable]);
+  assert.deepEqual(status((await scan()).requirements), [
+    ['package.json', 'declared', undefined],
+    ['prisma.config.ts', 'missing', 'DATABASE_URL'],
+    ['prisma/schema.prisma', 'declared', undefined]
+  ]);
+  await writeFile(join(path, '.env'), 'DATABASE_URL=postgresql://operator:prisma-test-secret@localhost:5432/portal');
+  const { requirements } = await scan();
+  const configured = requirements.find(item => item.source === 'prisma.config.ts');
+  assert.deepEqual([configured.status, configured.host, configured.port, configured.name], ['configured', 'localhost', 5432, 'portal']);
+  assert.doesNotMatch(JSON.stringify(requirements), /prisma-test-secret/);
+});
 
 test('import and clone discover multiple databases, preserve shared bindings on relocation and initialize only reviewed plans', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-db-p1-')));
