@@ -65,6 +65,7 @@
           </div>
           <p id="runtime-error" class="runtime-error" role="status" hidden></p>
           <p id="runtime-diagnostic" class="runtime-diagnostic" role="status" hidden></p>
+          <button id="runtime-database-config" class="text-button" type="button" data-i18n="查看数据库配置" hidden>Review database configuration</button>
           <section id="project-dependencies" class="project-operation" aria-labelledby="project-dependencies-title">
             <div class="project-operation-heading"><h3 id="project-dependencies-title" data-i18n="依赖安装">Dependencies</h3><span id="dependency-status" class="small" role="status"></span></div>
             <div id="dependency-plan" hidden>
@@ -281,6 +282,22 @@
       <div class="project-trash-actions">
         <button type="button" id="database-restore-cancel" class="secondary" data-i18n="返回">Go back</button>
         <button type="submit" id="database-restore-submit" class="secondary" data-i18n="预览恢复" disabled>Preview restore</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="database-connection-dialog" class="project-trash-dialog" aria-labelledby="database-connection-title" aria-describedby="database-connection-target">
+    <h2 id="database-connection-title" data-i18n="配置数据库连接">Configure database connection</h2>
+    <p id="database-connection-target"></p>
+    <form id="database-connection-form" method="dialog" autocomplete="off">
+      <label class="inline-field project-trash-field" for="database-connection-url">
+        <span data-i18n="数据库连接地址">Database connection URL</span>
+        <input id="database-connection-url" class="database-connection-input" type="password" inputmode="url" autocomplete="new-password" autocapitalize="none" spellcheck="false" maxlength="4096" aria-describedby="database-connection-help" required>
+      </label>
+      <p id="database-connection-help" class="hint" data-i18n="粘贴数据库供应商提供的连接地址，或输入本机数据库地址。保存后可检查目标并预览初始化。">Paste the URL from your database provider or enter your local connection URL. After saving, you can check the target and preview initialization.</p>
+      <p id="database-connection-message" class="hint" role="status"></p>
+      <div class="project-trash-actions">
+        <button type="button" id="database-connection-cancel" class="secondary" data-i18n="返回">Go back</button>
+        <button type="submit" id="database-connection-save" class="secondary" data-i18n="保存并重新扫描">Save and rescan</button>
       </div>
     </form>
   </dialog>

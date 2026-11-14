@@ -39,6 +39,7 @@ let displayedStartupSuggestions;
 let dependencyPlanView;
 let databaseView;
 let databaseDiscovery;
+let configuringDatabase;
 let toolsView;
 let timer;
 let revision = 0;
@@ -526,6 +527,16 @@ function resetInitialization() {
   if (databaseDiscovery) databaseDiscovery.plan = undefined;
 }
 
+function openDatabaseConnection(projectId, requirement) {
+  if (pending || databaseDiscovery?.id !== projectId || databaseDiscovery.working) return;
+  configuringDatabase = { projectId, requirement };
+  const file = requirement.directory === '.' ? '.env' : `${requirement.directory}/.env`;
+  setText($('database-connection-target'), `Save ${requirement.environmentVariable} in ${file}`);
+  $('database-connection-form').reset();
+  showMessage($('database-connection-message'), '');
+  $('database-connection-dialog').showModal();
+}
+
 function renderDatabaseDiscovery(project, busy) {
   if (databaseDiscovery?.id !== project.id) {
     databaseDiscovery = { id: project.id };
@@ -543,6 +554,7 @@ function renderDatabaseDiscovery(project, busy) {
     if ($('project-database-discovery').open) void loadDatabaseDiscovery();
   }
   const locked = busy || Boolean(databaseDiscovery.working);
+  for (const button of $('database-requirements').querySelectorAll('button')) button.disabled = locked || ['starting', 'running', 'stopping'].includes(project.status);
   for (const control of ['database-local-check', 'database-local-preview', 'database-discovery-refresh']) $(control).disabled = locked;
   $('database-initialize-submit').disabled = locked || $('database-initialize-name').value !== databaseDiscovery.plan?.name;
   const binding = resourceBinding();
@@ -563,7 +575,7 @@ function renderDatabaseDiscovery(project, busy) {
   $('database-sqlite-confirm-submit').disabled = locked || $('database-sqlite-path').value !== binding?.instance.path;
 }
 
-async function loadDatabaseDiscovery() {
+async function loadDatabaseDiscovery(savedRequirementId) {
   const view = databaseDiscovery;
   if (!view || view.working) return;
   view.working = true;
@@ -591,6 +603,14 @@ async function loadDatabaseDiscovery() {
         setText(shared, 'Shared database');
         row.append(' · ', shared);
       }
+      if (item.status === 'missing' && item.environmentVariable && ['postgres', 'mysql'].includes(item.engine)) {
+        const action = document.createElement('button');
+        action.type = 'button';
+        action.className = 'text-button database-connection-action';
+        setText(action, 'Configure database connection');
+        action.addEventListener('click', () => openDatabaseConnection(view.id, item));
+        row.append(action);
+      }
       return row;
     });
     $('database-requirements').replaceChildren(...requirements);
@@ -603,6 +623,10 @@ async function loadDatabaseDiscovery() {
       if (shared) setText(option, `${label} · Shared database`);
       return option;
     }));
+    const saved = sources.get(savedRequirementId);
+    const matchingTarget = entries => entries.find(item => item.instanceId === saved?.instanceId)?.id;
+    const localTarget = matchingTarget(local);
+    if (localTarget) select.value = localTarget;
     $('database-local-form').hidden = !local.length;
     const managed = [...new Map(data.bindings.filter(item => item.instance.provider === 'sqlite' ||
       item.instance.provider === 'remote' && ['postgres', 'mysql'].includes(item.instance.engine))
@@ -611,10 +635,14 @@ async function loadDatabaseDiscovery() {
     const previous = targets.value;
     targets.replaceChildren(...managed.map(item => new Option(item.instance.path ??
       `${discoveredEngines[item.instance.engine]} · ${item.server.host}:${item.server.port}/${item.instance.name}`, item.id)));
-    if (managed.some(item => item.id === previous)) targets.value = previous;
+    const remoteTarget = matchingTarget(managed);
+    if (remoteTarget) targets.value = remoteTarget;
+    else if (managed.some(item => item.id === previous)) targets.value = previous;
     $('database-resources').hidden = !managed.length;
     if (targets.value !== previous) resetResource();
-    showMessage($('database-discovery-message'), data.limited ? 'The scan reached its file limit.' :
+    showMessage($('database-discovery-message'), localTarget ? 'Database connection saved. Check the target or preview initialization below.' :
+      remoteTarget ? 'Database connection saved. Configure the remote connection below.' :
+      savedRequirementId ? 'Database connection saved.' : data.limited ? 'The scan reached its file limit.' :
       requirements.length ? '' : 'No database configuration was detected.');
   } catch (error) {
     if (view === databaseDiscovery) showMessage($('database-discovery-message'), error.message);
@@ -943,6 +971,7 @@ function render() {
   const diagnosticField = $('runtime-diagnostic');
   showMessage(diagnosticField, diagnostic);
   diagnosticField.hidden = !diagnostic;
+  $('runtime-database-config').hidden = issue !== 'databaseUrl';
   $('project-delete').disabled = busy || unavailable;
   $('project-remove').hidden = !project.imported || !removesFiles(project);
   $('project-remove').disabled = busy || unavailable;
@@ -1171,7 +1200,44 @@ $('project-database-discovery').addEventListener('toggle', event => {
   if (event.currentTarget.open) void loadDatabaseDiscovery();
   else { $('database-local-password').value = ''; $('database-remote-password').value = ''; resetInitialization(); }
 });
-$('database-discovery-refresh').addEventListener('click', loadDatabaseDiscovery);
+$('database-discovery-refresh').addEventListener('click', () => loadDatabaseDiscovery());
+$('runtime-database-config').addEventListener('click', () => {
+  const discovery = $('project-database-discovery');
+  discovery.open = true;
+  discovery.scrollIntoView({ block: 'start' });
+  discovery.querySelector('summary').focus({ preventScroll: true });
+});
+$('database-connection-cancel').addEventListener('click', () => $('database-connection-dialog').close());
+$('database-connection-dialog').addEventListener('cancel', event => {
+  if (pending?.action === 'database-connection-config') event.preventDefault();
+});
+$('database-connection-dialog').addEventListener('close', () => {
+  $('database-connection-form').reset();
+  configuringDatabase = undefined;
+});
+$('database-connection-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!configuringDatabase || pending) return;
+  const { projectId, requirement } = configuringDatabase;
+  const url = $('database-connection-url');
+  pending = { id: projectId, action: 'database-connection-config' };
+  for (const id of ['database-connection-save', 'database-connection-cancel', 'database-connection-url']) $(id).disabled = true;
+  showMessage($('database-connection-message'), 'Saving database connection…');
+  render();
+  try {
+    const { token } = await request('/api/state');
+    await post(`/api/projects/${projectId}/database-connection-config`, token, { requirementId: requirement.id, value: url.value }, 30_000);
+    $('database-connection-dialog').close();
+    if (databaseDiscovery?.id === projectId) await loadDatabaseDiscovery(requirement.id);
+  } catch (error) { showMessage($('database-connection-message'), error.message); }
+  finally {
+    url.value = '';
+    for (const id of ['database-connection-save', 'database-connection-cancel', 'database-connection-url']) $(id).disabled = false;
+    if ($('database-connection-dialog').open) url.focus();
+    pending = undefined;
+    render();
+  }
+});
 $('database-local-check').addEventListener('click', () => localDatabaseAction('database-local-check'));
 $('database-local-form').addEventListener('input', resetInitialization);
 $('database-local-form').addEventListener('submit', event => {

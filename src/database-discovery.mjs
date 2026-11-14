@@ -47,6 +47,16 @@ function connection(value, fallback, template) {
   return { engine, status: 'ambiguous' };
 }
 
+export function databaseConnectionValue(value, engine) {
+  if (typeof value !== 'string' || value.length > 4096) return;
+  const url = value.trim();
+  if (!/^(?:postgres(?:ql)?|mysql):\/\//i.test(url) || /[\s\u0000-\u001f\u007f'"$#]/.test(url)) return;
+  const target = connection(url);
+  if (target.engine !== engine || target.status !== 'configured' || !target.name) return;
+  const options = [...new URL(url).searchParams.keys()].map(key => key.toLowerCase());
+  if (!options.some(key => ['host', 'hostaddr', 'port', 'dbname', 'database', 'service'].includes(key))) return url;
+}
+
 function sqlitePath(value, directory) {
   if (!value || value === ':memory:' || isAbsolute(value) || /[?:#<>\u0000-\u001f]/u.test(value)) return;
   const parts = pathLabel(directory, value.replaceAll('\\', '/')).split('/');
@@ -157,7 +167,7 @@ export async function discoverDatabases(project) {
           const value = variable ? runtimeEnv[variable] : /\burl\s*=\s*["']([^"']+)["']/.exec(block)?.[1];
           const result = value || variable ? connection(value, engine) : { engine, status: 'declared' };
           if (result.path && !isAbsolute(result.path)) result.path = file.slice(0, -'schema.prisma'.length) + result.path;
-          add(directory, file, key, { ...result, orm: 'Prisma' });
+          add(directory, file, key, { ...result, orm: 'Prisma', ...(variable && { environmentVariable: variable }) });
           if (!value && !variable && prismaConfig && (prismaConfig.schema ?? prisma[0]) === file && ['postgres', 'mysql', 'sqlserver', 'mongodb'].includes(engine)) {
             add(directory, prismaConfig.file, prismaConfig.variable, { ...connection(prismaConfig.value, engine), orm: 'Prisma', environmentVariable: prismaConfig.variable });
           }

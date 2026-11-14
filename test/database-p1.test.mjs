@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../src/server.mjs';
 import { localInstallation } from '../src/database-local.mjs';
 import { ProjectOperations } from '../src/project-operations.mjs';
 import { discoverDatabases } from '../src/database-discovery.mjs';
+import { run } from '../src/process.mjs';
 
 test('Prisma config reports its missing environment variable and discovers a configured target without running code', async t => {
   const path = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-prisma-config-')));
@@ -30,6 +31,59 @@ test('Prisma config reports its missing environment variable and discovers a con
   const configured = requirements.find(item => item.source === 'prisma.config.ts');
   assert.deepEqual([configured.status, configured.host, configured.port, configured.name], ['configured', 'localhost', 5432, 'portal']);
   assert.doesNotMatch(JSON.stringify(requirements), /prisma-test-secret/);
+});
+
+test('database connection setup writes only a missing variable to an ignored environment file and rescans it safely', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-database-env-')));
+  const path = join(root, 'game-portal');
+  await mkdir(join(path, 'prisma'), { recursive: true });
+  await writeFile(join(path, 'prisma', 'schema.prisma'), 'datasource db { provider = "postgresql" }');
+  await writeFile(join(path, 'prisma.config.ts'), 'export default defineConfig({ datasource: { url: env("DATABASE_URL") } });');
+  const git = args => run('git', args, { cwd: path });
+  await git(['init', '--quiet']);
+  const app = createApp({ stateDir: join(root, 'state', 'jobs') }).listen(0, '127.0.0.1');
+  t.after(async () => {
+    await app.shutdownTasks();
+    await new Promise(done => app.close(done));
+    await rm(root, { recursive: true, force: true });
+  });
+  await once(app, 'listening');
+  const base = 'http://127.0.0.1:' + app.address().port;
+  const { token } = await (await fetch(base + '/api/state')).json();
+  const post = (route, data, key = token) => fetch(base + route, { method: 'POST', headers: {
+    'Content-Type': 'application/json', 'X-StackForge-Token': key
+  }, body: JSON.stringify(data) });
+  const { id } = await (await post('/api/projects/import', { path })).json();
+  const route = `/api/projects/${id}`;
+  const scan = () => fetch(base + route + '/database-discovery').then(response => response.json());
+  const { id: requirementId } = (await scan()).requirements.find(item => item.environmentVariable === 'DATABASE_URL');
+  const value = 'postgresql://operator:connection-test-secret@localhost:5432/portal?schema=public';
+  const save = (body = {}, key = token) => post(route + '/database-connection-config', { requirementId, value, ...body }, key);
+  const file = join(path, '.env');
+  assert.equal((await save({}, 'bad-token')).status, 403);
+  assert.equal((await save({ value: 'mysql://localhost/portal' })).status, 409);
+  assert.equal((await save({ value: value + '\nEXTRA=yes' })).status, 409);
+  assert.equal((await save({ requirementId: 'another-target' })).status, 409);
+  assert.equal((await save()).status, 409);
+  await writeFile(join(path, '.gitignore'), '.env\n');
+  const unrelated = '# Local settings\r\nAPP_NAME=Game Portal';
+  await writeFile(file, unrelated);
+  await git(['add', '-f', '.env']);
+  assert.equal((await save()).status, 409);
+  await git(['rm', '--cached', '-f', '.env']);
+  const outside = join(root, 'external.env');
+  await rename(file, outside);
+  await link(outside, file);
+  assert.equal((await save()).status, 409);
+  assert.equal(await readFile(outside, 'utf8'), unrelated);
+  await rm(file);
+  await rename(outside, file);
+  assert.deepEqual(await (await save()).json(), { saved: true, file: '.env' });
+  assert.equal(await readFile(file, 'utf8'), unrelated + `\r\nDATABASE_URL="${value}"\r\n`);
+  const result = await scan();
+  assert.ok(result.bindings.some(item => item.requirementId === requirementId && item.instance.name === 'portal' && item.instance.provider === 'local'));
+  assert.doesNotMatch(JSON.stringify(result), /connection-test-secret/);
+  assert.equal((await save()).status, 409);
 });
 
 test('import and clone discover multiple databases, preserve shared bindings on relocation and initialize only reviewed plans', async t => {

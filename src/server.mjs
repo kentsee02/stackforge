@@ -34,6 +34,7 @@ import { discoverDatabases } from './database-discovery.mjs';
 import { DatabaseRegistry } from './database-registry.mjs';
 import { localInstallation, validateLocalTarget } from './database-local.mjs';
 import { executeInitialization, initializationPlan, publicInitializationPlan } from './database-initialization.mjs';
+import { saveDatabaseEnvironment } from './database-environment.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const identity = { application: 'stackforge-local', version: metadata.version, project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
@@ -376,7 +377,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         } finally { transfer = undefined; }
         return;
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|database-remote-profile|database-sqlite-inspect|database-sqlite-create|run-check|check-cancel|check-config)$/.exec(url.pathname);
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|database-connection-config|database-remote-profile|database-sqlite-inspect|database-sqlite-create|run-check|check-cancel|check-config)$/.exec(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
@@ -435,16 +436,20 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const [, id, action] = projectAction;
           const project = managedProjects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
-          if (['database-remote-profile', 'database-sqlite-inspect', 'database-sqlite-create'].includes(action)) {
+          if (['database-connection-config', 'database-remote-profile', 'database-sqlite-inspect', 'database-sqlite-create'].includes(action)) {
             if (databaseWrites.size || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
               return send(res, 409, { error: 'Wait for the current project operation to finish.' });
             }
             if (action === 'database-sqlite-create' && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
               return send(res, 409, { error: 'Stop the project before initializing its database.' });
             }
+            if (action === 'database-connection-config' && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
+              return send(res, 409, { error: 'Stop the project before saving its database connection.' });
+            }
             const controller = new AbortController();
             res.once('close', () => { if (!res.writableFinished) controller.abort(); });
             const done = (async () => {
+              if (action === 'database-connection-config') return saveDatabaseEnvironment(project, payload, controller.signal);
               const binding = await resourceBinding(project, payload.bindingId, action === 'database-remote-profile' ? 'remote' : 'sqlite');
               if (action === 'database-remote-profile') return resources.profile(project, binding, payload, controller.signal);
               if (action === 'database-sqlite-inspect') return resources.inspectSqlite(project, binding, controller.signal);
