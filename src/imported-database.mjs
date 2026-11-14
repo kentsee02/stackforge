@@ -112,12 +112,15 @@ export async function inspectImportedDatabase(project, command, signal) {
   else if (container) throw new Error(notOwned);
   await resolveStartup(project, [], identity);
 
-  return { engine, container, config, environment: spec.environment, async start(options) {
+  const verifyStartup = async () => {
     await verifyComposeDatabaseStartup(spec, engine, model, cwd);
+    if (container && !['running', 'starting', 'unhealthy'].includes(container.status)) await verifyExistingDatabaseStartup(docker, container.id, engine);
+    await resolveStartup(project, [], identity);
+  };
+  return { engine, container, config, environment: spec.environment, verifyStartup, async start(options) {
+    await verifyStartup();
     if (container) {
       if (!['running', 'starting', 'unhealthy'].includes(container.status)) {
-        await verifyExistingDatabaseStartup(docker, container.id, engine);
-        await resolveStartup(project, [], identity);
         await command('docker', ['container', 'start', container.id], { ...config, ...options });
       }
       return;

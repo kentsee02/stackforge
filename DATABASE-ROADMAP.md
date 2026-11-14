@@ -12,11 +12,13 @@ This checklist tracks the proposed Database Architecture Specification against S
 
 ## P1 · Discovery, bindings and explicit initialization
 
-- [ ] Use one read-only database discovery pipeline for local imports and clones. Record non-secret findings from Compose, environment templates, framework configuration, ORM declarations, and SQLite paths. Distinguish missing values, placeholders, ambiguous targets, and verified connections.
-- [ ] Add separate requirement, server, instance and project binding records. Support multiple databases per project and shared databases. Preserve registration identity during a verified path change and migrate existing Docker settings.
-- [ ] Separate ownership from per-operation permissions. Derive enabled actions from verified capabilities. Block shared or unverified deletion and track database operation outcomes with sanitized errors.
-- [ ] Detect local PostgreSQL and MySQL installations, service status, version and connection permissions on Windows and Linux. Provide setup guidance when an installation is missing.
-- [ ] Add explicit, reviewable initialization plans for missing databases and empty schemas. Check existing data, permissions, and target identity before executing. Track migrations separately and verify final schema readiness.
+- [x] Use one read-only database discovery pipeline for local imports and clones. Record non-secret findings from Compose, environment templates, framework configuration, ORM declarations, and SQLite paths. Distinguish missing values, placeholders, ambiguous targets, and verified connections.
+- [x] Add separate requirement, server, instance and project binding records. Support multiple databases per project and shared databases. Preserve registration identity during a verified path change and migrate existing Docker settings.
+- [x] Separate ownership from per-operation permissions. Derive enabled actions from verified capabilities. Block shared or unverified deletion and track database operation outcomes with sanitized errors.
+- [x] Detect local PostgreSQL and MySQL installations, service status, version and connection permissions on Windows and Linux. Provide setup guidance when an installation is missing.
+- [x] Add explicit, reviewable initialization plans for missing databases and empty schemas. Check existing data, permissions, and target identity before executing. Track migrations separately and verify final schema readiness.
+
+P1 initialization applies to loopback PostgreSQL and MySQL targets with verified server identity. Automatic migration accepts reviewed CREATE TABLE statements under `database/migrations`. The discovery scan uses bounded static analysis, so dynamic configuration can remain ambiguous.
 
 ## P2 · Additional adapters and backup verification
 

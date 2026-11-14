@@ -13,7 +13,7 @@
   <a class="skip-link" href="#main" data-i18n="跳到主要内容">Skip to content</a>
   <aside class="sidebar">
     <a class="brand" href="/" aria-label="StackForge home" data-i18n-aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
-    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.28</span></div>
+    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v0.29</span></div>
     <a class="side-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a>
     <a class="side-link" href="/#activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg><span data-i18n="任务记录">Task history</span></a>
     <a class="side-active projects-nav" href="/projects" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2h7v2"/></svg><span data-i18n="项目管理">Projects</span></a>
@@ -141,6 +141,31 @@
             <p id="runtime-log-empty" data-i18n="启动项目后，输出会显示在这里。">Output will appear here after you start the project.</p>
             <pre id="runtime-output" aria-labelledby="runtime-log-title" tabindex="0" hidden></pre>
           </div>
+          <details id="project-database-discovery" class="project-ports">
+            <summary data-i18n="数据库发现与初始化">Database discovery and initialization</summary>
+            <p id="database-discovery-message" class="hint" role="status"></p>
+            <ul id="database-requirements" class="check-list"></ul>
+            <button id="database-discovery-refresh" type="button" class="secondary" data-i18n="重新扫描数据库配置">Rescan database configuration</button>
+            <form id="database-local-form" hidden>
+              <label class="inline-field" for="database-binding"><span data-i18n="本机数据库目标">Local database target</span><select id="database-binding"></select></label>
+              <button id="database-local-check" type="button" class="secondary" data-i18n="检查本机数据库">Check local database</button>
+              <p id="database-local-status" class="hint" role="status"></p>
+              <a id="database-local-help" target="_blank" rel="noopener noreferrer" hidden data-i18n="查看数据库安装说明">Database installation guide</a>
+              <label class="inline-field" for="database-local-user"><span data-i18n="数据库用户">Database user</span><input id="database-local-user" type="text" autocomplete="off" maxlength="63" required></label>
+              <label class="inline-field" for="database-local-password"><span data-i18n="数据库密码">Database password</span><input id="database-local-password" type="password" autocomplete="off" maxlength="1024"></label>
+              <label><input id="database-local-schema" type="checkbox"> <span data-i18n="预览 database/migrations 中的建表脚本">Preview table creation from database/migrations</span></label>
+              <div class="project-operation-actions"><button id="database-local-preview" type="submit" class="secondary" data-i18n="预览初始化">Preview initialization</button></div>
+            </form>
+            <div id="database-initialization-plan" hidden>
+              <p id="database-initialization-summary" class="hint" role="status"></p>
+              <ul id="database-migration-preview"></ul>
+              <form id="database-initialize-form" hidden>
+                <label class="inline-field" for="database-initialize-name"><span data-i18n="输入完整库名以确认初始化。">Type the exact database name to confirm initialization.</span><strong id="database-initialize-expected"></strong><input id="database-initialize-name" type="text" autocomplete="off" required></label>
+                <button id="database-initialize-submit" type="submit" class="secondary" disabled data-i18n="初始化数据库">Initialize database</button>
+              </form>
+            </div>
+            <p id="database-initialization-message" class="hint" role="status"></p>
+          </details>
           <details id="project-database" class="project-ports" hidden>
             <summary data-i18n="数据库管理">Database controls</summary>
             <div class="project-operation-heading"><strong id="database-engine"></strong><span id="database-status" class="small" role="status"></span></div>

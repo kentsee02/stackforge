@@ -18,7 +18,7 @@ import { ProjectConfig, defaultPorts, validatePorts, importedProject, projectPat
 import { ProjectOperations } from './project-operations.mjs';
 import { cloneGithub, verifyClone } from './project-clone.mjs';
 import { detectFrameworks } from './project-services.mjs';
-import { directoryIdentity } from './project-identity.mjs';
+import { directoryIdentity, sameDirectory } from './project-identity.mjs';
 import { resolveStartup, validateCustomChecks, validateStartup } from './project-startup.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
 import { detectStartupSuggestions } from './startup-suggestions.mjs';
@@ -27,6 +27,10 @@ import { databaseRedactor } from './database-secrets.mjs';
 import { databaseOperationLog } from './database-operation-log.mjs';
 import { databaseDockerEnvironment } from './database-compose.mjs';
 import { hasImportedCompose } from './imported-database.mjs';
+import { discoverDatabases } from './database-discovery.mjs';
+import { DatabaseRegistry } from './database-registry.mjs';
+import { localInstallation, validateLocalTarget } from './database-local.mjs';
+import { executeInitialization, initializationPlan, publicInitializationPlan } from './database-initialization.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const identity = { application: 'stackforge-local', version: metadata.version, project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
@@ -51,27 +55,88 @@ function projectDetails(project) {
       hasInstallCommands: Boolean(startup?.services.some(service => service.installCommand)) }) };
 }
 
-export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations() } = {}) {
+export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations(), localDatabase = {} } = {}) {
   const token = randomBytes(32).toString('hex');
   const redactDatabase = databaseRedactor(process.env);
   const jobs = new Jobs({ directory: stateDir, generate, check, publish });
   const settings = new Settings(settingsFile);
   const projectConfig = new ProjectConfig(stateDir ? join(dirname(stateDir), 'projects.json') : false);
   const databaseLog = databaseOperationLog(stateDir ? join(dirname(stateDir), 'database-operations.jsonl') : false);
+  const databaseRegistry = new DatabaseRegistry(stateDir ? join(dirname(stateDir), 'databases.json') : undefined);
   const removals = new Map();
   const configWrites = new Map();
+  const databaseWrites = new Map();
   let cloneTask, transfer;
   let closing = false;
   function managedProjects() {
-    const created = jobs.projects();
+    const created = jobs.projects().map(project => ({ ...project, path: projectConfig.value.locations[project.id] ?? project.path }));
     const paths = new Set(created.map(project => projectPathKey(project.path)));
     return [...projectConfig.value.imports.filter(project => !paths.has(projectPathKey(project.path))), ...created];
   }
+  async function scanDatabases(project, discovery) {
+    const { requirements, limited } = discovery ?? await discoverDatabases(project);
+    await databaseRegistry.sync(project, requirements, projectConfig.ports(project).database ?? defaultPorts(project).database);
+    return { ...databaseRegistry.view(project), limited };
+  }
+
+  async function refreshDatabaseBindings(except, strict = false) {
+    for (const other of managedProjects().filter(item => item.id !== except)) {
+      if (!await locationExists(other.path)) continue;
+      try {
+        const scan = await scanDatabases(other);
+        if (strict && scan.limited) throw new Error();
+      } catch {
+        if (strict) throw new Error('StackForge could not verify whether another project uses this database.');
+      }
+    }
+  }
+
+  async function localDatabaseTarget(project, bindingId) {
+    const { bindings } = await scanDatabases(project);
+    const binding = bindings.find(item => item.id === bindingId);
+    const target = validateLocalTarget(binding?.server, binding?.instance);
+    return { binding, target };
+  }
+
+  async function verifyDatabaseDeletion(project, volumeTarget) {
+    await scanDatabases(project);
+    if (volumeTarget.endpoints?.length) {
+      await refreshDatabaseBindings(project.id, true);
+      if (volumeTarget.endpoints.some(endpoint => databaseRegistry.usesEndpoint(project.id, endpoint))) {
+        throw new Error('Another project uses this database. Shared databases cannot be deleted from StackForge.');
+      }
+    }
+  }
+
+  async function relocateProject(project, directory) {
+    const current = managedProjects().find(item => item.id === project.id);
+    if (!current || !project.folderIdentity || removals.has(current.path) || configWrites.has(current.path) ||
+        databaseWrites.has(current.path) || operations.active(current) || transfer?.path === current.path ||
+        ['starting', 'running', 'stopping'].includes(runtime.status(current).status) || await locationExists(current.path) ||
+        !sameDirectory(await lstat(directory, { bigint: true }), project.folderIdentity) ||
+        managedProjects().some(item => projectPathKey(item.path) === projectPathKey(directory))) {
+      throw new Error('Choose the original project folder at its new location.');
+    }
+    const moved = { ...current, path: directory };
+    await inspectRecordedProject(moved);
+    if (moved.cloneId) await verifyClone(directory, moved.cloneId, moved.cloneIdentity);
+    await projectConfig.relocate(current, directory);
+    return moved;
+  }
+
   async function registerProject(path, clone = {}) {
     const directory = await projectDirectory(absoluteDirectory(path)).catch(() => {
       throw new Error('Choose an existing project directory.');
     });
     const folderIdentity = directoryIdentity(await lstat(directory, { bigint: true }));
+    const previous = !clone.cloneId && folderIdentity && managedProjects().find(item => item.folderIdentity &&
+      ['dev', 'ino', 'birth'].every(key => item.folderIdentity[key] === folderIdentity[key]) &&
+      projectPathKey(item.path) !== projectPathKey(directory));
+    if (previous) {
+      const project = await relocateProject(previous, directory);
+      await scanDatabases(project);
+      return { ...projectDetails(project), ...(project.unmanaged && { hasComposeDatabase: await hasImportedCompose(project) }) };
+    }
     let project;
     try {
       const { manifest } = await readProjectFolder(directory);
@@ -81,9 +146,19 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     } catch {
       project = importedProject(randomUUID(), directory, { unmanaged: true, folderIdentity, ...clone, frameworks: await detectFrameworks({ path: directory, folderIdentity, ...clone }) });
     }
-    const existing = await Promise.all(jobs.projects().map(item => realpath(item.path).catch(() => item.path)));
+    const existing = await Promise.all(managedProjects().filter(item => !item.imported).map(item => realpath(item.path).catch(() => item.path)));
     if (existing.some(item => projectPathKey(item) === projectPathKey(project.path))) throw new Error('This folder is already in Projects.');
+    const discovery = await discoverDatabases(project);
+    const previousClone = project.cloneId && projectConfig.value.imports.find(item =>
+      item.cloneId && projectPathKey(item.path) === projectPathKey(project.path));
     await projectConfig.addProject(project);
+    try {
+      if (previousClone) await databaseRegistry.remove(previousClone.id);
+      await scanDatabases(project, discovery);
+    } catch {
+      // Registration remains usable if the database catalog cannot be written.
+      // Opening the discovery panel retries the catalog update.
+    }
     return { ...projectDetails(project), ...(project.unmanaged && { hasComposeDatabase: await hasImportedCompose(project) }) };
   }
   function send(res, status, value) {
@@ -115,6 +190,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const detail = { ...projectDetails(project), ...session, ...operations.status(project, project.id === selected), deleting };
           if (project.unmanaged) detail.hasComposeDatabase = await hasImportedCompose(project);
           if (transfer?.path === project.path) detail.operation = 'databaseTransfer';
+          if (databaseWrites.has(project.path)) detail.operation = 'databaseInitialization';
           if (project.id === selected) {
             if (project.unmanaged) detail.startupServices = project.startup?.services ?? [];
             else {
@@ -126,17 +202,23 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         }));
         return send(res, 200, { projects: projects.filter(Boolean) });
       }
-      const projectView = /^\/api\/projects\/([^/]+)\/(database|database-delete|checks|git|dependencies|startup-suggestions)$/.exec(url.pathname);
+      const projectView = /^\/api\/projects\/([^/]+)\/(database|database-discovery|database-delete|checks|git|dependencies|startup-suggestions)$/.exec(url.pathname);
       if (req.method === 'GET' && projectView) {
         const [, id, view] = projectView;
         const project = managedProjects().find(item => item.id === id);
         if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
         try {
+          if (view === 'database-discovery') {
+            await refreshDatabaseBindings(project.id);
+            return send(res, 200, await scanDatabases(project));
+          }
           if (view === 'database-delete') {
             if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
               return send(res, 409, { error: 'Stop the project before deleting its database.' });
             }
-            const { volume } = await operations.databaseDeletionTarget(project, projectConfig.ports(project));
+            const target = await operations.databaseDeletionTarget(project, projectConfig.ports(project));
+            const { volume } = target;
+            await verifyDatabaseDeletion(project, target);
             return send(res, 200, { volume });
           }
           if (view === 'checks') {
@@ -153,7 +235,17 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             const { id, steps, issues } = await detectDependencyPlan(project);
             return send(res, 200, { id, steps: steps.map(({ tool, command, directory, evidence }) => ({ tool, command, directory, evidence })), issues });
           }
-          return send(res, 200, await operations.database(project, projectConfig.ports(project), url.searchParams.has('logs')));
+          const includeCapabilities = url.searchParams.has('capabilities');
+          const result = await operations.database(project, projectConfig.ports(project), url.searchParams.has('logs'), includeCapabilities);
+          if (includeCapabilities && result.capabilities.delete) {
+            try { await verifyDatabaseDeletion(project, result); }
+            catch (error) {
+              result.capabilities.delete = false;
+              result.deleteHint = redactDatabase.text(error.message).split('\n')[0];
+            }
+          }
+          delete result.endpoints;
+          return send(res, 200, result);
         } catch (error) {
           const message = view.startsWith('database') ? redactDatabase.text(error.message) : error.message;
           return send(res, 409, { error: message.split('\n')[0].trim(), diagnostic: view === 'database' ? startupDiagnostic(project, message) : undefined });
@@ -171,7 +263,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         if (!authorized(req, restore ? 'application/octet-stream' : 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         const project = managedProjects().find(item => item.id === id);
         if (!project || (project.database === 'none' && !await hasImportedCompose(project))) return send(res, 404, { error: 'This project has no database.' });
-        if (closing || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
+        if (closing || transfer || databaseWrites.size || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
           return send(res, 409, { error: 'Wait for the current project operation to finish.' });
         }
         const size = Number(req.headers['content-length']);
@@ -214,7 +306,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         } finally { transfer = undefined; }
         return;
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|run-check|check-cancel|check-config)$/.exec(url.pathname);
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|run-check|check-cancel|check-config)$/.exec(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
@@ -273,6 +365,63 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           const [, id, action] = projectAction;
           const project = managedProjects().find(item => item.id === id);
           if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
+          if (['database-local-check', 'database-initialization-plan', 'database-initialize'].includes(action)) {
+            if (action === 'database-initialize' && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
+              return send(res, 409, { error: 'Stop the project before initializing its database.' });
+            }
+            const controller = new AbortController();
+            res.once('close', () => { if (!res.writableFinished) controller.abort(); });
+            const work = (async () => {
+              const { binding, target } = await localDatabaseTarget(project, payload.bindingId);
+              if (action === 'database-local-check') return { installation: await localInstallation(target, localDatabase) };
+              const credentials = { user: payload.user, password: payload.password };
+              const options = { project, binding, target, credentials, schema: payload.schema === true,
+                command: localDatabase.command, signal: controller.signal };
+              if (action === 'database-initialization-plan') {
+                const inspected = await initializationPlan(options);
+                if (inspected.state.fingerprint) await databaseRegistry.verify(binding.instanceId, inspected.state);
+                const plan = publicInitializationPlan(inspected);
+                if (binding.shared) plan.steps = [];
+                return plan;
+              }
+              const record = databaseLog.begin(project, action, binding.instanceId);
+              try {
+                const result = await executeInitialization({ ...options, id: payload.planId, confirmName: payload.confirmName,
+                  revalidate: async () => {
+                    await refreshDatabaseBindings(project.id, true);
+                    const current = await localDatabaseTarget(project, binding.id);
+                    if (current.binding.shared || JSON.stringify(current.target) !== JSON.stringify(target)) {
+                      throw new Error('A shared or changed database cannot be initialized.');
+                    }
+                  },
+                  recordMigration: (digest, outcome) => databaseRegistry.migration(project.id, binding.instanceId, digest, outcome),
+                  recordVerification: state => databaseRegistry.verify(binding.instanceId, state)
+                });
+                await record('succeeded');
+                return result;
+              } catch (error) {
+                await record(error.name === 'AbortError' ? 'cancelled' : 'failed');
+                throw error;
+              }
+            });
+            if (action === 'database-initialize') {
+              if (databaseWrites.size || transfer || removals.size || operations.active(project) || configWrites.has(project.path)) {
+                return send(res, 409, { error: 'Wait for the current project operation to finish.' });
+              }
+              const done = work();
+              databaseWrites.set(project.path, { done, controller });
+              try { return send(res, 200, await done); }
+              catch (error) { if (!res.destroyed) return send(res, 409, { error: redactDatabase.text(error.message).split('\n')[0] }); }
+              finally { databaseWrites.delete(project.path); }
+              return;
+            }
+            try { return send(res, 200, await work()); }
+            catch (error) { if (!res.destroyed) return send(res, 409, { error: redactDatabase.text(error.message).split('\n')[0] }); }
+            return;
+          }
+          if (databaseWrites.has(project.path) || databaseWrites.size && action === 'database-delete') {
+            return send(res, 409, { error: 'Wait for the current project operation to finish.' });
+          }
           if (transfer?.path === project.path) return send(res, 409, { error: 'Wait for the current project operation to finish.' });
           if (project.unmanaged && !['start', 'stop', 'startup', 'install', 'install-cancel', 'run-check', 'check-cancel', 'check-config', 'trash', 'remove', 'database-start', 'database-stop'].includes(action)) {
             return send(res, 409, { error: 'This action requires a StackForge project.' });
@@ -304,7 +453,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
               const target = action === 'run-check' ? { ...project, customChecks: projectConfig.checks(project) } : project;
               operations.start(target, action, projectConfig.ports(project), {
                 checkId: payload.check, installPlanId: detectedInstall ? payload.planId : undefined, confirmVolume: payload.confirmVolume,
-                record: action.startsWith('database-') ? databaseLog.begin(project, action) : undefined
+                record: action.startsWith('database-') ? databaseLog.begin(project, action) : undefined,
+                verifyDeletion: action === 'database-delete' ? target => verifyDatabaseDeletion(project, target) : undefined
               });
               return send(res, 202, operations.status(project, true));
             } catch (error) { return send(res, 409, { error: error.message }); }
@@ -316,6 +466,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
               const { manifest } = await inspectRecordedProject(project);
               if (manifest.portConfig !== 1) throw new Error('This project uses an older launcher with fixed app ports.');
               await projectConfig.savePorts(project, ports);
+              await scanDatabases(project).catch(() => {});
               return ports;
             })();
             configWrites.set(project.path, saving);
@@ -367,6 +518,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
             if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before moving it to the trash.' });
             if (action === 'remove' || removeOnly(project)) {
               await projectConfig.removeImport(project.id);
+              await databaseRegistry.remove(project.id);
               return send(res, 200, { removed: true });
             }
             const moving = (async () => {
@@ -376,6 +528,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
               else await desktop.trashProject(info.directory, project.folderIdentity, recordedProjectChanged);
               if (await locationExists(project.path)) throw new Error('The project is still at its original location. Check the system trash before retrying.');
               if (project.cloneId) await projectConfig.removeImport(project.id);
+              await databaseRegistry.remove(project.id);
               return { trashed: true, databaseDeleted: false };
             })();
             removals.set(project.path, moving);
@@ -449,9 +602,11 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     desktop.shutdown();
     if (cloneTask?.cancellable) cloneTask.controller.abort();
     transfer?.controller.abort();
+    for (const { controller } of databaseWrites.values()) controller.abort();
     await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), operations.shutdown(),
-      cloneTask?.done, transfer?.done, ...removals.values(), ...configWrites.values()]);
+      cloneTask?.done, transfer?.done, ...removals.values(), ...configWrites.values(), ...[...databaseWrites.values()].map(item => item.done)]);
     await databaseLog.pending;
+    await databaseRegistry.pending.catch(() => {});
   };
   server.jobs = jobs;
   return server;

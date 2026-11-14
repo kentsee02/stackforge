@@ -38,6 +38,7 @@ let startupDetection;
 let displayedStartupSuggestions;
 let dependencyPlanView;
 let databaseView;
+let databaseDiscovery;
 let toolsView;
 let timer;
 let revision = 0;
@@ -426,21 +427,23 @@ function renderDatabase(project, busy, unavailable) {
   showMessage($('database-status'), databaseLabels[state] ?? (view.error ? 'Database status unavailable' : 'Checking database…'));
   const transitioning = project.unmanaged ? ['starting', 'stopping'].includes(project.status) : busy && !project.initialized;
   const disabled = unavailable || transitioning || !view.status || Boolean(view.error);
-  $('database-start').disabled = disabled || ['running', 'starting', 'restarting', 'paused'].includes(state);
-  $('database-stop').disabled = disabled || ['absent', 'stopped'].includes(state);
-  $('database-logs').disabled = view.loading || !view.status || state === 'absent' || Boolean(view.error);
-  $('database-backup').disabled = unavailable || Boolean(view.error) || state !== 'running';
-  $('database-restore').disabled = unavailable || busy || Boolean(view.error) || state !== 'running';
+  const can = view.capabilities ?? {};
+  $('database-start').disabled = disabled || !can.start;
+  $('database-stop').disabled = disabled || !can.stop;
+  $('database-logs').disabled = view.loading || Boolean(view.error) || !can.logs;
+  $('database-backup').disabled = unavailable || Boolean(view.error) || !can.backup;
+  $('database-restore').disabled = unavailable || busy || Boolean(view.error) || !can.restore;
   const deleteVolume = $('database-delete');
   deleteVolume.hidden = project.unmanaged || project.database === 'none';
-  deleteVolume.disabled = disabled || busy || !['absent', 'stopped'].includes(state);
+  deleteVolume.disabled = disabled || busy || !can.delete;
   const transfer = transferMessage?.id === project.id ? transferMessage.message :
     task?.phase === 'database-delete' && task.status === 'succeeded' ? 'Database data volume deleted.' : '';
   showMessage($('database-transfer-message'), transfer);
   $('database-transfer-message').hidden = !transfer;
   const issue = task?.diagnostic ?? view.diagnostic;
   const hint = issue === 'docker' ? 'Start Docker Desktop or the Docker Engine to manage the database.' : diagnosticMessages[issue];
-  const error = actionError?.id === project.id && actionError.action?.startsWith('database-') ? actionError.message : hint ?? task?.error ?? view.error;
+  const error = actionError?.id === project.id && actionError.action?.startsWith('database-') ? actionError.message :
+    hint ?? task?.error ?? view.error ?? view.startHint ?? view.deleteHint;
   showMessage($('database-error'), error);
   $('database-error').hidden = !error;
   $('database-transition').hidden = !transitioning || Boolean(error);
@@ -489,8 +492,8 @@ async function loadDatabase(logs = false) {
   $('database-logs').disabled = true;
   try {
     // Allow time for the Compose list, inspection, and optional log commands.
-    const state = await request(`/api/projects/${view.id}/database${logs ? '?logs=1' : ''}`, { signal: AbortSignal.timeout(50_000) });
-    Object.assign(view, state, { error: undefined, diagnostic: undefined });
+    const state = await request(`/api/projects/${view.id}/database?capabilities=1${logs ? '&logs=1' : ''}`, { signal: AbortSignal.timeout(50_000) });
+    Object.assign(view, { startHint: undefined, deleteHint: undefined }, state, { error: undefined, diagnostic: undefined });
     if (logs && state.log === undefined) view.log = '';
     if (!logs && state.status === 'absent') view.log = undefined;
   } catch (error) { Object.assign(view, { error: error.message, diagnostic: error.diagnostic }); }
@@ -498,6 +501,131 @@ async function loadDatabase(logs = false) {
     view.loading = false;
     view.next = Date.now() + 3500;
     if (view === databaseView) render();
+  }
+}
+
+const discoveredEngines = { ...stackNames, sqlite: 'SQLite', sqlserver: 'SQL Server', mongodb: 'MongoDB', redis: 'Redis' };
+const discoveryStates = { configured: 'Configured target', unverified: 'Unverified target', missing: 'Missing configuration or file',
+  placeholder: 'Template or placeholder', ambiguous: 'Ambiguous configuration', declared: 'Declared dependency' };
+
+function resetInitialization() {
+  $('database-initialize-form').reset();
+  $('database-initialization-plan').hidden = true;
+  $('database-initialize-submit').disabled = true;
+  if (databaseDiscovery) databaseDiscovery.plan = undefined;
+}
+
+function renderDatabaseDiscovery(project, busy) {
+  if (databaseDiscovery?.id !== project.id) {
+    databaseDiscovery = { id: project.id };
+    $('database-local-form').reset();
+    $('database-local-form').hidden = true;
+    $('database-local-help').hidden = true;
+    $('database-local-status').textContent = '';
+    $('database-requirements').replaceChildren();
+    $('database-discovery-message').textContent = '';
+    $('database-initialization-message').textContent = '';
+    resetInitialization();
+    if ($('project-database-discovery').open) void loadDatabaseDiscovery();
+  }
+  const locked = busy || Boolean(databaseDiscovery.working);
+  for (const control of ['database-local-check', 'database-local-preview', 'database-discovery-refresh']) $(control).disabled = locked;
+  $('database-initialize-submit').disabled = locked || $('database-initialize-name').value !== databaseDiscovery.plan?.name;
+}
+
+async function loadDatabaseDiscovery() {
+  const view = databaseDiscovery;
+  if (!view || view.working) return;
+  view.working = true;
+  resetInitialization();
+  showMessage($('database-discovery-message'), 'Scanning database configuration…');
+  try {
+    const data = await request(`/api/projects/${view.id}/database-discovery`, { signal: AbortSignal.timeout(25_000) });
+    if (view !== databaseDiscovery) return;
+    view.bindings = data.bindings;
+    const sources = new Map(data.bindings.map(item => [item.requirementId, item]));
+    const requirements = data.requirements.map(item => {
+      const row = document.createElement('li');
+      const binding = sources.get(item.id);
+      const target = [item.host && `${item.host}:${item.port}`, item.name, item.path].filter(Boolean).join(' / ');
+      const verification = binding?.instance.verification?.status;
+      const status = translate(verification === 'connected' ? 'Connection previously verified' :
+        verification === 'missing' ? 'Database is missing' : discoveryStates[item.status] ?? 'Declared dependency');
+      row.textContent = [discoveredEngines[item.engine], item.source, target, status, binding?.shared ? translate('Shared database') : ''].filter(Boolean).join(' · ');
+      return row;
+    });
+    $('database-requirements').replaceChildren(...requirements);
+    const local = [...new Map(data.bindings.filter(item => item.instance.provider === 'local' &&
+      ['postgres', 'mysql'].includes(item.instance.engine)).map(item => [item.instanceId, item])).values()];
+    const select = $('database-binding');
+    select.replaceChildren(...local.map(({ id, server, instance, shared }) => new Option(
+      [discoveredEngines[instance.engine], `${server.host}:${server.port}/${instance.name}`, shared ? translate('Shared database') : ''].filter(Boolean).join(' · '), id)));
+    $('database-local-form').hidden = !local.length;
+    showMessage($('database-discovery-message'), data.limited ? 'The scan reached its file limit.' :
+      requirements.length ? '' : 'No database configuration was detected.');
+  } catch (error) {
+    if (view === databaseDiscovery) showMessage($('database-discovery-message'), error.message);
+  } finally {
+    view.working = false;
+    if (view === databaseDiscovery) render();
+  }
+}
+
+async function localDatabaseAction(action) {
+  const view = databaseDiscovery;
+  if (!view || view.working || pending) return;
+  const binding = view.bindings?.find(item => item.id === $('database-binding').value);
+  if (!binding) return;
+  view.working = true;
+  render();
+  try {
+    const { token } = await request('/api/state');
+    const data = { bindingId: binding.id };
+    if (action !== 'database-local-check') Object.assign(data, {
+      user: $('database-local-user').value, password: $('database-local-password').value, schema: $('database-local-schema').checked
+    });
+    if (action === 'database-initialize') {
+      if (!view.plan || $('database-initialize-name').value !== view.plan.name) return;
+      Object.assign(data, { planId: view.plan.id, confirmName: view.plan.name });
+    }
+    const result = await post(`/api/projects/${view.id}/${action}`, token, data, 120000);
+    if (view !== databaseDiscovery) return;
+    if (result.installation) {
+      const { clientVersion, serverVersion, serviceStatus, portOpen, help } = result.installation;
+      $('database-local-status').textContent = [
+        clientVersion ? `${translate('Client')} ${clientVersion}` : translate('Database client unavailable'),
+        serverVersion ? `${translate('Server')} ${serverVersion}` : '',
+        translate({ running: 'Local service running', stopped: 'Local service stopped', unknown: 'Local service status unknown' }[serviceStatus]),
+        translate(portOpen ? 'Port reachable' : 'Port unavailable')
+      ].filter(Boolean).join(' · ');
+      $('database-local-help').href = help;
+      $('database-local-help').hidden = Boolean(clientVersion && portOpen);
+    } else if (action === 'database-initialization-plan') {
+      resetInitialization();
+      view.plan = { id: result.id, name: binding.instance.name };
+      $('database-initialize-expected').textContent = binding.instance.name;
+      $('database-initialization-summary').textContent = [
+        result.verified ? `${discoveredEngines[binding.instance.engine]} ${result.version}` : translate('Database server identity is unverified'),
+        translate(result.exists ? result.empty ? 'Existing empty database' : 'Existing database with objects' : 'Database is missing'),
+        ...result.steps.map(step => translate(step === 'create' ? 'Create database' : 'Initialize empty schema'))
+      ].join(' · ');
+      $('database-migration-preview').replaceChildren(...result.migrations.map(item => {
+        const row = document.createElement('li');
+        row.textContent = `${item.file} · ${item.table} (${item.columns.join(', ')})`;
+        return row;
+      }));
+      $('database-initialization-plan').hidden = false;
+      $('database-initialize-form').hidden = !result.steps.length || binding.shared;
+    } else {
+      resetInitialization();
+      $('database-local-password').value = '';
+      showMessage($('database-initialization-message'), result.schema === 'verified' ? 'Database schema verified.' : 'Database connection verified.');
+    }
+  } catch (error) {
+    if (view === databaseDiscovery) showMessage($('database-initialization-message'), error.message);
+  } finally {
+    view.working = false;
+    if (view === databaseDiscovery) render();
   }
 }
 
@@ -687,6 +815,7 @@ function render() {
   renderPorts(project, busy || unavailable);
   renderDependencies(project, busy, unavailable, startupDirty);
   renderDatabase(project, busy, unavailable);
+  renderDatabaseDiscovery(project, busy || unavailable);
   if (toolsView?.id !== project.id) {
     toolsView = { id: project.id, checks: {}, git: {} };
     $('check-command').replaceChildren();
@@ -933,6 +1062,23 @@ $('install-custom-dependencies').addEventListener('click', () => installDependen
 $('refresh-dependencies').addEventListener('click', () => loadDependencyPlan(true));
 $('cancel-install').addEventListener('click', () => act(selected, 'install-cancel'));
 $('project-database').addEventListener('toggle', () => loadDatabase());
+$('project-database-discovery').addEventListener('toggle', event => {
+  if (event.currentTarget.open) void loadDatabaseDiscovery();
+  else { $('database-local-password').value = ''; resetInitialization(); }
+});
+$('database-discovery-refresh').addEventListener('click', loadDatabaseDiscovery);
+$('database-local-check').addEventListener('click', () => localDatabaseAction('database-local-check'));
+$('database-local-form').addEventListener('input', resetInitialization);
+$('database-local-form').addEventListener('submit', event => {
+  event.preventDefault();
+  showMessage($('database-initialization-message'), '');
+  void localDatabaseAction('database-initialization-plan');
+});
+$('database-initialize-name').addEventListener('input', render);
+$('database-initialize-form').addEventListener('submit', event => {
+  event.preventDefault();
+  void localDatabaseAction('database-initialize');
+});
 $('database-start').addEventListener('click', () => act(selected, 'database-start'));
 $('database-stop').addEventListener('click', () => act(selected, 'database-stop'));
 $('database-logs').addEventListener('click', () => loadDatabase(true));

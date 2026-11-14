@@ -114,6 +114,20 @@ export async function databaseReady(options) {
   }
 }
 
+export async function databaseTransferCapabilities(options) {
+  const format = commands[options.engine];
+  const docker = databaseExec(options);
+  const query = ([script, statement]) => docker(script, { stdoutOnly: true, timeout: 4000, stdoutLimit: 64 * 1024 }, statement);
+  try {
+    const empty = (await query(format.empty)).trim() === format.emptyValue;
+    const restore = empty && (!format.scope || mysqlRestoreIsScoped(await query(format.scope)));
+    return { backup: true, restore };
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    return { backup: options.engine === 'postgres', restore: false };
+  }
+}
+
 export async function transferDatabase(options) {
   const { engine, project, file } = options;
   const format = commands[engine];

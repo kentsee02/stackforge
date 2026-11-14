@@ -7,7 +7,7 @@ import { installMavenDependencies, installNodeDependencies, maven, npm, run, thr
 import { projectPathKey } from './project-config.mjs';
 import { inspectRecordedProject, startupDiagnostic } from './project-runtime.mjs';
 import { projectChecks, projectGitStatus } from './project-tools.mjs';
-import { databaseReady, transferDatabase } from './database-backup.mjs';
+import { databaseReady, databaseTransferCapabilities, transferDatabase } from './database-backup.mjs';
 import { addContainerSecretFiles, databaseRedactor, databaseSecretFiles } from './database-secrets.mjs';
 import { resolveStartup } from './project-startup.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
@@ -26,7 +26,7 @@ const unverifiedDatabase = 'The database volume could not be verified as belongi
 const composeStatusFormat = [
   '{{.Id}}', '{{json .Config.Labels}}', '{{json .Config.Image}}',
   '{{.State.Status}}',
-  '{{if .State.Health}}{{.State.Health.Status}}{{end}}', '{{json .Mounts}}'
+  '{{if .State.Health}}{{.State.Health.Status}}{{end}}', '{{json .Mounts}}', '{{json .HostConfig.PortBindings}}'
 ].join('\t');
 
 function databaseTaskOutput(append, redact) {
@@ -101,7 +101,7 @@ export class ProjectOperations {
     return result;
   }
 
-  start(project, action, ports, { checkId, installPlanId, confirmVolume, record } = {}) {
+  start(project, action, ports, { checkId, installPlanId, confirmVolume, record, verifyDeletion } = {}) {
     if (this.closing) throw new Error('StackForge is shutting down.');
     const key = projectPathKey(project.path);
     const entry = this.projects.get(key) ?? {};
@@ -123,7 +123,7 @@ export class ProjectOperations {
         ? installPlanId ? this.installDetectedDependencies(project, task, options, installPlanId) : this.installConfiguredDependencies(project, task, options)
         : this.installDependencies(project, task, options),
       databaseTask: () => action === 'database-delete'
-        ? this.removeDatabase(project, ports, confirmVolume, options.signal)
+        ? this.removeDatabase(project, ports, confirmVolume, options.signal, verifyDeletion)
         : this.changeDatabase(project, action, ports, options),
       checkTask: () => this.runCheck(project, checkId, options)
     };
@@ -241,7 +241,7 @@ export class ProjectOperations {
     const containers = [];
     const inspected = new Set();
     for (const line of lines) {
-      const [id, rawLabels, image, state, health, mounts] = line.split('\t');
+      const [id, rawLabels, image, state, health, mounts, portBindings] = line.split('\t');
       if (!ids.includes(id) || inspected.has(id)) throw new Error('Docker returned an unexpected container identifier.');
       inspected.add(id);
       const labels = JSON.parse(rawLabels);
@@ -255,7 +255,7 @@ export class ProjectOperations {
         throw new Error(unverifiedDatabase);
       }
       containers.push({ id, status: state === 'running' && ['unhealthy', 'starting'].includes(health) ? health : state,
-        mounts: JSON.parse(mounts) ?? [] });
+        mounts: JSON.parse(mounts) ?? [], portBindings: JSON.parse(portBindings ?? 'null') ?? {} });
     }
     if (containers.length > 1) throw new Error(unverifiedDatabase);
     return containers;
@@ -299,12 +299,30 @@ export class ProjectOperations {
     return redact.text(output);
   }
 
-  async database(project, ports, logs = false) {
-    const { config, container, engine } = await this.databaseTarget(project, ports);
+  async database(project, ports, logs = false, includeCapabilities = false) {
+    const { config, container, engine, volume, verifyStartup, endpoints } = await this.databaseTarget(project, ports);
     const status = ['exited', 'created', 'dead'].includes(container?.status) ? 'stopped' : container?.status ?? 'absent';
     const state = { ...(project.unmanaged && { engine }), status };
     if (status === 'running' && !await databaseReady({ engine, container: container.id, config, command: this.command })) state.status = 'starting';
     if (logs && container) state.log = await this.databaseLogs(config, container);
+    if (includeCapabilities) {
+      let start = ['absent', 'stopped'].includes(state.status);
+      if (start && verifyStartup) {
+        try { await verifyStartup(); }
+        catch (error) {
+          start = false;
+          if (error.code === databaseStartupRestricted) state.startHint = error.message;
+          else throw error;
+        }
+      }
+      const transfers = state.status === 'running' ?
+        await databaseTransferCapabilities({ engine, container: container.id, config, command: this.command }) : { backup: false, restore: false };
+      state.ownership = project.unmanaged ? 'verified' : 'managed';
+      state.capabilities = { start, stop: Boolean(container && state.status !== 'stopped'), logs: Boolean(container),
+        ...transfers,
+        delete: !project.unmanaged && Boolean(volume) && ['stopped', 'absent'].includes(state.status) };
+      state.endpoints = endpoints;
+    }
     return state;
   }
 
@@ -404,6 +422,14 @@ export class ProjectOperations {
     }
     const details = exists && await verifyVolume(containers, true);
     const [container] = containers;
+    const published = (spec.ports ?? []).filter(item => Number(item.target) === (project.database === 'mysql' ? 3306 : 5432) &&
+      (!item.protocol || item.protocol === 'tcp') && /^\d+$/.test(String(item.published ?? '')));
+    const bound = Object.entries(container?.portBindings ?? {}).filter(([key]) => key.endsWith('/tcp')).flatMap(([, values]) => values ?? []);
+    const endpoints = [
+      ...published.map(item => ({ engine: project.database, host: item.host_ip ?? '0.0.0.0', port: Number(item.published) })),
+      ...bound.filter(item => /^\d+$/.test(item.HostPort)).map(item =>
+        ({ engine: project.database, host: item.HostIp || '0.0.0.0', port: Number(item.HostPort) }))
+    ];
     const verifyFolder = async () => {
       await inspectRecordedProject(project);
       if (!sameDirectory(await lstat(config.cwd, { bigint: true }), folder)) throw new Error(unverifiedDatabase);
@@ -416,6 +442,7 @@ export class ProjectOperations {
     };
     return {
       config, containers, docker, volume: exists ? name : undefined, environment: spec.environment,
+      endpoints, verifyStartup,
       async verifyLauncher() {
         if (Object.keys(model.services).length !== 1) {
           throw new Error('The StackForge launcher requires a Compose file with only the database service.');
@@ -458,9 +485,11 @@ export class ProjectOperations {
     return target;
   }
 
-  async removeDatabase(project, ports, confirmVolume, signal) {
-    const { containers, docker, volume, recheckVolume } = await this.databaseDeletionTarget(project, ports, signal);
+  async removeDatabase(project, ports, confirmVolume, signal, verifyDeletion) {
+    const target = await this.databaseDeletionTarget(project, ports, signal);
+    const { containers, docker, volume, recheckVolume } = target;
     if (confirmVolume !== volume) throw new Error('Enter the exact volume name to confirm database deletion.');
+    await verifyDeletion?.(target);
     await inspectRecordedProject(project);
     await recheckVolume();
     throwIfCancelled(signal);

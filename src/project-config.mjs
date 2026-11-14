@@ -65,7 +65,7 @@ export function validatePorts(project, input) {
 export class ProjectConfig {
   constructor(file) {
     this.file = file;
-    this.value = { ports: {}, checks: {}, imports: [] };
+    this.value = { ports: {}, checks: {}, imports: [], locations: {} };
     this.pending = Promise.resolve();
     this.ready = this.load();
   }
@@ -76,6 +76,10 @@ export class ProjectConfig {
       const saved = JSON.parse(await readFile(this.file, 'utf8'));
       if (saved.version !== 1) return;
       if (saved.ports && typeof saved.ports === 'object') this.value.ports = saved.ports;
+      for (const [id, path] of Object.entries(saved.locations ?? {})) {
+        if (!/^[a-f0-9-]{36}$/.test(id)) continue;
+        try { this.value.locations[id] = absoluteDirectory(path); } catch { /* Skip invalid saved paths. */ }
+      }
       for (const [id, entry] of Object.entries(saved.checks ?? {})) {
         if (!/^[a-f0-9-]{36}$/.test(id)) continue;
         try {
@@ -136,6 +140,12 @@ export class ProjectConfig {
 
   removeImport(id) {
     return this.update(value => withoutImport(value, id));
+  }
+
+  relocate(project, path) {
+    return this.update(value => project.imported ?
+      { ...value, imports: value.imports.map(item => item.id === project.id ? { ...item, path } : item) } :
+      { ...value, locations: { ...value.locations, [project.id]: path } });
   }
 
   update(change) {
