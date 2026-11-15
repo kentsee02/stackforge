@@ -159,3 +159,7 @@
 }
 .project-offline > :is(details, .project-operation), .project-offline :is(#runtime-action, #runtime-error, #runtime-diagnostic,
   #runtime-database-config, #project-runtime-log) { display: none; }
+.postgres-setup-dialog { width: min(570px, calc(100% - 32px)); }
+#postgres-setup-guide .project-operation-actions { gap: 12px; }
+#postgres-setup-confirm { width: 100%; max-width: none; margin-top: 6px; }
+#postgres-setup-migrations { overflow-wrap: anywhere; }

@@ -90,6 +90,16 @@ test('database connection setup writes only a missing variable to an ignored env
   assert.ok(result.bindings.some(item => item.requirementId === requirementId && item.instance.name === 'game-portal' && item.instance.provider === 'local'));
   assert.doesNotMatch(JSON.stringify(result), /connection-test-secret/);
   assert.equal((await save()).status, 409);
+  const edited = 'postgresql://operator:replacement-secret@localhost:5432/game-portal?schema=public';
+  const original = unrelated + `\r\nexport DATABASE_URL = "${value}" # keep note\r\n`;
+  await writeFile(file, original);
+  const revision = (await scan()).requirements.find(item => item.id === requirementId).environmentEdit.revision;
+  await writeFile(file, original + '# manual change\r\n');
+  assert.equal((await save({ value: edited, revision })).status, 409);
+  const current = (await scan()).requirements.find(item => item.id === requirementId).environmentEdit.revision;
+  assert.deepEqual(await (await save({ value: edited, revision: current })).json(), { saved: true, file: '.env' });
+  assert.equal(await readFile(file, 'utf8'), original.replace(value, edited) + '# manual change\r\n');
+  assert.doesNotMatch(JSON.stringify(await scan()), /replacement-secret/);
 });
 
 test('import and clone discover multiple databases, preserve shared bindings on relocation and initialize only reviewed plans', async t => {

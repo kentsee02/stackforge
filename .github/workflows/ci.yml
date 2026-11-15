@@ -33,6 +33,7 @@ jobs:
           docker pull postgres:17
           docker pull mysql:8.4
           npm run test:database-integration
+          npm run test:prisma-integration -- --large
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -47,3 +48,32 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL did not become ready' }
           $env:STACKFORGE_TEST_PG_PASSWORD = 'root'
           npm run test:database-integration -- --windows-native
+  browser-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+  stack-integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [node, java, nest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - if: matrix.stack == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm run test:integration -- --only=${{ matrix.stack }}

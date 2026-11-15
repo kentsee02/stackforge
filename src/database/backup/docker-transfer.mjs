@@ -1,3 +1,5 @@
+import { backupInput, backupPrefix, isBackupFile, postgresBackupLimit } from './payload.mjs';
+
 export const backupLimit = 64 * 1024 * 1024;
 
 const postgresEmpty = `
@@ -80,7 +82,6 @@ export function mysqlRestoreIsScoped(output) {
   }
   return targetGrant;
 }
-
 export function mysqlCanBackUp(output) {
   const [header, ...grants] = output.trimEnd().split(/\r?\n/);
   const [mode, database] = header.split('\t');
@@ -141,7 +142,7 @@ const commands = {
 
 function databaseExec({ container, config, command, signal }) {
   return (script, options = {}, parameter) => command('docker', [
-    'exec', ...(options.input ? ['-i'] : []), container, 'sh', '-c', script,
+    'exec', ...(options.input || options.inputFile ? ['-i'] : []), container, 'sh', '-c', script,
     ...(parameter ? ['stackforge', parameter] : [])
   ], { ...config, ...options, signal });
 }
@@ -185,17 +186,20 @@ export async function databaseTransferCapabilities(options) {
 }
 
 export async function transferDatabase(options) {
-  const { engine, project, file } = options;
+  const { engine, project, file, backupFile } = options;
   const format = commands[engine];
   const docker = databaseExec(options);
-  if (file && !format.accepts(file)) throw new Error('Choose a backup file for this database engine.');
+  const accepts = async data => isBackupFile(data) ? engine === 'postgres' && format.accepts(await backupPrefix(data, 16)) : format.accepts(data);
+  if (file && !await accepts(file)) throw new Error('Choose a backup file for this database engine.');
   if (!await databaseReady(options)) throw new Error('The database is running but SQL is not ready. Check its logs and retry.');
 
   if (!file) {
     const date = new Date().toISOString().replace(/[:.]/g, '-');
     try {
-      const data = await docker(format.backup, { binaryLimit: backupLimit });
-      if (!format.accepts(data)) throw new Error();
+      const output = engine === 'postgres' && backupFile ? { binaryFile: backupFile, binaryLimit: postgresBackupLimit, timeout: 360000 } :
+        { binaryLimit: backupLimit };
+      const data = await docker(format.backup, output);
+      if (!await accepts(data)) throw new Error();
       const name = project.replace(/[^\w.-]/g, '-').slice(0, 72) || 'project';
       return { data: format.portable ? format.portable(data) : data, filename: `${name}-${date}.${format.extension}` };
     } catch (error) {
@@ -220,7 +224,8 @@ export async function transferDatabase(options) {
     }
     if (!mysqlRestoreIsScoped(grants)) throw new Error(mysqlScopeError);
   }
-  try { await docker(format.restore, { input: format.portable ? format.portable(file) : file }); }
+  try { await docker(format.restore, { ...backupInput(format.portable ? format.portable(file) : file),
+    ...(isBackupFile(file) && { timeout: 360000 }) }); }
   catch (error) {
     if (error.name === 'AbortError') throw error;
     if (engine === 'mysql' && /ERROR 1419\b|log_bin_trust_function_creators/i.test(error.message)) {

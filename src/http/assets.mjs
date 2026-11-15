@@ -7,6 +7,7 @@ const assets = new Map([
   ['/app.js', 'create/page.js'],
   ['/projects.js', 'projects/page.js'],
   ['/projects/database.js', 'projects/database.js'],
+  ['/projects/postgres-setup.js', 'projects/postgres-setup.js'],
   ['/i18n.js', 'shared/i18n.js'],
   ['/messages.js', 'shared/messages.js'],
   ['/template-store.js', 'create/template-store.js'],

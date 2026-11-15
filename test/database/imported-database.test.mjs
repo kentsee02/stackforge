@@ -119,8 +119,8 @@ test('imported Compose controls verify the container and dedicated volume before
   assert.equal(imported.hasComposeDatabase, true);
   const route = '/api/projects/' + imported.id;
   const get = path => fetch(base + route + path);
-  const task = async action => {
-    assert.equal((await post(route + '/database-' + action)).status, 202);
+  const task = async (action, body) => {
+    assert.equal((await post(route + '/database-' + action, body)).status, 202);
     for (let i = 0; i < 80; i++) {
       const { projects } = await (await fetch(base + '/api/projects?logs=' + imported.id)).json();
       const current = projects[0].databaseTask;
@@ -184,6 +184,16 @@ test('imported Compose controls verify the container and dedicated volume before
   assert.equal((await task('start')).status, 'succeeded');
   assert.equal((await task('stop')).status, 'succeeded');
   assert.deepEqual(mutations.at(-1), ['container', 'stop', id]);
+  model.services.mysql = { image: 'mysql:8.4', volumes: [{ type: 'volume', source: 'other', target: '/var/lib/mysql' }] };
+  model.volumes.other = { name: 'example_other' };
+  await writeFile(composeFile, JSON.stringify(model));
+  const { services } = await (await get('/database')).json();
+  assert.deepEqual(services.map(item => item.name).sort(), ['mysql', 'postgres']);
+  const postgres = services.find(item => item.name === 'postgres').id;
+  assert.equal((await get('/database?binding=' + postgres)).status, 200);
+  assert.equal((await task('start')).status, 'failed');
+  assert.equal((await task('start', { bindingId: postgres })).status, 'succeeded');
+  assert.equal((await task('stop', { bindingId: postgres })).status, 'succeeded');
   await app.shutdownTasks();
   const audit = await readFile(join(workspace, 'state', 'database-operations.jsonl'), 'utf8');
   assert.doesNotMatch(audit, /import-secret-canary|test\$\$literal|POSTGRES_PASSWORD|custom commands|PGDMPfixture/);

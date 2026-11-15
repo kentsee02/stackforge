@@ -116,7 +116,7 @@ export class DatabaseRegistry {
     return this.update(value => ({ ...value, backups: [...value.backups, { projectId, instanceId, ...metadata }].slice(-500) }));
   }
 
-  usesEndpoint(projectId, { engine, host, port }, activeIds) {
+  usesEndpoint(projectId, { engine, host, port, name }, activeIds) {
     const addresses = new Set(['localhost', '127.0.0.1', '::1', hostname().toLowerCase(),
       ...Object.values(networkInterfaces()).flatMap(interfaces => (interfaces ?? []).map(item => item.address.toLowerCase()))]);
     const wildcard = ['0.0.0.0', '::'].includes(host);
@@ -124,6 +124,7 @@ export class DatabaseRegistry {
       const instance = this.value.instances[binding.instanceId];
       const server = this.value.servers[instance?.serverId];
       return binding.projectId !== projectId && (!activeIds || activeIds.has(binding.projectId)) && server?.engine === engine && server.port === port &&
+        (!name || !instance.name || instance.name === name) &&
         (server.host === host || localTarget(host) && localTarget(server.host) || wildcard && addresses.has(server.host));
     });
   }

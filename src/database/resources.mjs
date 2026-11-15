@@ -1,15 +1,20 @@
 import { randomUUID } from 'node:crypto';
-import { archiveBackup, archiveDigest, inspectArchive, inspectLegacyBackup, isLegacyBackup } from './backup/archive.mjs';
+import { archiveBackup, archiveDigest, archiveFile, fileDigest, inspectArchive, inspectArchiveFile, inspectLegacyBackup,
+  isLegacyBackup, isLegacyFileBackup, legacyFileBackup } from './backup/archive.mjs';
+import { isBackupFile } from './backup/payload.mjs';
 import { databaseInventory, databaseTransferCapabilities, transferDatabase } from './backup/docker-transfer.mjs';
 import { databaseKey } from './discovery.mjs';
 import { remoteProfile, remoteSession } from './adapters/remote.mjs';
+import { localTransferSession } from './adapters/local-transfer.mjs';
+import { inspectLocalConnection } from './adapters/local-status.mjs';
 import { sqliteAdapter, sqliteTarget } from './adapters/sqlite.mjs';
-import { verifySqlRestore } from './backup/restore-check.mjs';
+import { verifyBackupImage, verifySqlRestore } from './backup/restore-check.mjs';
 
 const changed = 'The restore preview or confirmed database target has changed.';
 const missing = 'Choose an available database binding.';
 
-export function databaseResources({ registry, vault, directory, operations, command, verifyRestore = verifySqlRestore }) {
+export function databaseResources({ registry, vault, directory, operations, command, verifyRestore = verifySqlRestore,
+  preflight = verifyRestore === verifySqlRestore ? verifyBackupImage : undefined }) {
   const sqlite = sqliteAdapter(directory);
   const previews = new Map();
   const profileFor = (project, binding) => registry.profile(project.id, binding.instanceId);
@@ -77,31 +82,42 @@ export function databaseResources({ registry, vault, directory, operations, comm
         }
       };
     }
-    if (provider === 'remote') {
-      const { session, credentialRef } = await remote(project, binding, signal);
+    if (provider === 'remote' || provider === 'local') {
+      const { session, credentialRef } = provider === 'local' ? await localTransferSession(project, binding, command, signal) :
+        await remote(project, binding, signal);
       const state = await session.test();
       const identity = state.identity && databaseKey(state.identity, credentialRef);
       return { engine: binding.instance.engine, name: binding.instance.name, version: state.version, identity,
         canRestore: state.capabilities.restore, export: session.backup, inventory: session.inventory,
         restore: data => session.restore(data, state.identity) };
     }
-    if (provider !== 'docker' || binding) throw new Error(missing);
-    const target = await operations.databaseTarget(project, ports, signal);
+    if (provider !== 'docker' || binding && (!project.unmanaged || !binding.selection)) throw new Error(missing);
+    const target = await operations.databaseTarget(project, ports, signal, binding?.selection);
     if (target.container?.status !== 'running') throw new Error('Start the project database before backing it up or restoring it.');
     const options = { engine: target.engine, container: target.container.id, config: target.config, command: operations.command, signal, project: project.name };
     const inventory = () => databaseInventory(options);
     const [{ version }, capabilities] = await Promise.all([inventory(), databaseTransferCapabilities(options)]);
-    return { engine: target.engine, name: project.name, version, identity: target.container.id, inventory, endpoints: target.endpoints,
-      canRestore: capabilities.restore, export: () => transferDatabase(options), restore: data => transferDatabase({ ...options, file: data }) };
+    return { engine: target.engine, name: binding ? `${project.name}/${target.service}` : project.name, version, identity: target.container.id, inventory, endpoints: target.endpoints,
+      canRestore: capabilities.restore, export: backupFile => transferDatabase({ ...options, backupFile }),
+      restore: data => transferDatabase({ ...options, file: data }) };
   }
 
-  async function backup(project, binding, ports, signal) {
+  async function testLocalConnection(project, binding, signal) {
+    if (!['postgres', 'mysql'].includes(binding.instance.engine)) return inspectLocalConnection(project, binding, command, signal);
+    const { session } = await localTransferSession(project, binding, command, signal);
+    const { version, capabilities } = await session.test();
+    return { version, capabilities };
+  }
+
+  async function backup(project, binding, ports, signal, backupFile) {
     const target = await adapter(project, binding, ports, signal);
-    const dump = await target.export();
-    const archive = archiveBackup({ data: dump.data, engine: target.engine, version: target.version, project: project.name });
+    const prepared = !target.check && await preflight?.({ engine: target.engine, version: target.version, signal });
+    const dump = await target.export(backupFile);
+    const payload = { data: dump.data, engine: target.engine, version: target.version, project: project.name, signal };
+    const archive = isBackupFile(dump.data) ? await archiveFile(payload) : archiveBackup(payload);
     if (target.check) await target.check(dump.data);
     else {
-      const restored = await verifyRestore({ engine: target.engine, version: target.version, data: dump.data, signal });
+      const restored = await verifyRestore({ engine: target.engine, version: target.version, data: dump.data, signal, prepared });
       const source = await target.inventory();
       if (databaseKey([...source.objects].sort()) !== databaseKey([...restored.objects].sort())) {
         throw new Error('The backup objects did not match the source database. Check privileges or retry after schema changes finish.');
@@ -111,35 +127,47 @@ export function databaseResources({ registry, vault, directory, operations, comm
     return archive;
   }
 
-  async function preview(project, binding, ports, file, signal, verify) {
+  async function preparePreview(project, binding, ports, signal, verify) {
     const target = await adapter(project, binding, ports, signal);
     if (!target.canRestore || !target.identity || (!verify && binding?.shared)) throw new Error('Choose a verified empty database or a missing SQLite file.');
     await verify?.(target);
-    const legacy = isLegacyBackup(file, target.engine);
-    const archive = legacy ? { data: file } : inspectArchive(file, target.engine, target.version);
+    const prepared = !target.check && await preflight?.({ engine: target.engine, version: target.version, signal });
+    return { target, prepared };
+  }
+
+  async function preview(project, binding, ports, file, signal, verify, prechecked) {
+    const { target, prepared } = prechecked ?? await preparePreview(project, binding, ports, signal, verify);
+    const large = isBackupFile(file);
+    const legacy = large ? await isLegacyFileBackup(file, target.engine) : isLegacyBackup(file, target.engine);
+    const archive = legacy ? { data: file } : large ? await inspectArchiveFile(file, target.engine, target.version, signal) :
+      inspectArchive(file, target.engine, target.version);
     const verified = target.check ? await target.check(archive.data) :
-      await verifyRestore({ engine: target.engine, version: target.version, data: archive.data, legacy, signal });
+      await verifyRestore({ engine: target.engine, version: target.version, data: archive.data, legacy, signal, prepared });
     const metadata = archive.metadata ?? verified.legacyMetadata;
     const id = randomUUID();
     for (const [key, record] of previews) if (record.expires <= Date.now()) previews.delete(key);
     if (previews.size >= 32) previews.delete(previews.keys().next().value);
     previews.set(id, { project: project.id, instance: binding?.instanceId, identity: target.identity, name: target.name,
-      digest: archiveDigest(file), expected: verified.objects, limited: verified.limited, legacyVersion: legacy ? metadata.version : undefined,
+      digest: large ? await fileDigest(file, signal) : archiveDigest(file), expected: verified.objects, limited: verified.limited,
+      legacyVersion: legacy ? metadata.version : undefined,
       expires: Date.now() + 300000 });
     return { id, name: target.name, metadata, objects: verified.count ?? verified.objects.length, limited: Boolean(verified.limited) };
   }
 
   async function restore(project, binding, ports, file, id, name, signal, verify) {
     const approved = previews.get(id);
+    const large = isBackupFile(file);
     if (!approved || approved.expires <= Date.now() || approved.project !== project.id || approved.instance !== binding?.instanceId ||
-        approved.name !== name || approved.digest !== archiveDigest(file) || (!verify && binding?.shared)) throw new Error(changed);
+        approved.name !== name || approved.digest !== (large ? await fileDigest(file, signal) : archiveDigest(file)) ||
+        (!verify && binding?.shared)) throw new Error(changed);
     const target = await adapter(project, binding, ports, signal);
     if (target.identity !== approved.identity || target.name !== approved.name || !target.canRestore) throw new Error(changed);
-    const { data } = approved.legacyVersion ? inspectLegacyBackup(file, target.engine, approved.legacyVersion, target.version) :
-      inspectArchive(file, target.engine, target.version);
+    const archive = approved.legacyVersion ? (large ? await legacyFileBackup(file, target.engine, approved.legacyVersion, target.version, signal) :
+      inspectLegacyBackup(file, target.engine, approved.legacyVersion, target.version)) :
+      (large ? await inspectArchiveFile(file, target.engine, target.version, signal) : inspectArchive(file, target.engine, target.version));
     await verify?.(target);
     previews.delete(id);
-    await target.restore(data);
+    await target.restore(archive.data);
     const result = await target.inventory();
     if (databaseKey([...result.objects].sort(), Boolean(result.limited)) !== databaseKey([...approved.expected].sort(), Boolean(approved.limited))) {
       throw new Error('Restore finished, but the target database objects did not match the isolated verification.');
@@ -147,5 +175,6 @@ export function databaseResources({ registry, vault, directory, operations, comm
     return { restored: true, objects: result.count ?? result.objects.length, limited: Boolean(result.limited) };
   }
 
-  return { profile, removeProfiles, backup, preview, restore, inspectSqlite: sqlite.inspect, createSqlite: sqlite.install };
+  return { profile, removeProfiles, backup, preparePreview, preview, restore, testLocalConnection,
+    inspectSqlite: sqlite.inspect, createSqlite: sqlite.install };
 }

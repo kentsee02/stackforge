@@ -47,6 +47,44 @@ test('archives reject changes, incorrect engines and incompatible versions', () 
   assert.throws(() => inspectArchive(changed, 'postgres', '17.4'), /checksum/);
 });
 
+test('local MongoDB, Redis and SQL Server connection checks keep credentials out of args and responses', async t => {
+  const password = 'native-probe-test-password';
+  const command = async (client, args, { env }) => {
+    assert.doesNotMatch(JSON.stringify(args), new RegExp(password));
+    if (client === 'redis-cli') {
+      assert.equal(env.REDISCLI_AUTH, password);
+      assert.deepEqual(args.slice(-3), ['--user', 'cache', 'PING']);
+      return 'PONG';
+    }
+    if (client === 'mongosh') {
+      assert.equal(new URL(env.STACKFORGE_MONGO_URI).password, password);
+      assert.equal(new URL(env.STACKFORGE_MONGO_URI).searchParams.get('directConnection'), 'true');
+      return 'STACKFORGE_CONNECTED';
+    }
+    assert.equal(client, 'sqlcmd');
+    assert.equal(env.SQLCMDPASSWORD, password);
+    assert.ok(args.includes('tcp:127.0.0.1,1433'));
+    return '16.0.3000.0\tportal';
+  };
+  const { project, request, register } = await fixture(t, { command });
+  await writeFile(join(project, '.env'), [
+    `MONGO_DATABASE_URL=mongodb://app:${password}@localhost:27017/portal`,
+    `REDIS_URL=redis://cache:${password}@127.0.0.1:6379`
+  ].join('\n'));
+  await writeFile(join(project, 'appsettings.json'), JSON.stringify({ ConnectionStrings: {
+    portal: `Server=localhost,1433;Database=portal;User Id=app;Password=${password}`
+  } }));
+  const route = await register();
+  const data = await (await request(route + '/database-discovery')).json();
+  assert.doesNotMatch(JSON.stringify(data), new RegExp(password));
+  for (const engine of ['redis', 'mongodb', 'sqlserver']) {
+    const binding = data.bindings.find(item => item.instance.engine === engine);
+    const reply = await request(route + '/database-local-status', { bindingId: binding.id });
+    assert.equal(reply.status, 200);
+    assert.deepEqual((await reply.json()).capabilities, { connect: true, backup: false, restore: false });
+  }
+});
+
 test('SQLite inspects real schema, backs up WAL data, previews a restore and creates only absent files', { timeout: 45000 }, async t => {
   const { root, project, request, register } = await fixture(t);
   await mkdir(join(project, 'prisma'));

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
-import { isAbsolute, join, relative } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { composeProjectLabel as projectLabel, composeServiceLabel as serviceLabel, composeVolumeLabel as volumeLabel,
   databaseDataDirectory, databaseDockerEnvironment, databaseEndpoints, databaseImageEngine, databaseMountMatches, databaseSecretTargets, pinnedDatabaseCompose,
@@ -31,7 +31,7 @@ async function matchesPath(value, expected) {
   return actual !== null && relative(expected, actual) === '';
 }
 
-export async function inspectImportedDatabase(project, command, signal) {
+export async function inspectImportedDatabase(project, command, signal, selection) {
   const expected = project.folderIdentity ?? project.cloneIdentity ?? project.startup?.identity;
   if (!expected) throw new Error('Re-import this project to verify ownership of its Compose database.');
   const { root: cwd, identity } = await resolveStartup(project, [], expected);
@@ -54,8 +54,12 @@ export async function inspectImportedDatabase(project, command, signal) {
     if (error.name === 'AbortError' || /(?:ENOENT|docker daemon|dockerDesktop|cannot connect)/i.test(error.message)) throw error;
     throw new Error('The database Compose configuration could not be read. Check the Compose file and .env.');
   }
-  const candidates = Object.entries(model.services ?? {}).filter(([, service]) => databaseImageEngine(service?.image));
-  if (candidates.length !== 1) throw new Error('Compose database management requires one official MySQL or PostgreSQL service.');
+  const candidates = Object.entries(model.services ?? {}).filter(([name, service]) => {
+    const engine = databaseImageEngine(service?.image);
+    return engine && (!selection || selection.source === basename(path) && selection.key === name && selection.engine === engine);
+  });
+  if (candidates.length !== 1) throw new Error(selection ? 'The selected Compose database service changed. Rescan the project.' :
+    'Choose an official MySQL or PostgreSQL service to manage this Compose database.');
   const [[service, spec]] = candidates;
   const engine = databaseImageEngine(spec.image);
   const [mount, ...extra] = spec.volumes ?? [];
@@ -117,7 +121,7 @@ export async function inspectImportedDatabase(project, command, signal) {
     if (container && !['running', 'starting', 'unhealthy'].includes(container.status)) await verifyExistingDatabaseStartup(docker, container.id, engine);
     await resolveStartup(project, [], identity);
   };
-  return { engine, container, config, endpoints: databaseEndpoints(spec, container, engine), environment: spec.environment, verifyStartup, async start(options) {
+  return { engine, service, container, config, endpoints: databaseEndpoints(spec, container, engine), environment: spec.environment, verifyStartup, async start(options) {
     await verifyStartup();
     if (container) {
       if (!['running', 'starting', 'unhealthy'].includes(container.status)) {
@@ -136,6 +140,6 @@ export async function inspectImportedDatabase(project, command, signal) {
     await resolveStartup(project, [], identity);
     await command('docker', ['compose', '--project-directory', cwd, '-p', model.name, '-f', '-', 'up', '-d', '--wait', '--no-deps', '--no-recreate', service],
       { ...config, ...options, input, log: () => {} });
-    if (!(await inspectImportedDatabase(project, command, options.signal)).container) throw new Error(notOwned);
+    if (!(await inspectImportedDatabase(project, command, options.signal, selection)).container) throw new Error(notOwned);
   } };
 }

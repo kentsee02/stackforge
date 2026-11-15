@@ -75,7 +75,7 @@ export class ProjectOperations {
     return result;
   }
 
-  start(project, action, ports, { checkId, installPlanId, confirmVolume, record, verifyDeletion } = {}) {
+  start(project, action, ports, { checkId, installPlanId, confirmVolume, chooseDatabase, record, verifyDeletion } = {}) {
     if (this.closing) throw new Error('StackForge is shutting down.');
     const key = projectPathKey(project.path);
     const entry = this.projects.get(key) ?? {};
@@ -99,7 +99,7 @@ export class ProjectOperations {
         : this.installDependencies(project, task, options),
       databaseTask: () => action === 'database-delete'
         ? this.removeDatabase(project, ports, confirmVolume, options.signal, verifyDeletion)
-        : this.changeDatabase(project, action, ports, options),
+        : this.changeDatabase(project, action, ports, { ...options, chooseDatabase }),
       checkTask: () => this.runCheck(project, checkId, options)
     };
     let outcome = 'succeeded';
@@ -279,8 +279,8 @@ export class ProjectOperations {
     return redact.text(output);
   }
 
-  async database(project, ports, logs = false, includeCapabilities = false) {
-    const { config, container, engine, volume, verifyStartup, endpoints } = await this.databaseTarget(project, ports);
+  async database(project, ports, logs = false, includeCapabilities = false, selection) {
+    const { config, container, engine, volume, verifyStartup, endpoints } = await this.databaseTarget(project, ports, undefined, selection);
     const status = ['exited', 'created', 'dead'].includes(container?.status) ? 'stopped' : container?.status ?? 'absent';
     const state = { ...(project.unmanaged && { engine }), status };
     if (status === 'running' && !await databaseReady({ engine, container: container.id, config, command: this.command })) state.status = 'starting';
@@ -306,15 +306,16 @@ export class ProjectOperations {
     return state;
   }
 
-  async databaseTarget(project, ports, signal) {
-    if (project.unmanaged) return inspectImportedDatabase(project, this.command, signal);
+  async databaseTarget(project, ports, signal, selection) {
+    if (project.unmanaged) return inspectImportedDatabase(project, this.command, signal, selection);
     const info = await inspectRecordedProject(project);
     const target = await this.verifiedManagedDatabase(project, ports, info, signal);
     return { ...target, engine: project.database, container: target.containers[0] };
   }
 
   async changeDatabase(project, action, ports, options) {
-    const { config, container, start, environment } = await this.databaseTarget(project, ports, options.signal);
+    const selection = options.chooseDatabase ? await options.chooseDatabase() : options.databaseSelection;
+    const { config, container, start, environment } = await this.databaseTarget(project, ports, options.signal, selection);
     options.addDatabaseSecrets?.(config.env);
     options.addDatabaseSecrets?.(environment);
     throwIfCancelled(options.signal);

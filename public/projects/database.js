@@ -1,4 +1,5 @@
 import { setText } from '/i18n.js';
+import { createPostgresSetup } from '/projects/postgres-setup.js';
 
 export function createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
   selectedId, selectedProject, renderPage, refresh, act }) {
@@ -8,6 +9,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
   let restoring;
   let deletingDatabase;
   let transferMessage;
+  const openPostgresSetup = createPostgresSetup({ $, request, post, state, renderPage, reload: loadDatabaseDiscovery, edit: openDatabaseConnection });
 
   function showParts(element, parts) {
     delete element.dataset.message;
@@ -21,6 +23,8 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     details.hidden = project.database === 'none' && !project.hasComposeDatabase;
     if (databaseView?.id !== project.id) databaseView = { id: project.id, next: 0 };
     const view = databaseView;
+    $('database-compose-target').hidden = (view.services?.length ?? 0) < 2;
+    $('database-compose-service').disabled = unavailable || view.loading || Boolean(state.pending) || project.operation === 'databaseTask';
     const task = project.databaseTask;
     if (view.taskStatus !== task?.status) view.next = 0;
     view.taskStatus = task?.status;
@@ -76,7 +80,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     if (!project || state.pending) return;
     state.pending = { id: project.id, action: 'database-backup' };
     const message = value => {
-      if (binding && selectedId() === project.id) showMessage($('database-resource-message'), value);
+      if (binding && !binding.compose && selectedId() === project.id) showMessage($('database-resource-message'), value);
       else transferMessage = { id: project.id, message: value };
     };
     message('Preparing backup…');
@@ -103,10 +107,19 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     if (!view || view.loading || (!logs && Date.now() < view.next) || !$('project-database').open || $('project-database').hidden) return;
     view.loading = true;
     $('database-logs').disabled = true;
+    $('database-compose-service').disabled = true;
     try {
       // Allow time for the Compose list, inspection, and optional log commands.
-      const result = await request(`/api/projects/${view.id}/database?capabilities=1${logs ? '&logs=1' : ''}`, { signal: AbortSignal.timeout(50_000) });
-      Object.assign(view, { startHint: undefined, restoreHint: undefined, deleteHint: undefined }, result, { error: undefined, diagnostic: undefined });
+      const params = new URLSearchParams({ capabilities: 1 });
+      if (logs) params.set('logs', '1');
+      if (view.binding) params.set('binding', view.binding);
+      const result = await request(`/api/projects/${view.id}/database?${params}`, { signal: AbortSignal.timeout(50_000) });
+      Object.assign(view, { startHint: undefined, restoreHint: undefined, deleteHint: undefined, error: undefined, diagnostic: undefined }, result);
+      if (view === databaseView && result.services?.length > 1) {
+        const select = $('database-compose-service');
+        select.replaceChildren(...result.services.map(service => new Option(`${service.name} · ${stackNames[service.engine]}`, service.id)));
+        select.value = view.binding;
+      }
       if (logs && result.log === undefined) view.log = '';
       if (!logs && result.status === 'absent') view.log = undefined;
     } catch (error) { Object.assign(view, { error: error.message, diagnostic: error.diagnostic }); }
@@ -132,7 +145,9 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
   function openDatabaseConnection(projectId, requirement) {
     if (state.pending || databaseDiscovery?.id !== projectId || databaseDiscovery.working) return;
     configuringDatabase = { projectId, requirement };
-    const file = requirement.directory === '.' ? '.env' : `${requirement.directory}/.env`;
+    const name = requirement.environmentEdit?.file ?? '.env';
+    const file = requirement.directory === '.' ? name : `${requirement.directory}/${name}`;
+    setText($('database-connection-title'), requirement.environmentEdit ? 'Edit database connection' : 'Configure database connection');
     setText($('database-connection-target'), `Save ${requirement.environmentVariable} in ${file}`);
     $('database-connection-form').reset();
     showMessage($('database-connection-message'), '');
@@ -162,6 +177,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     const binding = resourceBinding();
     const sqlite = binding?.instance.provider === 'sqlite';
     const remote = binding?.instance.provider === 'remote';
+    const local = binding?.instance.provider === 'local';
     const status = databaseDiscovery.resourceStatus;
     const can = status?.capabilities ?? {};
     $('database-remote-form').hidden = !remote;
@@ -170,6 +186,8 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     $('database-remote-remove').disabled = locked || !binding?.profileSaved;
     $('database-sqlite-inspect').hidden = !sqlite;
     $('database-sqlite-inspect').disabled = locked;
+    $('database-local-transfer').hidden = !local;
+    $('database-local-transfer').disabled = locked;
     $('database-sqlite-create').hidden = !sqlite || !can.create;
     $('database-sqlite-create').disabled = locked;
     $('database-resource-backup').disabled = locked || !can.backup;
@@ -193,25 +211,33 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
         const binding = sources.get(item.id);
         const target = [item.host && `${item.host}:${item.port}`, item.name, item.path].filter(Boolean).join(' / ');
         const verification = binding?.instance.verification?.status;
-      const missingVariable = item.environmentFile ? `Environment variable ${item.environmentVariable} is missing from ${item.environmentFile}` :
-        `Environment variable ${item.environmentVariable} is missing`;
-      const status = verification === 'connected' ? 'Connection previously verified' : verification === 'missing' ? 'Database is missing' :
-        item.status === 'missing' && item.environmentVariable ? missingVariable :
-          discoveryStates[item.status] ?? 'Declared dependency';
+        const missingVariable = item.environmentFile ? `Environment variable ${item.environmentVariable} is missing from ${item.environmentFile}` :
+          `Environment variable ${item.environmentVariable} is missing`;
+        const status = verification === 'connected' ? 'Connection previously verified' : verification === 'missing' ? 'Database is missing' :
+          item.status === 'missing' && item.environmentVariable ? missingVariable :
+            discoveryStates[item.status] ?? 'Declared dependency';
         row.append([discoveredEngines[item.engine], item.source, target].filter(Boolean).join(' · '), ' · ');
         const label = document.createElement('span');
         setText(label, status);
         row.append(label);
+        if (item.guidedSetup && ['missing', 'configured'].includes(item.status)) {
+          const setup = document.createElement('button');
+          setup.type = 'button';
+          setup.className = 'text-button database-connection-action';
+          setText(setup, 'Set up PostgreSQL');
+          setup.addEventListener('click', () => openPostgresSetup(view.id, selectedProject()?.name || 'project', item));
+          row.append(setup);
+        }
         if (binding?.shared) {
           const shared = document.createElement('span');
           setText(shared, 'Shared database');
           row.append(' · ', shared);
         }
-        if (item.status === 'missing' && item.environmentVariable && ['postgres', 'mysql'].includes(item.engine)) {
+        if (item.environmentEdit || (item.status === 'missing' && item.environmentVariable && ['postgres', 'mysql'].includes(item.engine))) {
           const action = document.createElement('button');
           action.type = 'button';
           action.className = 'text-button database-connection-action';
-          setText(action, 'Configure database connection');
+          setText(action, item.environmentEdit ? 'Edit database connection' : 'Configure database connection');
           action.addEventListener('click', () => openDatabaseConnection(view.id, item));
           row.append(action);
         }
@@ -232,7 +258,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       const localTarget = matchingTarget(local);
       if (localTarget) select.value = localTarget;
       $('database-local-form').hidden = !local.length;
-      const managed = [...new Map(data.bindings.filter(item => item.instance.provider === 'sqlite' ||
+      const managed = [...new Map(data.bindings.filter(item => ['sqlite', 'local'].includes(item.instance.provider) ||
         item.instance.provider === 'remote' && ['postgres', 'mysql'].includes(item.instance.engine))
         .map(item => [item.instanceId, item])).values()];
       const targets = $('database-resource');
@@ -248,6 +274,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
         remoteTarget ? 'Database connection saved. Configure the remote connection below.' :
         savedRequirementId ? 'Database connection saved.' : data.limited ? 'The scan reached its file limit.' :
         requirements.length ? '' : 'No database configuration was detected.');
+      return data.requirements.find(item => item.id === savedRequirementId);
     } catch (error) {
       if (view === databaseDiscovery) showMessage($('database-discovery-message'), error.message);
     } finally {
@@ -290,12 +317,12 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
         row.textContent = `${item.type} · ${item.name}`;
         return row;
       }));
-      if (action === 'database-remote-profile' && mode !== 'remove') {
+      if (action === 'database-local-status' || action === 'database-remote-profile' && mode !== 'remove') {
         showParts($('database-resource-message'), [
-          'Remote connection verified', result.version,
+          action === 'database-local-status' ? 'Local connection verified' : 'Remote connection verified', result.version,
           result.capabilities.backup ? 'Backup allowed' : 'Backup unavailable',
           result.capabilities.restore ? 'Restore allowed' : 'Restore unavailable',
-          'Provider management unavailable'
+          action === 'database-remote-profile' && 'Provider management unavailable'
         ]);
       } else showMessage($('database-resource-message'), mode === 'remove' ? 'Remote connection profile removed.' :
         result.exists ? 'SQLite schema inspected.' : 'The SQLite file is missing.');
@@ -397,7 +424,9 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     renderPage();
     try {
       const { token } = await request('/api/state');
-      await post(`/api/projects/${projectId}/database-connection-config`, token, { requirementId: requirement.id, value: url.value }, 30_000);
+      await post(`/api/projects/${projectId}/database-connection-config`, token, {
+        requirementId: requirement.id, value: url.value, revision: requirement.environmentEdit?.revision
+      }, 30_000);
       $('database-connection-dialog').close();
       if (databaseDiscovery?.id === projectId) await loadDatabaseDiscovery(requirement.id);
     } catch (error) { showMessage($('database-connection-message'), error.message); }
@@ -426,6 +455,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
   $('database-remote-test').addEventListener('click', () => resourceAction('database-remote-profile', 'test'));
   $('database-remote-remove').addEventListener('click', () => resourceAction('database-remote-profile', 'remove'));
   $('database-sqlite-inspect').addEventListener('click', () => resourceAction('database-sqlite-inspect'));
+  $('database-local-transfer').addEventListener('click', () => resourceAction('database-local-status'));
   $('database-sqlite-create').addEventListener('click', () => {
     const binding = resourceBinding();
     if (!binding || state.pending) return;
@@ -437,10 +467,19 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
   $('database-sqlite-confirm').addEventListener('submit', event => { event.preventDefault(); void resourceAction('database-sqlite-create'); });
   $('database-resource-backup').addEventListener('click', () => backupAction(selectedProject(), resourceBinding()));
   $('database-resource-restore').addEventListener('click', () => openRestore(resourceBinding()));
-  $('database-start').addEventListener('click', () => act(selectedId(), 'database-start'));
-  $('database-stop').addEventListener('click', () => act(selectedId(), 'database-stop'));
+  function composeBinding() {
+    return databaseView?.id === selectedId() && databaseView?.services?.length > 1 ? { id: databaseView.binding, compose: true } : undefined;
+  }
+  $('database-compose-service').addEventListener('change', event => {
+    Object.assign(databaseView, { binding: event.target.value, next: 0, status: undefined, log: undefined });
+    transferMessage = undefined;
+    renderPage();
+    void loadDatabase();
+  });
+  $('database-start').addEventListener('click', () => act(selectedId(), 'database-start', { bindingId: composeBinding()?.id }));
+  $('database-stop').addEventListener('click', () => act(selectedId(), 'database-stop', { bindingId: composeBinding()?.id }));
   $('database-logs').addEventListener('click', () => loadDatabase(true));
-  $('database-backup').addEventListener('click', () => backupAction(selectedProject()));
+  $('database-backup').addEventListener('click', () => backupAction(selectedProject(), composeBinding()));
   function openRestore(binding) {
     const project = selectedProject();
     if (!project || state.pending) return;
@@ -453,13 +492,13 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     $('database-restore-submit').disabled = true;
     $('database-restore-dialog').showModal();
   }
-  $('database-restore').addEventListener('click', () => openRestore());
+  $('database-restore').addEventListener('click', () => openRestore(composeBinding()));
   $('database-restore-dialog').addEventListener('cancel', event => {
     if (state.pending?.action === 'database-restore') event.preventDefault();
   });
   function validRestore() {
     const file = $('database-restore-file').files[0];
-    return file?.size > 0 && file.size <= 64 * 1024 * 1024 + 4096 && !state.pending &&
+    return file?.size > 0 && file.size <= 512 * 1024 * 1024 + 4096 && !state.pending &&
       (!restoring?.approval || $('database-restore-name').value === restoring.approval.name);
   }
   $('database-restore-file').addEventListener('change', () => {
@@ -488,7 +527,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       const result = await response.json();
       if (approval) {
         $('database-restore-dialog').close();
-        if (binding) showMessage($('database-resource-message'), 'Database restored and verified.');
+        if (binding && !binding.compose) showMessage($('database-resource-message'), 'Database restored and verified.');
         else transferMessage = { id: project.id, message: 'Database restored and verified.' };
         if (binding && databaseDiscovery) databaseDiscovery.resourceStatus = undefined;
       } else {

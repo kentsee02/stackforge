@@ -183,7 +183,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         const job = jobs.view(url.pathname.slice('/api/jobs/'.length));
         return send(res, job ? 200 : 404, job ?? { error: '找不到这个创建任务。' });
       }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|database-connection-config|database-remote-profile|database-sqlite-inspect|database-sqlite-create|run-check|check-cancel|check-config)$/.exec(url.pathname);
+      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|database-connection-config|database-postgres-setup|database-local-status|database-remote-profile|database-sqlite-inspect|database-sqlite-create|run-check|check-cancel|check-config)$/.exec(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
@@ -276,6 +276,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
               const target = action === 'run-check' ? { ...project, customChecks: projectConfig.checks(project) } : project;
               operations.start(target, action, projectConfig.ports(project), {
                 checkId: payload.check, installPlanId: detectedInstall ? payload.planId : undefined, confirmVolume: payload.confirmVolume,
+                chooseDatabase: ['database-start', 'database-stop'].includes(action) && payload.bindingId !== undefined ?
+                  () => database.selectedCompose(project, payload.bindingId) : undefined,
                 record: action.startsWith('database-') ? database.record(project, action) : undefined,
                 verifyDeletion: action === 'database-delete' ? target => database.verifyDeletion(project, target) : undefined
               });

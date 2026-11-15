@@ -169,7 +169,7 @@
             </div>
             <p id="database-initialization-message" class="hint" role="status"></p>
             <div id="database-resources" hidden>
-              <label class="inline-field" for="database-resource"><span data-i18n="数据库文件或远程目标">Database file or remote target</span><select id="database-resource"></select></label>
+              <label class="inline-field" for="database-resource"><span data-i18n="备份和恢复目标">Backup and restore target</span><select id="database-resource"></select></label>
               <form id="database-remote-form" hidden>
                 <label class="inline-field" for="database-remote-user"><span data-i18n="数据库用户">Database user</span><input id="database-remote-user" type="text" autocomplete="off" maxlength="63" required></label>
                 <label class="inline-field" for="database-remote-password"><span data-i18n="数据库密码">Database password</span><input id="database-remote-password" type="password" autocomplete="off" maxlength="1024" required></label>
@@ -182,6 +182,7 @@
               </form>
               <div class="project-operation-actions">
                 <button id="database-sqlite-inspect" type="button" class="secondary" data-i18n="检查 SQLite 文件">Inspect SQLite file</button>
+                <button id="database-local-transfer" type="button" class="secondary" data-i18n="检查本机连接">Check local connection</button>
                 <button id="database-sqlite-create" type="button" class="secondary" data-i18n="创建 SQLite 文件">Create SQLite file</button>
                 <button id="database-resource-backup" type="button" class="secondary" data-i18n="下载备份">Download backup</button>
                 <button id="database-resource-restore" type="button" class="secondary" data-i18n="恢复备份">Restore backup</button>
@@ -196,6 +197,7 @@
           </details>
           <details id="project-database" class="project-ports" hidden>
             <summary data-i18n="数据库管理">Database controls</summary>
+            <label id="database-compose-target" class="inline-field" hidden><span data-i18n="Compose 数据库服务">Compose database service</span><select id="database-compose-service"></select></label>
             <div class="project-operation-heading"><strong id="database-engine"></strong><span id="database-status" class="small" role="status"></span></div>
             <div class="project-operation-actions">
               <button id="database-start" type="button" class="secondary" data-i18n="启动数据库">Start database</button>
@@ -288,7 +290,7 @@
     </form>
   </dialog>
   <dialog id="database-connection-dialog" class="project-trash-dialog" aria-labelledby="database-connection-title" aria-describedby="database-connection-target">
-    <h2 id="database-connection-title" data-i18n="配置数据库连接">Configure database connection</h2>
+    <h2 id="database-connection-title">Configure database connection</h2>
     <p id="database-connection-target"></p>
     <form id="database-connection-form" method="dialog" autocomplete="off">
       <label class="inline-field project-trash-field" for="database-connection-url">
@@ -300,6 +302,41 @@
       <div class="project-trash-actions">
         <button type="button" id="database-connection-cancel" class="secondary" data-i18n="返回">Go back</button>
         <button type="submit" id="database-connection-save" class="secondary" data-i18n="保存并重新扫描">Save and rescan</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="postgres-setup-dialog" class="project-trash-dialog postgres-setup-dialog" aria-labelledby="postgres-setup-title">
+    <h2 id="postgres-setup-title" data-i18n="设置 PostgreSQL">Set up PostgreSQL</h2>
+    <p id="postgres-setup-target" class="hint"></p>
+    <form id="postgres-setup-form" method="dialog" autocomplete="off">
+      <fieldset id="postgres-setup-fields" class="startup-service">
+        <legend data-i18n="本机 PostgreSQL">Local PostgreSQL</legend>
+        <div class="startup-fields">
+          <label class="inline-field"><span data-i18n="主机">Host</span><select id="postgres-setup-host"><option>127.0.0.1</option><option>::1</option></select></label>
+          <label class="inline-field"><span data-i18n="端口">Port</span><input id="postgres-setup-port" type="number" min="1" max="65535" value="5432" required></label>
+          <label class="inline-field"><span data-i18n="数据库名称">Database name</span><input id="postgres-setup-name" maxlength="63" required></label>
+          <label class="inline-field"><span data-i18n="数据库用户">Database user</span><input id="postgres-setup-user" value="postgres" maxlength="63" required></label>
+          <label class="inline-field"><span data-i18n="数据库密码">Database password</span><input id="postgres-setup-password" type="password" autocomplete="new-password" maxlength="1024"></label>
+        </div>
+      </fieldset>
+      <p id="postgres-setup-status" role="status"></p>
+      <div class="project-operation-actions">
+        <button id="postgres-setup-edit" type="button" class="text-button" data-i18n="编辑数据库连接" hidden>Edit database connection</button>
+        <button id="postgres-setup-dependencies" type="button" class="text-button" data-i18n="前往依赖安装" hidden>Go to Dependencies</button>
+      </div>
+      <div id="postgres-setup-guide" hidden>
+        <p class="hint" data-i18n="可安装 PostgreSQL，或用 Docker 运行官方镜像。Docker 可将本机端口映射到容器的 5432 端口。StackForge 需要本机 psql 客户端。">Install PostgreSQL or run the official image with Docker. Docker can map your local port to port 5432 in the container. StackForge needs the local psql client.</p>
+        <div class="project-operation-actions"><a href="https://www.postgresql.org/download/" target="_blank" rel="noreferrer" data-i18n="安装 PostgreSQL">Install PostgreSQL</a><a href="https://hub.docker.com/_/postgres" target="_blank" rel="noreferrer" data-i18n="PostgreSQL Docker 指南">PostgreSQL Docker guide</a></div>
+      </div>
+      <ul id="postgres-setup-migrations" class="check-list"></ul>
+      <label class="inline-field project-trash-field" id="postgres-setup-confirm-field" hidden>
+        <span data-i18n="输入目标数据库名称以确认。">Type the target database name to confirm.</span>
+        <strong id="postgres-setup-confirm-target"></strong><input id="postgres-setup-confirm" autocapitalize="none" spellcheck="false">
+      </label>
+      <div class="project-trash-actions">
+        <button id="postgres-setup-close" type="button" class="secondary" data-i18n="关闭">Close</button>
+        <button id="postgres-setup-check" type="submit" class="secondary" data-i18n="检查数据库">Check database</button>
+        <button id="postgres-setup-next" type="button" class="secondary" hidden></button>
       </div>
     </form>
   </dialog>

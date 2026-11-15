@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstat, opendir, realpath } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseEnv } from 'node:util';
 import { isIP } from 'node:net';
 import { localText } from '../projects/detection/project-detection.mjs';
@@ -23,6 +23,11 @@ const clean = value => String(value ?? '').trim().replace(/^(['"])(.*)\1$/, '$2'
 const validHost = host => host && (isIP(host) || /^(?=.{1,253}$)[a-z\d]+(?:[a-z\d.-]*[a-z\d])?$/i.test(host)) && !placeholder.test(host);
 const boundedPort = value => Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 65535 ? Number(value) : undefined;
 const pathLabel = (folder, file) => folder === '.' ? file : `${folder}/${file}`;
+const editSalt = databaseKey(process.pid, process.hrtime.bigint().toString());
+
+export function environmentRevision(stat, variable) {
+  return databaseKey(editSalt, variable, ...[stat.dev, stat.ino, stat.birthtimeNs, stat.ctimeNs, stat.mtimeNs, stat.size].map(String));
+}
 
 function connection(value, fallback, template) {
   const text = clean(value).replace(/^jdbc:/i, '');
@@ -42,7 +47,7 @@ function connection(value, fallback, template) {
     const url = new URL(text);
     const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
     const port = url.port ? boundedPort(url.port) : ports[engine];
-    const name = decodeURIComponent(url.pathname.replace(/^\//, ''));
+    const name = decodeURIComponent(url.pathname.replace(/^\//, '')) || (engine === 'redis' ? '0' : '');
     if (validHost(host) && port && (!name || databaseName.test(name))) return { engine, host, port, ...(name && { name }), status: 'configured' };
   } catch { /* A declaration can be incomplete or use a dynamic connection string. */ }
   return { engine, status: 'ambiguous' };
@@ -84,14 +89,22 @@ async function prismaConnection(folder, files, runtimeEnv, dotenvEnv) {
   const schema = /\bschema\s*:\s*(['"])([\w./-]+)\1\s*[,}]/.exec(text)?.[2];
   if (/\bschema\s*:/.test(text) && !schema) return;
   const datasource = /\bdatasource\s*:\s*\{([^{}]*)\}/.exec(text)?.[1] ?? '';
-  const reference = /(?:^|,)\s*url\s*:\s*(?:env\s*\(\s*(['"])([A-Z_][A-Z0-9_]*)\1\s*\)|process\.env\.([A-Z_][A-Z0-9_]*))\s*(?:,|$)/.exec(datasource);
+  const reference = /(?:^|,)\s*url\s*:\s*(?:env(?:<\w+>)?\s*\(\s*(['"])([A-Z_][A-Z0-9_]*)\1\s*\)|process\.env\.([A-Z_][A-Z0-9_]*)!?)\s*(?:,|$)/.exec(datasource);
   const variable = reference?.[2] ?? reference?.[3];
   if (!variable) return;
-  const schemaPath = schema && relative(folder, resolve(folder, file.startsWith('.config/') ? '.config' : '.', schema)).split(sep).join('/');
+  const schemaPath = schema ? relative(folder, resolve(folder, dirname(file), schema)).split(sep).join('/') :
+    await projectText(folder, 'prisma/schema.prisma') ? 'prisma/schema.prisma' : 'schema.prisma';
+  const migrationBlock = /\bmigrations\s*:\s*\{([^{}]*)\}/.exec(text)?.[1];
+  const migrationPath = /(?:^|,)\s*path\s*:\s*(['"])([\w./-]+)\1\s*(?:,|$)/.exec(migrationBlock ?? '')?.[2];
+  const migrations = migrationPath ? relative(folder, resolve(folder, dirname(file), migrationPath)).split(sep).join('/') :
+    /\bmigrations\s*:/.test(text) ? undefined : `${dirname(schemaPath ?? 'prisma/schema.prisma')}/migrations`;
   const loadsDefaultDotenv = /^\s*import\s*['"]dotenv\/config['"]/m.test(text);
   const source = loadsDefaultDotenv ? dotenvEnv : runtimeEnv;
   const inherited = loadsDefaultDotenv && Object.hasOwn(process.env, variable);
-  return { file, schema: schemaPath, variable, value: inherited ? process.env[variable] : source[variable],
+  const value = inherited ? process.env[variable] : source[variable];
+  const environmentConflict = !loadsDefaultDotenv || Boolean(process.env.DOTENV_CONFIG_PATH) ||
+    (runtimeEnv[variable] !== undefined && runtimeEnv[variable] !== value);
+  return { file, schema: schemaPath, migrations, variable, value, environmentConflict,
     ...(loadsDefaultDotenv && { dotenvFile: '.env' }) };
 }
 
@@ -107,9 +120,10 @@ async function boundedFiles(folder) {
   return { files: files.sort(), limited: entries > 512 };
 }
 
-export async function discoverDatabases(project) {
+export async function discoverDatabases(project, { includeConnections = false } = {}) {
   const { root, identity, services, limited } = await scanProjectServices(project);
   const findings = new Map();
+  const connections = new Map();
   let truncated = limited;
   function add(directory, file, key, metadata) {
     if (!metadata.engine || findings.size >= 128) { truncated ||= findings.size >= 128; return; }
@@ -123,6 +137,7 @@ export async function discoverDatabases(project) {
     }
     record.id = databaseKey(project.id, source, key, record.engine);
     findings.set(record.id, record);
+    return record.id;
   }
 
   const rootEnv = new Map(await Promise.all(envFiles.map(async file => [file, parseEnv(await projectText(root, file))])));
@@ -145,7 +160,9 @@ export async function discoverDatabases(project) {
       for (const [key, value] of Object.entries(envValues)) {
         if (!connectionKey.test(key)) continue;
         const provider = clean(envValues.DB_CONNECTION ?? envValues.DB_DRIVER ?? envValues.DATABASE_ENGINE).toLowerCase();
-        add(directory, file, key, connection(value, key === 'REDIS_URL' ? 'redis' : engines[provider], template));
+        const id = add(directory, file, key, { ...connection(value, key === 'REDIS_URL' ? 'redis' : engines[provider], template),
+          ...(!template && { environmentVariable: key, environmentFile: file }) });
+        if (includeConnections && id && !template) connections.set(id, { value });
       }
       const engine = engines[clean(envValues.DB_CONNECTION ?? envValues.DB_DRIVER ?? envValues.DATABASE_ENGINE).toLowerCase()];
       if (engine) {
@@ -160,6 +177,7 @@ export async function discoverDatabases(project) {
     }
     const prisma = ['prisma/schema.prisma', 'schema.prisma'];
     const prismaConfig = await prismaConnection(folder, files, runtimeEnv, env.get('.env'));
+    if (prismaConfig?.schema?.endsWith('.prisma') && !prismaConfig.schema.startsWith('../') && !prisma.includes(prismaConfig.schema)) prisma.push(prismaConfig.schema);
     const configs = [...files.filter(file => /^(?:application(?:-[\w-]+)?\.(?:properties|ya?ml)|appsettings(?:\.[\w-]+)?\.json|settings\.py|database\.ya?ml|requirements\.txt|pyproject\.toml|Gemfile)$/i.test(file)).slice(0, 20),
       'src/main/resources/application.properties', 'src/main/resources/application.yml', 'src/main/resources/application.yaml', 'config/database.yml'];
     await Promise.all([...prisma, ...new Set(configs)].map(async file => {
@@ -172,10 +190,15 @@ export async function discoverDatabases(project) {
           const value = variable ? runtimeEnv[variable] : /\burl\s*=\s*["']([^"']+)["']/.exec(block)?.[1];
           const result = value || variable ? connection(value, engine) : { engine, status: 'declared' };
           if (result.path && !isAbsolute(result.path)) result.path = file.slice(0, -'schema.prisma'.length) + result.path;
-          add(directory, file, key, { ...result, orm: 'Prisma', ...(variable && { environmentVariable: variable }) });
-          if (!value && !variable && prismaConfig && (prismaConfig.schema ?? prisma[0]) === file && ['postgres', 'mysql', 'sqlserver', 'mongodb'].includes(engine)) {
-            add(directory, prismaConfig.file, prismaConfig.variable, { ...connection(prismaConfig.value, engine), orm: 'Prisma',
-              environmentVariable: prismaConfig.variable, ...(prismaConfig.dotenvFile && { environmentFile: prismaConfig.dotenvFile }) });
+          const schemaId = add(directory, file, key, { ...result, orm: 'Prisma', ...(variable && { environmentVariable: variable }) });
+          if (includeConnections && schemaId && value) connections.set(schemaId, { value });
+          if (!value && !variable && prismaConfig?.schema === file && ['postgres', 'mysql', 'sqlserver', 'mongodb'].includes(engine)) {
+            const id = add(directory, prismaConfig.file, prismaConfig.variable, { ...connection(prismaConfig.value, engine), orm: 'Prisma',
+              environmentVariable: prismaConfig.variable, ...(prismaConfig.dotenvFile && { environmentFile: prismaConfig.dotenvFile }),
+              ...(engine === 'postgres' && { guidedSetup: true }) });
+            if (includeConnections && id) connections.set(id, { value: prismaConfig.value,
+              environmentConflict: prismaConfig.environmentConflict,
+              schema: file, migrations: prismaConfig.migrations });
           }
         }
       } else {
@@ -193,7 +216,11 @@ export async function discoverDatabases(project) {
             const name = fields.database ?? fields['initial catalog'];
             const port = boundedPort(fields.port ?? explicitPort ?? ports[engine]);
             const status = placeholder.test(value) ? 'placeholder' : !host || !name ? 'missing' : validHost(host) && databaseName.test(name) && port ? 'configured' : 'ambiguous';
-            add(directory, file, key, { engine, status, ...(status === 'configured' && { host, name, port }) });
+            const id = add(directory, file, key, { engine, status, ...(status === 'configured' && { host, name, port }) });
+            if (includeConnections && id && engine === 'sqlserver' && !/[{}"'\r\n]/.test(value)) {
+              connections.set(id, { sqlServerAuth: { user: fields['user id'] ?? fields.uid ?? fields.user,
+                password: fields.password ?? fields.pwd, integrated: /^(?:true|yes|sspi)$/i.test(fields['integrated security'] ?? fields.trusted_connection ?? '') } });
+            }
           }
         }
         const urls = [...text.matchAll(/(?:jdbc:)?(?:postgres(?:ql)?|mysql|mariadb|sqlite|sqlserver|mongodb(?:\+srv)?|rediss?):\/\/[^\s"'<>]+/gi)].slice(0, 16);
@@ -238,6 +265,20 @@ export async function discoverDatabases(project) {
     add('.', 'stackforge.json', 'database', { engine: project.database, kind: 'compose', status: 'unverified' });
   }
   const requirements = [...findings.values()].sort((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
+  for (const item of requirements) {
+    const key = item.environmentVariable;
+    if (!key || !/^[A-Z_][A-Z0-9_]*$/.test(key) || !['postgres', 'mysql'].includes(item.engine) ||
+        !['configured', 'placeholder', 'ambiguous'].includes(item.status) || Object.hasOwn(process.env, key)) continue;
+    const folder = resolve(root, item.directory);
+    const sources = await Promise.all(['.env', '.env.local'].map(async file => {
+      const path = join(folder, file);
+      const stat = await lstat(path, { bigint: true }).catch(() => null);
+      if (stat?.isFile() && stat.nlink === 1n && stat.size <= 512n * 1024n &&
+          Object.hasOwn(parseEnv(await projectText(folder, file)), key)) return { file, revision: environmentRevision(stat, key) };
+    }));
+    const definitions = sources.filter(Boolean);
+    if (definitions.length === 1 && (!item.environmentFile || item.environmentFile === definitions[0].file)) item.environmentEdit = definitions[0];
+  }
   for (const item of requirements.filter(entry => entry.path)) {
     const candidate = resolve(root, item.path);
     const stat = await lstat(candidate).catch(() => null);
@@ -256,5 +297,5 @@ export async function discoverDatabases(project) {
     if (databaseName.test(name) && !placeholder.test(name)) match.name = name;
   }
   await resolveStartup(project, [], identity);
-  return { root, identity, limited: truncated, requirements };
+  return { root, identity, limited: truncated, requirements, ...(includeConnections && { connections }) };
 }

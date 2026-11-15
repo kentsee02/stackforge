@@ -4,6 +4,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { run } from '../../platform/process.mjs';
 import { databaseKey, databaseName, sqlName } from '../discovery.mjs';
 import { backupLimit, databaseObjects, mysqlCanBackUp, mysqlRestoreIsScoped, mysqlScopeQuery, parseDatabaseInventory, portableMysqlDump } from '../backup/docker-transfer.mjs';
+import { backupInput, isBackupFile, postgresBackupLimit } from '../backup/payload.mjs';
 
 const unsupported = 'Remote connections support PostgreSQL and MySQL profiles.';
 const failed = 'The remote database operation failed. Check the client, TLS certificate, database permissions, and connectivity.';
@@ -37,22 +38,22 @@ export async function remoteProfile(server, instance, { user, ca }) {
   return { engine: instance.engine, name: instance.name, host: server.host, port: server.port, user, ca: certificate };
 }
 
-export function remoteSession(profile, password, { command = run, signal } = {}) {
-  if (typeof password !== 'string' || !password || password.length > 1024 || /[\0\r\n]/.test(password)) {
+export function remoteSession(profile, password, { command = run, signal, loopback = false } = {}) {
+  if (typeof password !== 'string' || (!loopback && !password) || password.length > 1024 || /[\0\r\n]/.test(password)) {
     throw new Error('Enter a valid remote database password.');
   }
-  const { engine, host, port, name, user, ca } = profile;
+  const { engine, host, port, name, user, ca, sslmode } = profile;
   const postgres = engine === 'postgres';
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PG|MYSQL|MARIADB)/i.test(key)));
-  if (postgres) Object.assign(env, { PGPASSWORD: password, PGCONNECT_TIMEOUT: '4', PGSSLMODE: 'verify-full',
-    PGSSLROOTCERT: ca, PGGSSENCMODE: 'disable', PGOPTIONS: '-c statement_timeout=12000 -c lock_timeout=4000' });
+  if (postgres) Object.assign(env, { PGPASSWORD: password, PGCONNECT_TIMEOUT: '4', PGSSLMODE: loopback ? sslmode : 'verify-full',
+    ...(!loopback && { PGSSLROOTCERT: ca }), PGGSSENCMODE: 'disable', PGOPTIONS: '-c statement_timeout=12000 -c lock_timeout=4000' });
   else Object.assign(env, { MYSQL_PWD: password });
   const endpoint = postgres ? ['-w', '-h', host, '-p', String(port), '-U', user, '-d', name] :
-    ['--no-defaults', '--no-login-paths', '--protocol=TCP', '--ssl-mode=VERIFY_IDENTITY', '--ssl-ca=' + ca,
+    ['--no-defaults', '--no-login-paths', '--protocol=TCP', ...(loopback ? ['--ssl-mode=PREFERRED'] : ['--ssl-mode=VERIFY_IDENTITY', '--ssl-ca=' + ca]),
       '--host=' + host, '--port=' + port, '--user=' + user];
   async function invoke(program, args, options) {
     try { return await command(program, args, { env, signal, timeout: 30000, ...options }); }
-    catch (error) { if (error.name === 'AbortError') throw error; throw new Error(failed); }
+    catch (error) { if (error.name === 'AbortError' || error.code === 'OUTPUT_LIMIT') throw error; throw new Error(failed); }
   }
   const query = async sql => (await invoke(postgres ? 'psql' : 'mysql', postgres ?
     ['-X', '-qAt', '-F', '\t', '-v', 'ON_ERROR_STOP=1', ...endpoint] :
@@ -93,13 +94,14 @@ export function remoteSession(profile, password, { command = run, signal } = {})
       capabilities: { connect: true, backup, restore: scoped && empty === '1' && readOnly === '0' && /^[a-f\d-]{36}$/i.test(identity ?? '') },
       providerPermissions: { start: false, stop: false, delete: false } };
   }
-  async function backup() {
+  async function backup(backupFile) {
     const state = await test();
     if (!state.capabilities.backup) throw new Error('The remote account does not have verified backup permissions.');
     const data = await invoke(postgres ? 'pg_dump' : 'mysqldump', postgres ?
       [...endpoint, '--format=custom', '--no-owner', '--no-privileges'] :
       [...endpoint, '--single-transaction', '--no-tablespaces', '--set-gtid-purged=OFF', '--skip-add-drop-table', '--skip-add-locks', '--skip-column-statistics', '--routines', '--events', '--triggers', '--hex-blob', '--', name],
-    { binaryLimit: backupLimit, timeout: 120000 });
+    postgres && backupFile ? { binaryFile: backupFile, binaryLimit: postgresBackupLimit, timeout: 360000 } :
+      { binaryLimit: backupLimit, timeout: 120000 });
     return { data: postgres ? data : portableMysqlDump(data), version: state.version, engine };
   }
   async function restore(data, expectedIdentity) {
@@ -107,7 +109,8 @@ export function remoteSession(profile, password, { command = run, signal } = {})
     if (!state.capabilities.restore || !state.identity || state.identity !== expectedIdentity) {
       throw new Error('The remote database is not a verified empty restore target.');
     }
-    if (postgres) await invoke('pg_restore', [...endpoint, '--single-transaction', '--exit-on-error', '--no-owner', '--no-privileges'], { input: data, timeout: 120000 });
+    if (postgres) await invoke('pg_restore', [...endpoint, '--single-transaction', '--exit-on-error', '--no-owner', '--no-privileges'],
+      { ...backupInput(data), timeout: isBackupFile(data) ? 360000 : 120000 });
     else await invoke('mysql', [...endpoint, '--connect-timeout=4', '--batch', '--binary-mode', '--local-infile=0', '--database=' + name],
       { input: portableMysqlDump(data), timeout: 120000 });
   }

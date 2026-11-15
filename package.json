@@ -1,17 +1,24 @@
 {
   "name": "stackforge-local",
-  "version": "0.31.1",
+  "version": "0.32.0",
   "description": "A local, open-source full-stack project generator",
   "type": "module",
   "private": true,
   "license": "MIT",
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "start": "node src/http/server.mjs",
     "launch": "node scripts/launcher.mjs",
     "test:integration": "node scripts/integration/stacks.mjs",
     "test:database-integration": "node scripts/integration/databases.mjs",
+    "test:prisma-integration": "node scripts/integration/prisma-setup.mjs",
+    "test:browser": "node scripts/integration/browser.mjs",
     "test": "node --test \"test/**/*.test.mjs\"",
     "check": "node scripts/check.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.65.0"
   }
 }

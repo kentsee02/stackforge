@@ -241,7 +241,7 @@ test('double-click launcher avoids an occupied port and reuses the same project 
   t.after(() => new Promise(resolve => occupied.close(resolve)));
   const port = occupied.address().port;
   const launched = await launch({ port, directory, open: false, appOptions: { stateDir: false } });
-  t.after(async () => { await launched.server.shutdownTasks(); await new Promise(resolve => launched.server.close(resolve)); });
+  if (launched.server) t.after(async () => { await launched.server.shutdownTasks(); await new Promise(resolve => launched.server.close(resolve)); });
   assert.notEqual(Number(new URL(launched.url).port), port);
   const second = await launch({ port, directory, open: false, appOptions: { stateDir: false } });
   assert.equal(second.reused, true);

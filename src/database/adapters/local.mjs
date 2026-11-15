@@ -9,6 +9,15 @@ const engineConfig = {
 };
 const unsupported = 'Choose a detected local PostgreSQL or MySQL database.';
 const authentication = 'The database client could not authenticate or connect. Check the credentials, port, and local service.';
+function connectionIssue(message) {
+  if (/ENOENT|not recognized/i.test(message)) return 'client';
+  if (/password authentication failed|no password supplied|role .* does not exist/i.test(message)) return 'authentication';
+  if (/database .* does not exist/i.test(message)) return 'database';
+  if (/permission denied|no pg_hba\.conf entry/i.test(message)) return 'permission';
+  if (/SSL|TLS|certificate/i.test(message)) return 'tls';
+  if (/connection refused|could not translate host|timed out|timeout expired|执行超时/i.test(message)) return 'server';
+  return 'connection';
+}
 const versionNumber = output => /\b\d+\.\d+(?:\.\d+)?\b/.exec(output)?.[0];
 const postgresEmpty = `NOT EXISTS (
   SELECT FROM pg_catalog.pg_namespace WHERE left(nspname, 3) <> 'pg_' AND nspname NOT IN ('public', 'information_schema')
@@ -44,6 +53,11 @@ function listening(host, port) {
     socket.once('error', () => finish(false));
     socket.setTimeout(1200, () => finish(false));
   });
+}
+
+export async function localhostEndpoint(port, probe = listening) {
+  const [ipv4, ipv6] = await Promise.all([probe('127.0.0.1', port), probe('::1', port)]);
+  return ipv4 && ipv6 ? null : ipv6 ? '::1' : '127.0.0.1';
 }
 
 export async function localInstallation(target, { command = run, platform = process.platform, probe = listening } = {}) {
@@ -88,7 +102,8 @@ export function localSession(target, credentials, command = run, signal) {
     throw new Error('Enter a valid database user and password.');
   }
   const env = sqlEnvironment();
-  if (engine === 'postgres') Object.assign(env, { PGPASSWORD: password, PGCONNECT_TIMEOUT: '4', PGOPTIONS: '-c statement_timeout=12000 -c lock_timeout=4000' });
+  if (engine === 'postgres') Object.assign(env, { PGPASSWORD: password, PGCONNECT_TIMEOUT: '4', PGOPTIONS: '-c statement_timeout=12000 -c lock_timeout=4000', LC_ALL: 'C',
+    ...(target.sslmode && { PGSSLMODE: target.sslmode }) });
   else Object.assign(env, { MYSQL_PWD: password });
   const client = engineConfig[engine].client;
   const query = async (sql, database) => {
@@ -100,8 +115,8 @@ export function localSession(target, credentials, command = run, signal) {
       return (await command(client, args, { env, input: Buffer.from(sql + '\n'), timeout: 20000, stdoutOnly: true, stdoutLimit: 256 * 1024, signal })).trimEnd();
     } catch (error) {
       if (error.name === 'AbortError') throw error;
-      if (/ENOENT|not recognized/i.test(error.message)) throw new Error('Install the database command-line client and add it to PATH.');
-      throw new Error(authentication);
+      const issue = connectionIssue(error.message);
+      throw Object.assign(new Error(issue === 'client' ? 'Install the database command-line client and add it to PATH.' : authentication), { issue });
     }
   };
   const quote = identifier => engine === 'postgres' ? `"${identifier}"` : '`' + identifier + '`';
