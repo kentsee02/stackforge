@@ -14,7 +14,7 @@ export function openBrowser(url) {
 }
 
 export async function launch({ port = 4310, directory = join(root, '.stackforge'), open = openBrowser, appOptions = {}, attempts = 20 } = {}) {
-  const { createApp, identity } = await import('../src/server.mjs');
+  const { createApp, identity } = await import('../src/http/server.mjs');
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Port must be an integer between 0 and 65535.');
   const marker = join(directory, 'launcher.json');
   const reuse = async url => {
@@ -72,7 +72,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   } else {
     try {
       const { url, server, reused } = await launch({ port: Number(process.env.PORT || 4310), open: process.env.STACKFORGE_NO_BROWSER === '1' ? false : openBrowser });
-      const { identity } = await import('../src/server.mjs');
+      const { identity } = await import('../src/http/server.mjs');
       console.log(`\nStackForge ${identity.version}\n${url}\n${reused ? 'Opened the existing service.' : 'Keep this window open. Press Ctrl+C to stop; unfinished tasks can be resumed.'}\n`);
       if (server) for (const event of ['SIGINT', 'SIGTERM']) process.on(event, async () => { await server.shutdownTasks(); server.close(() => process.exit(0)); });
     } catch (error) { console.error(error.message); process.exitCode = 1; }

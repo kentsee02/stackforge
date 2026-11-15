@@ -171,7 +171,7 @@ Use `--only=node`, `--only=java`, or `--only=nest` to check one stack. The expli
 npm run test:integration -- --only=node --github --repo-name=your-test-repository
 ```
 
-Main modules: `src/generator.mjs` (creation), `src/checkpoint.mjs` (recovery), `src/jobs.mjs` / `src/job-store.mjs` (tasks), `src/templates.mjs` (generated code), `src/environment.mjs` (checks), `src/git.mjs` (Git/GitHub), `src/server.mjs` (local API), and `public/` (UI and localization). See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
+See the [code map](docs/ARCHITECTURE.md) for the application entry points, project and database modules, and their tests. See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
 
 ## Scope
 
@@ -179,4 +179,4 @@ Supports npm, Java 21 / Maven, Vue / React, Express / Spring Boot / NestJS, and 
 
 ## Credits and license
 
-Uses official [Vite](https://vite.dev/guide/) conventions and [Spring Initializr](https://docs.spring.io/initializr/docs/current/reference/html/) APIs. IBM Plex Sans comes from [IBM Plex](https://github.com/IBM/plex) under the SIL Open Font License; see [public/OFL.txt](public/OFL.txt). StackForge is [MIT licensed](LICENSE).
+Uses official [Vite](https://vite.dev/guide/) conventions and [Spring Initializr](https://docs.spring.io/initializr/docs/current/reference/html/) APIs. IBM Plex Sans comes from [IBM Plex](https://github.com/IBM/plex) under the SIL Open Font License; see [public/fonts/OFL.txt](public/fonts/OFL.txt). StackForge is [MIT licensed](LICENSE).

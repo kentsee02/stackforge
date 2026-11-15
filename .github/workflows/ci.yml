@@ -27,12 +27,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: node --test test/database-p1.test.mjs test/database-p2.test.mjs
+      - run: node --test "test/database/**/*.test.mjs"
       - if: runner.os == 'Linux'
         run: |
           docker pull postgres:17
           docker pull mysql:8.4
-          node scripts/database-integration.mjs
+          npm run test:database-integration
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -46,4 +46,4 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL did not become ready' }
           $env:STACKFORGE_TEST_PG_PASSWORD = 'root'
-          node scripts/database-integration.mjs --windows-native
+          npm run test:database-integration -- --windows-native
