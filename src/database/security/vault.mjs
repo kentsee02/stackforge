@@ -16,7 +16,7 @@ export function databaseVault(directory, { command = run, platform = process.pla
   async function windows(method, input) {
     const encoded = Buffer.from(windowsScript(method), 'utf16le').toString('base64');
     return (await command('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-      { input: Buffer.from(input), stdoutOnly: true, stdoutLimit: 64 * 1024, timeout: 8000 })).trim();
+      { input: Buffer.from(input), stdoutOnly: true, stdoutLimit: 64 * 1024, timeout: 25000 })).trim();
   }
   function labels(id) {
     return ['application', 'StackForge', 'profile', id];

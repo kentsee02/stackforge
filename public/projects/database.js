@@ -306,7 +306,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     const current = () => view === databaseDiscovery && binding.id === resourceBinding()?.id;
     try {
       const { token } = await request('/api/state');
-      let result = await post(`/api/projects/${view.id}/${action}`, token, payload, 45000);
+      let result = await post(`/api/projects/${view.id}/${action}`, token, payload, action === 'database-remote-profile' ? 70000 : 45000);
       if (action === 'database-sqlite-create') result = await post(`/api/projects/${view.id}/database-sqlite-inspect`, token, { bindingId: binding.id }, 45000);
       if (!current()) return;
       view.resourceStatus = result;
