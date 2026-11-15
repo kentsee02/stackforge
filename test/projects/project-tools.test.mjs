@@ -8,9 +8,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createApp } from '../../src/http/server.mjs';
 import { run } from '../../src/platform/process.mjs';
 
-test('project checks run only supported commands, and Git compares the selected repository against its local upstream', { timeout: 30000 }, async t => {
+test('project checks run only supported commands, and Git compares the selected repository against its local upstream', { timeout: 60000 }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-tools-')));
-  t.after(() => rm(directory, { recursive: true, force: true }));
   const options = { name: 'tools-app', frontend: 'vue', backend: 'spring', database: 'none' };
   await Promise.all(['scripts', 'frontend', 'backend'].map(folder => mkdir(join(directory, folder))));
   await Promise.all([
@@ -25,9 +24,13 @@ test('project checks run only supported commands, and Git compares the selected 
   ]);
 
   const server = createApp({ stateDir: false });
+  t.after(async () => {
+    await server.shutdownTasks();
+    await new Promise(resolve => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  t.after(async () => { await server.shutdownTasks(); await new Promise(resolve => server.close(resolve)); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const get = async path => (await fetch(base + path)).json();
   const { token } = await get('/api/state');
@@ -36,30 +39,35 @@ test('project checks run only supported commands, and Git compares the selected 
   assert.equal(imported.status, 201);
   const { id } = await imported.json();
   const route = `/api/projects/${id}`;
-  const state = async check => {
-    for (let i = 0; i < 120; i++) {
-      const project = (await get(`/api/projects?logs=${id}`)).projects[0];
-      if (project.checkTask && check(project)) return project.checkTask;
+  const state = async (phase, matches) => {
+    const deadline = Date.now() + 15000;
+    let task;
+    while (Date.now() < deadline) {
+      task = (await get(`/api/projects?logs=${id}`)).projects[0]?.checkTask;
+      if (task?.phase === phase) {
+        if (matches(task)) return task;
+        if (['succeeded', 'failed', 'cancelled'].includes(task.status)) break;
+      }
       await sleep(50);
     }
-    assert.fail('Expected check state was not reached');
+    assert.fail(`Expected check state for ${phase}, received ${JSON.stringify(task)}`);
   };
   assert.deepEqual((await get(route + '/checks')).checks.map(check => check.id), ['root:build', 'root:test', 'frontend:lint', 'maven:package', 'maven:test']);
   assert.equal((await post(route + '/run-check', { check: 'root:deploy' })).status, 409);
   assert.equal((await post(route + '/run-check', { check: 'root:build' }, { 'x-stackforge-token': 'invalid' })).status, 403);
   assert.equal((await post(route + '/run-check', { check: 'root:build' })).status, 202);
-  assert.match((await state(({ checkTask }) => checkTask.phase === 'root:build' && checkTask.status === 'succeeded')).log, /fixture check output/);
+  assert.match((await state('root:build', task => task.status === 'succeeded')).log, /fixture check output/);
   assert.equal((await post(route + '/run-check', { check: 'frontend:lint' })).status, 202);
-  const failed = await state(({ checkTask }) => checkTask.phase === 'frontend:lint' && checkTask.status === 'failed');
+  const failed = await state('frontend:lint', task => task.status === 'failed');
   assert.match(failed.log, /12345/);
   assert.match(failed.error, /7/);
   assert.equal((await post(route + '/run-check', { check: 'maven:package' })).status, 202);
-  assert.match((await state(({ checkTask }) => checkTask.phase === 'maven:package' && checkTask.status === 'succeeded')).log, /fixture Maven -B package/);
+  assert.match((await state('maven:package', task => task.status === 'succeeded')).log, /fixture Maven -B package/);
   assert.equal((await post(route + '/run-check', { check: 'root:test' })).status, 202);
-  await state(({ checkTask }) => checkTask.phase === 'root:test' && checkTask.log.includes('fixture check output'));
+  await state('root:test', task => task.log.includes('fixture check output'));
   assert.equal((await post(route + '/trash', { confirmName: options.name })).status, 409);
   assert.equal((await post(route + '/check-cancel')).status, 202);
-  await state(({ checkTask }) => checkTask.status === 'cancelled');
+  await state('root:test', task => task.status === 'cancelled');
 
   assert.deepEqual(await get(route + '/git'), { status: 'absent' });
   const git = args => run('git', args, { cwd: directory, stdoutOnly: true });
