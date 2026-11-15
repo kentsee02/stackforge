@@ -4,6 +4,7 @@ import { resolve, join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
+import { setTimeout as delay } from 'node:timers/promises';
 import assert from 'node:assert/strict';
 import { generateProject } from '../../src/generation/generator.mjs';
 import { run, npm, terminateTree } from '../../src/platform/process.mjs';
@@ -30,7 +31,7 @@ async function freePort() {
 async function waitFor(url, accept, child, logs) {
   const deadline = Date.now() + 240000;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error('开发服务提前退出。\n' + logs());
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error('开发服务提前退出。\n' + logs());
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(6000) });
       if (response.ok) { const data = await response.json(); if (accept(data)) return data; }
@@ -38,6 +39,18 @@ async function waitFor(url, accept, child, logs) {
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   throw new Error(`等待接口超时：${url}\n${logs()}`);
+}
+
+async function stopDevelopment(child) {
+  if (!child) return;
+  if (process.platform !== 'win32' && child.exitCode === null && child.signalCode === null) {
+    const closed = new Promise(resolve => child.once('close', () => resolve(true)));
+    child.kill('SIGTERM');
+    if (await Promise.race([closed, delay(5000, false, { ref: false })])) return;
+  }
+  await terminateTree(child);
+  child.stdout.destroy();
+  child.stderr.destroy();
 }
 
 const variants = [
@@ -112,7 +125,7 @@ try {
       record.checks.push('frontend-html');
       console.log('通过：' + record.checks.join(', '));
     } finally {
-      if (child) await terminateTree(child);
+      await stopDevelopment(child);
       await run('docker', ['compose', 'down'], { cwd: result.path, env, timeout: 120000 });
       record.databaseVolumeRetained = true;
       await writeFile(join(directory, 'report.json'), JSON.stringify(report, null, 2));
