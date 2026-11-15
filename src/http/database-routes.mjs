@@ -27,15 +27,17 @@ export function createDatabaseRoutes({ stateDir, operations, databaseAdapters, p
   const databaseWrites = new Map();
   let transfer;
 
-  async function scanDatabases(project, discovery) {
+  async function scanDatabases(project, discovery, activeIds) {
     const { requirements, limited } = discovery ?? await discoverDatabases(project);
     await databaseRegistry.sync(project, requirements, projectConfig.ports(project).database ?? defaultPorts(project).database);
-    return { ...databaseRegistry.view(project), limited };
+    return { ...databaseRegistry.view(project, activeIds), limited };
   }
 
   async function refreshDatabaseBindings(except, strict = false) {
+    const activeIds = new Set([except]);
     for (const other of managedProjects().filter(item => item.id !== except)) {
       if (!await locationExists(other.path)) continue;
+      activeIds.add(other.id);
       try {
         const scan = await scanDatabases(other);
         if (strict && scan.limited) throw new Error();
@@ -43,18 +45,19 @@ export function createDatabaseRoutes({ stateDir, operations, databaseAdapters, p
         if (strict) throw new Error('StackForge could not verify whether another project uses this database.');
       }
     }
+    return activeIds;
   }
 
-  async function localDatabaseTarget(project, bindingId) {
-    const { bindings } = await scanDatabases(project);
+  async function localDatabaseTarget(project, bindingId, activeIds) {
+    const { bindings } = await scanDatabases(project, undefined, activeIds);
     const binding = bindings.find(item => item.id === bindingId);
     const target = validateLocalTarget(binding?.server, binding?.instance);
     return { binding, target };
   }
 
-  async function resourceBinding(project, id, provider) {
+  async function resourceBinding(project, id, provider, activeIds) {
     if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) throw new Error('Choose an available database binding.');
-    const { bindings } = await scanDatabases(project);
+    const { bindings } = await scanDatabases(project, undefined, activeIds);
     const binding = bindings.find(item => item.id === id && (!provider || item.instance.provider === provider));
     if (!binding) throw new Error('Choose an available database binding.');
     return binding;
@@ -63,18 +66,28 @@ export function createDatabaseRoutes({ stateDir, operations, databaseAdapters, p
   async function verifyDatabaseDeletion(project, volumeTarget) {
     await scanDatabases(project);
     if (volumeTarget.endpoints?.length) {
-      await refreshDatabaseBindings(project.id, true);
-      if (volumeTarget.endpoints.some(endpoint => databaseRegistry.usesEndpoint(project.id, endpoint))) {
+      const activeIds = await refreshDatabaseBindings(project.id, true);
+      if (volumeTarget.endpoints.some(endpoint => databaseRegistry.usesEndpoint(project.id, endpoint, activeIds))) {
         throw new Error('Another project uses this database. Shared databases cannot be deleted from StackForge.');
       }
     }
   }
 
+  async function verifyRestoreTarget(project, target, binding) {
+    if (!binding && !target.endpoints?.length) return;
+    const activeIds = await refreshDatabaseBindings(project.id, true);
+    if (binding) {
+      const current = await resourceBinding(project, binding.id, undefined, activeIds);
+      if (!current.shared) return;
+    } else if (!target.endpoints.some(endpoint => databaseRegistry.usesEndpoint(project.id, endpoint, activeIds))) return;
+    throw new Error('Another project uses this database. Shared databases cannot be restored from StackForge.');
+  }
+
   async function view(res, project, view, searchParams) {
     try {
       if (view === 'database-discovery') {
-        await refreshDatabaseBindings(project.id);
-        const discovery = await scanDatabases(project);
+        const activeIds = await refreshDatabaseBindings(project.id);
+        const discovery = await scanDatabases(project, undefined, activeIds);
         return send(res, 200, { ...discovery, bindings: discovery.bindings.map(item => ({
           ...item, ...(item.instance.provider === 'remote' && {
             profileSaved: Boolean(databaseRegistry.profile(project.id, item.instanceId))
@@ -92,6 +105,13 @@ export function createDatabaseRoutes({ stateDir, operations, databaseAdapters, p
       }
       const includeCapabilities = searchParams.has('capabilities');
       const result = await operations.database(project, projectConfig.ports(project), searchParams.has('logs'), includeCapabilities);
+      if (includeCapabilities && result.capabilities.restore) {
+        try { await verifyRestoreTarget(project, result); }
+        catch (error) {
+          result.capabilities.restore = false;
+          result.restoreHint = redactDatabase.text(error.message).split('\n')[0];
+        }
+      }
       if (includeCapabilities && result.capabilities.delete) {
         try { await verifyDatabaseDeletion(project, result); }
         catch (error) {
@@ -140,7 +160,6 @@ export function createDatabaseRoutes({ stateDir, operations, databaseAdapters, p
     res.once('close', () => { if (!res.writableFinished) controller.abort(); });
     const done = (async () => {
       const bindingId = req.headers['x-stackforge-binding'];
-      if (bindingId && action !== 'backup') await refreshDatabaseBindings(project.id, true);
       const binding = bindingId ? await resourceBinding(project, bindingId) : undefined;
       const ports = projectConfig.ports(project);
       const signal = controller.signal;
@@ -160,9 +179,10 @@ export function createDatabaseRoutes({ stateDir, operations, databaseAdapters, p
           }
           if (bytes !== size) throw new Error('The backup upload was incomplete.');
           const file = Buffer.concat(chunks, bytes);
-          if (action === 'preview') result = await resources.preview(project, binding, ports, file, signal);
+          const verify = target => verifyRestoreTarget(project, target, binding);
+          if (action === 'preview') result = await resources.preview(project, binding, ports, file, signal, verify);
           else result = await resources.restore(project, binding, ports, file, req.headers['x-stackforge-preview'],
-            Buffer.from(req.headers['x-stackforge-target'] ?? '', 'base64').toString(), signal);
+            Buffer.from(req.headers['x-stackforge-target'] ?? '', 'base64').toString(), signal, verify);
         }
         await operation?.('succeeded');
         return result;
@@ -271,7 +291,8 @@ export function createDatabaseRoutes({ stateDir, operations, databaseAdapters, p
     const controller = new AbortController();
     res.once('close', () => { if (!res.writableFinished) controller.abort(); });
     const work = (async () => {
-      const { binding, target } = await localDatabaseTarget(project, payload.bindingId);
+      const activeIds = await refreshDatabaseBindings(project.id);
+      const { binding, target } = await localDatabaseTarget(project, payload.bindingId, activeIds);
       if (action === 'database-local-check') return { installation: await localInstallation(target, localDatabase) };
       const credentials = { user: payload.user, password: payload.password };
       const options = { project, binding, target, credentials, schema: payload.schema === true,
@@ -287,8 +308,8 @@ export function createDatabaseRoutes({ stateDir, operations, databaseAdapters, p
       try {
         const result = await executeInitialization({ ...options, id: payload.planId, confirmName: payload.confirmName,
           revalidate: async () => {
-            await refreshDatabaseBindings(project.id, true);
-            const current = await localDatabaseTarget(project, binding.id);
+            const activeIds = await refreshDatabaseBindings(project.id, true);
+            const current = await localDatabaseTarget(project, binding.id, activeIds);
             if (current.binding.shared || JSON.stringify(current.target) !== JSON.stringify(target)) {
               throw new Error('A shared or changed database cannot be initialized.');
             }

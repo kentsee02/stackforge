@@ -91,7 +91,7 @@ export function databaseResources({ registry, vault, directory, operations, comm
     const options = { engine: target.engine, container: target.container.id, config: target.config, command: operations.command, signal, project: project.name };
     const inventory = () => databaseInventory(options);
     const [{ version }, capabilities] = await Promise.all([inventory(), databaseTransferCapabilities(options)]);
-    return { engine: target.engine, name: project.name, version, identity: target.container.id, inventory,
+    return { engine: target.engine, name: project.name, version, identity: target.container.id, inventory, endpoints: target.endpoints,
       canRestore: capabilities.restore, export: () => transferDatabase(options), restore: data => transferDatabase({ ...options, file: data }) };
   }
 
@@ -111,9 +111,10 @@ export function databaseResources({ registry, vault, directory, operations, comm
     return archive;
   }
 
-  async function preview(project, binding, ports, file, signal) {
+  async function preview(project, binding, ports, file, signal, verify) {
     const target = await adapter(project, binding, ports, signal);
-    if (!target.canRestore || !target.identity || binding?.shared) throw new Error('Choose a verified empty database or a missing SQLite file.');
+    if (!target.canRestore || !target.identity || (!verify && binding?.shared)) throw new Error('Choose a verified empty database or a missing SQLite file.');
+    await verify?.(target);
     const legacy = isLegacyBackup(file, target.engine);
     const archive = legacy ? { data: file } : inspectArchive(file, target.engine, target.version);
     const verified = target.check ? await target.check(archive.data) :
@@ -128,14 +129,15 @@ export function databaseResources({ registry, vault, directory, operations, comm
     return { id, name: target.name, metadata, objects: verified.count ?? verified.objects.length, limited: Boolean(verified.limited) };
   }
 
-  async function restore(project, binding, ports, file, id, name, signal) {
+  async function restore(project, binding, ports, file, id, name, signal, verify) {
     const approved = previews.get(id);
     if (!approved || approved.expires <= Date.now() || approved.project !== project.id || approved.instance !== binding?.instanceId ||
-        approved.name !== name || approved.digest !== archiveDigest(file) || binding?.shared) throw new Error(changed);
+        approved.name !== name || approved.digest !== archiveDigest(file) || (!verify && binding?.shared)) throw new Error(changed);
     const target = await adapter(project, binding, ports, signal);
     if (target.identity !== approved.identity || target.name !== approved.name || !target.canRestore) throw new Error(changed);
     const { data } = approved.legacyVersion ? inspectLegacyBackup(file, target.engine, approved.legacyVersion, target.version) :
       inspectArchive(file, target.engine, target.version);
+    await verify?.(target);
     previews.delete(id);
     await target.restore(data);
     const result = await target.inventory();

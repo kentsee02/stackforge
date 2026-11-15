@@ -15,6 +15,16 @@ export function databaseDataDirectory(image, engine) {
   return engine === 'mysql' ? '/var/lib/mysql' : major && Number(major) < 18 ? '/var/lib/postgresql/data' : '/var/lib/postgresql';
 }
 
+export function databaseEndpoints(spec, container, engine) {
+  const published = (spec.ports ?? []).filter(item => Number(item.target) === (engine === 'mysql' ? 3306 : 5432) &&
+    (!item.protocol || item.protocol === 'tcp') && /^\d+$/.test(String(item.published ?? '')));
+  const bound = Object.entries(container?.portBindings ?? {}).filter(([key]) => key.endsWith('/tcp')).flatMap(([, values]) => values ?? []);
+  return [
+    ...published.map(item => ({ engine, host: item.host_ip ?? '0.0.0.0', port: Number(item.published) })),
+    ...bound.filter(item => /^\d+$/.test(item.HostPort)).map(item => ({ engine, host: item.HostIp || '0.0.0.0', port: Number(item.HostPort) }))
+  ];
+}
+
 export function databaseDockerEnvironment() {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^COMPOSE_/i.test(key)));
 }

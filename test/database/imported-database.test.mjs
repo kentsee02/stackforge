@@ -44,7 +44,7 @@ test('imported Compose controls verify the container and dedicated volume before
     if (args.some(arg => arg.includes('.Config.Entrypoint'))) return [entrypoint, ['postgres'], null, false,
       null, null, null, 'default', '', '', [], null, 'runc', null, null, null].map(value => JSON.stringify(value)).join('\t');
     if (args[0] === 'inspect') return [id, JSON.stringify(labels), '"postgres:17"', JSON.stringify({ Status: state }),
-      JSON.stringify([{ Type: 'volume', Name: 'example_data', Destination: '/var/lib/postgresql/data', RW: true }])].join('\t');
+      JSON.stringify([{ Type: 'volume', Name: 'example_data', Destination: '/var/lib/postgresql/data', RW: true }]), 'null'].join('\t');
     if (args[0] === 'volume' && args[1] === 'ls') return volume ? 'example_data\n' : '';
     if (args[0] === 'volume' && args[1] === 'inspect') return [JSON.stringify(volumeDriver), '{}', JSON.stringify({
       'com.docker.compose.project': 'example', 'com.docker.compose.volume': 'data', ...(owner && { 'io.stackforge.imported-compose-id': owner })

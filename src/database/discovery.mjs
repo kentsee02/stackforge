@@ -9,6 +9,7 @@ import { resolveStartup } from '../projects/project-startup.mjs';
 
 export const databaseKey = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 export const sqlName = /^[a-zA-Z][a-zA-Z0-9_]{0,62}$/;
+export const databaseName = /^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,62}$/;
 export const engineNames = { postgres: 'PostgreSQL', mysql: 'MySQL', sqlite: 'SQLite', sqlserver: 'SQL Server', mongodb: 'MongoDB', redis: 'Redis' };
 const engines = Object.assign(Object.create(null), { postgres: 'postgres', postgresql: 'postgres', mysql: 'mysql', mariadb: 'mysql', sqlite: 'sqlite', sqlite3: 'sqlite',
   sqlserver: 'sqlserver', mssql: 'sqlserver', mongodb: 'mongodb', 'mongodb+srv': 'mongodb', redis: 'redis', rediss: 'redis' });
@@ -42,7 +43,7 @@ function connection(value, fallback, template) {
     const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
     const port = url.port ? boundedPort(url.port) : ports[engine];
     const name = decodeURIComponent(url.pathname.replace(/^\//, ''));
-    if (validHost(host) && port && (!name || sqlName.test(name))) return { engine, host, port, ...(name && { name }), status: 'configured' };
+    if (validHost(host) && port && (!name || databaseName.test(name))) return { engine, host, port, ...(name && { name }), status: 'configured' };
   } catch { /* A declaration can be incomplete or use a dynamic connection string. */ }
   return { engine, status: 'ambiguous' };
 }
@@ -73,7 +74,7 @@ async function projectText(folder, file) {
   return await realpath(path).catch(() => '') === path ? localText(folder, file) : '';
 }
 
-async function prismaConnection(folder, files, runtimeEnv) {
+async function prismaConnection(folder, files, runtimeEnv, dotenvEnv) {
   if (!files.some(file => /^prisma\.config\./.test(file)) && !await lstat(join(folder, '.config')).then(info => info.isDirectory(), () => false)) return;
   const sources = (await Promise.all(prismaConfigs.map(async file => ({ file, text: await projectText(folder, file) }))))
     .filter(source => source.text.trim());
@@ -87,7 +88,11 @@ async function prismaConnection(folder, files, runtimeEnv) {
   const variable = reference?.[2] ?? reference?.[3];
   if (!variable) return;
   const schemaPath = schema && relative(folder, resolve(folder, file.startsWith('.config/') ? '.config' : '.', schema)).split(sep).join('/');
-  return { file, schema: schemaPath, variable, value: Object.hasOwn(runtimeEnv, variable) ? runtimeEnv[variable] : undefined };
+  const loadsDefaultDotenv = /^\s*import\s*['"]dotenv\/config['"]/m.test(text);
+  const source = loadsDefaultDotenv ? dotenvEnv : runtimeEnv;
+  const inherited = loadsDefaultDotenv && Object.hasOwn(process.env, variable);
+  return { file, schema: schemaPath, variable, value: inherited ? process.env[variable] : source[variable],
+    ...(loadsDefaultDotenv && { dotenvFile: '.env' }) };
 }
 
 async function boundedFiles(folder) {
@@ -147,14 +152,14 @@ export async function discoverDatabases(project) {
         const name = clean(envValues.DB_DATABASE ?? envValues.DB_NAME);
         const host = clean(envValues.DB_HOST).toLowerCase();
         const port = envValues.DB_PORT ? boundedPort(envValues.DB_PORT) : ports[engine];
-        const target = engine === 'sqlite' ? { path: name } : validHost(host) && port && sqlName.test(name) ? { host, port, name } : {};
+        const target = engine === 'sqlite' ? { path: name } : validHost(host) && port && databaseName.test(name) ? { host, port, name } : {};
         const status = template || placeholder.test(host + name) ? 'placeholder' : !name || engine !== 'sqlite' && !host ? 'missing'
           : Object.keys(target).length ? 'configured' : 'ambiguous';
         add(directory, file, 'DB_CONNECTION', { engine, status, ...(status === 'configured' && target) });
       }
     }
     const prisma = ['prisma/schema.prisma', 'schema.prisma'];
-    const prismaConfig = await prismaConnection(folder, files, runtimeEnv);
+    const prismaConfig = await prismaConnection(folder, files, runtimeEnv, env.get('.env'));
     const configs = [...files.filter(file => /^(?:application(?:-[\w-]+)?\.(?:properties|ya?ml)|appsettings(?:\.[\w-]+)?\.json|settings\.py|database\.ya?ml|requirements\.txt|pyproject\.toml|Gemfile)$/i.test(file)).slice(0, 20),
       'src/main/resources/application.properties', 'src/main/resources/application.yml', 'src/main/resources/application.yaml', 'config/database.yml'];
     await Promise.all([...prisma, ...new Set(configs)].map(async file => {
@@ -169,7 +174,8 @@ export async function discoverDatabases(project) {
           if (result.path && !isAbsolute(result.path)) result.path = file.slice(0, -'schema.prisma'.length) + result.path;
           add(directory, file, key, { ...result, orm: 'Prisma', ...(variable && { environmentVariable: variable }) });
           if (!value && !variable && prismaConfig && (prismaConfig.schema ?? prisma[0]) === file && ['postgres', 'mysql', 'sqlserver', 'mongodb'].includes(engine)) {
-            add(directory, prismaConfig.file, prismaConfig.variable, { ...connection(prismaConfig.value, engine), orm: 'Prisma', environmentVariable: prismaConfig.variable });
+            add(directory, prismaConfig.file, prismaConfig.variable, { ...connection(prismaConfig.value, engine), orm: 'Prisma',
+              environmentVariable: prismaConfig.variable, ...(prismaConfig.dotenvFile && { environmentFile: prismaConfig.dotenvFile }) });
           }
         }
       } else {
@@ -186,7 +192,7 @@ export async function discoverDatabases(project) {
             const [host, explicitPort] = (fields.host ?? fields.server ?? fields['data source'] ?? '').toLowerCase().split(',');
             const name = fields.database ?? fields['initial catalog'];
             const port = boundedPort(fields.port ?? explicitPort ?? ports[engine]);
-            const status = placeholder.test(value) ? 'placeholder' : !host || !name ? 'missing' : validHost(host) && sqlName.test(name) && port ? 'configured' : 'ambiguous';
+            const status = placeholder.test(value) ? 'placeholder' : !host || !name ? 'missing' : validHost(host) && databaseName.test(name) && port ? 'configured' : 'ambiguous';
             add(directory, file, key, { engine, status, ...(status === 'configured' && { host, name, port }) });
           }
         }
@@ -247,7 +253,7 @@ export async function discoverDatabases(project) {
     const match = managed[0];
     const config = { ...rootEnv.get('.env'), ...rootEnv.get('.env.local') };
     const name = clean(config.DB_NAME ?? config.DB_DATABASE);
-    if (sqlName.test(name) && !placeholder.test(name)) match.name = name;
+    if (databaseName.test(name) && !placeholder.test(name)) match.name = name;
   }
   await resolveStartup(project, [], identity);
   return { root, identity, limited: truncated, requirements };

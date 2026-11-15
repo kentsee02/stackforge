@@ -1,6 +1,6 @@
 import { connect } from 'node:net';
 import { run } from '../../platform/process.mjs';
-import { databaseKey, sqlName } from '../discovery.mjs';
+import { databaseKey, databaseName, sqlName } from '../discovery.mjs';
 
 const localHosts = new Map([['localhost', '127.0.0.1'], ['127.0.0.1', '127.0.0.1'], ['::1', '::1']]);
 const engineConfig = {
@@ -30,7 +30,7 @@ export function validateLocalTarget(server, instance) {
   const engine = instance?.engine;
   const name = instance?.name;
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535 || !Object.hasOwn(engineConfig, engine) ||
-      !sqlName.test(name ?? '') || /^(?:mysql|information_schema|performance_schema|sys|postgres|template[01])$/i.test(name)) {
+      !databaseName.test(name ?? '') || /^(?:mysql|information_schema|performance_schema|sys|postgres|template[01])$/i.test(name)) {
     throw new Error(unsupported);
   }
   return { engine, host, port, name };

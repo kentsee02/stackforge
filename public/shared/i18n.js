@@ -38,9 +38,11 @@ export function translate(value, language = locale, depth = 0) {
   return value;
 }
 
+const renderText = source => Array.isArray(source) ? source.filter(Boolean).map(value => translate(value)).join(' · ') : translate(source);
+
 export function setText(element, source) {
   bindings.set(element, source);
-  element.textContent = translate(source);
+  element.textContent = renderText(source);
   if (bindings.size > 500 && !cleanupPending) {
     cleanupPending = true;
     queueMicrotask(() => {
@@ -61,7 +63,7 @@ export function setupI18n() {
       for (const element of document.querySelectorAll(`[data-i18n-${attribute}]`)) element.setAttribute(attribute, translate(element.getAttribute(`data-i18n-${attribute}`)));
     }
     for (const [element, source] of bindings) {
-      if (element.isConnected) element.textContent = translate(source);
+      if (element.isConnected) element.textContent = renderText(source);
       else bindings.delete(element);
     }
   }

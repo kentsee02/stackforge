@@ -4,7 +4,7 @@ import { createDatabasePanel } from '/projects/database.js';
 setupI18n();
 
 const $ = id => document.getElementById(id);
-const stateLabels = { stopped: '已停止', starting: '正在启动…', running: '运行中', stopping: '正在停止…', failed: '启动失败或异常退出' };
+const stateLabels = { offline: '项目目录缺失', stopped: '已停止', starting: '正在启动…', running: '运行中', stopping: '正在停止…', failed: '启动失败或异常退出' };
 const stackNames = { vue: 'Vue', react: 'React', express: 'Express', nestjs: 'NestJS', spring: 'Spring Boot', mysql: 'MySQL', postgres: 'PostgreSQL' };
 const removesFiles = project => !project.removeOnly;
 const diagnosticMessages = {
@@ -564,8 +564,8 @@ function renderRows() {
     if (!row.hidden) matches++;
     row.firstElementChild.setAttribute('aria-pressed', String(project.id === selected));
     const status = row.querySelector('.runtime-state');
-    status.hidden = Boolean(project.unmanaged && !project.hasStartup);
-    showState(status, project.ready ? 'ready' : project.status);
+    status.hidden = !project.offline && Boolean(project.unmanaged && !project.hasStartup);
+    showState(status, project.offline ? 'offline' : project.ready ? 'ready' : project.status);
   }
   $('project-no-match').hidden = matches > 0;
 }
@@ -579,10 +579,13 @@ function render() {
   renderRows();
   const project = projects.find(item => item.id === selected);
   if (!project) return;
+  $('project-detail').classList.toggle('project-offline', Boolean(project.offline));
+  $('project-offline').hidden = !project.offline;
   for (const id of ['runtime-action', 'selected-project-state', 'project-runtime-log']) $(id).hidden = Boolean(project.unmanaged && !project.hasStartup);
+  if (project.offline) $('selected-project-state').hidden = false;
   if ($('selected-project-name').textContent !== project.name) $('selected-project-name').textContent = project.name;
   if ($('selected-project-path').textContent !== project.path) $('selected-project-path').textContent = project.path;
-  showState($('selected-project-state'), project.ready ? 'ready' : project.status);
+  showState($('selected-project-state'), project.offline ? 'offline' : project.ready ? 'ready' : project.status);
   renderServices(project);
   const running = project.status === 'running' || project.status === 'starting';
   const busy = running || project.status === 'stopping';
@@ -641,6 +644,7 @@ async function refresh() {
     $('project-connection').hidden = true;
     render();
     if (selected && selected !== requested) { refresh(); return; }
+    if (projects.find(item => item.id === selected)?.offline) return;
     database.refresh();
     loadDependencyPlan();
     loadProjectTool('checks');
@@ -882,7 +886,7 @@ function confirmProjectRemoval(action) {
   $('project-trash-dialog').showModal();
   render();
 }
-$('project-delete').addEventListener('click', () => confirmProjectRemoval('trash'));
+$('project-delete').addEventListener('click', () => confirmProjectRemoval(projects.find(item => item.id === selected)?.offline ? 'remove' : 'trash'));
 $('project-remove').addEventListener('click', () => confirmProjectRemoval('remove'));
 $('project-trash-cancel').addEventListener('click', () => $('project-trash-dialog').close());
 $('project-trash-name').addEventListener('input', event => {

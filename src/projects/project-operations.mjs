@@ -8,12 +8,12 @@ import { projectPathKey } from './project-config.mjs';
 import { inspectRecordedProject, startupDiagnostic } from './project-runtime.mjs';
 import { projectChecks, projectGitStatus } from './project-tools.mjs';
 import { databaseReady, databaseTransferCapabilities, transferDatabase } from '../database/backup/docker-transfer.mjs';
-import { addContainerSecretFiles, databaseRedactor, databaseSecretFiles } from '../database/security/secrets.mjs';
+import { addContainerSecretFiles, addProjectLogSecrets, databaseRedactor, databaseSecretFiles, redactedOutput } from '../database/security/secrets.mjs';
 import { resolveStartup } from './project-startup.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
 import { inspectImportedDatabase } from '../database/docker/imported-database.mjs';
 import { directoryIdentity, sameDirectory } from '../platform/project-identity.mjs';
-import { composeProjectLabel, composeServiceLabel, composeVolumeLabel, databaseDataDirectory, databaseDockerEnvironment,
+import { composeProjectLabel, composeServiceLabel, composeVolumeLabel, databaseDataDirectory, databaseDockerEnvironment, databaseEndpoints,
   databaseImageEngine, databaseMountMatches, databaseSecretTargets, databaseStartupRestricted, pinnedDatabaseCompose, verifyComposeDatabaseStartup,
   verifyExistingDatabaseStartup } from '../database/docker/compose.mjs';
 
@@ -28,32 +28,6 @@ const composeStatusFormat = [
   '{{.State.Status}}',
   '{{if .State.Health}}{{.State.Health.Status}}{{end}}', '{{json .Mounts}}', '{{json .HostConfig.PortBindings}}'
 ].join('\t');
-
-function databaseTaskOutput(append, redact) {
-  let line = '';
-  let discard = false;
-  return {
-    write(chunk) {
-      if (discard) {
-        const end = chunk.indexOf('\n');
-        if (end < 0) return;
-        chunk = chunk.slice(end + 1);
-        discard = false;
-      }
-      line += chunk;
-      const end = line.lastIndexOf('\n') + 1;
-      if (end) {
-        append(redact.text(line.slice(0, end)));
-        line = line.slice(end);
-      }
-      if (line.length > logLimit) {
-        line = '';
-        discard = true;
-      }
-    },
-    flush() { if (line) append(redact.text(line)); }
-  };
-}
 
 async function databaseOptions(project, ports, info) {
   if (project.database === 'none') throw new Error('This project has no database.');
@@ -115,9 +89,10 @@ export class ProjectOperations {
     entry.active = entry[kind] = task;
     this.projects.set(key, entry);
     const append = chunk => { task.log = (task.log + chunk).slice(-logLimit); };
-    const redact = kind === 'databaseTask' ? databaseRedactor(process.env) : undefined;
-    const output = redact && databaseTaskOutput(append, redact);
-    const options = { signal: controller.signal, log: output?.write ?? append, addDatabaseSecrets: redact?.add };
+    const redact = databaseRedactor(process.env);
+    const stdout = redactedOutput(append, redact), stderr = redactedOutput(append, redact);
+    const options = { signal: controller.signal, log: (chunk, stream) => (stream === 'stderr' ? stderr : stdout).write(chunk),
+      addDatabaseSecrets: redact.add, loadLogSecrets: directory => addProjectLogSecrets(redact, directory) };
     const work = {
       dependencies: () => project.unmanaged
         ? installPlanId ? this.installDetectedDependencies(project, task, options, installPlanId) : this.installConfiguredDependencies(project, task, options)
@@ -128,11 +103,11 @@ export class ProjectOperations {
       checkTask: () => this.runCheck(project, checkId, options)
     };
     let outcome = 'succeeded';
-    task.done = work[kind]()
+    task.done = options.loadLogSecrets(project.path).then(() => work[kind]())
       .catch(error => {
         outcome = error.name === 'AbortError' ? 'cancelled' : 'failed';
         if (outcome === 'failed') {
-          const message = redact ? redact.text(error.message) : error.message;
+          const message = redact.text(error.message);
           task.error = kind === 'checkTask' && Number.isInteger(error.exitCode)
             ? `Check command exited with code ${error.exitCode}.`
             : message.split('\n')[0].trim();
@@ -140,7 +115,8 @@ export class ProjectOperations {
         }
       })
       .finally(async () => {
-        output?.flush();
+        stdout.flush();
+        stderr.flush();
         try { if (record) await record(outcome); }
         finally {
           task.status = outcome;
@@ -174,6 +150,7 @@ export class ProjectOperations {
     if (projectPathKey(verified.cwd) !== projectPathKey(check.cwd)) throw new Error('This project check is no longer available.');
     throwIfCancelled(options.signal);
     const config = { ...options, cwd: check.cwd };
+    await options.loadLogSecrets(check.cwd);
     options.log(`[${check.directory}] ${check.command}\n`);
     if (check.tool === 'maven') await maven(check.args, config, this.command, check.wrapper);
     else if (check.tool === 'npm') await npm(['run', check.name], config);
@@ -195,6 +172,7 @@ export class ProjectOperations {
       const backend = join(directory, 'backend');
       const wrapper = await lstat(join(backend, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw')).catch(() => null);
       if (!wrapper?.isFile() || projectPathKey(await realpath(backend)) !== projectPathKey(backend)) throw new Error('The project is missing its Maven Wrapper.');
+      await options.loadLogSecrets(backend);
       await installMavenDependencies({ ...options, cwd: backend }, this.command);
     }
   }
@@ -204,6 +182,7 @@ export class ProjectOperations {
     if (!services?.length) throw new Error('Save an install command before installing dependencies.');
     const { commands } = await resolveStartup(project, services, project.startup.identity);
     task.phase = 'custom';
+    await Promise.all(commands.map(({ cwd }) => options.loadLogSecrets(cwd)));
     for (const { name, cwd, installCommand } of commands) {
       throwIfCancelled(options.signal);
       options.log(`[${name}]\n`);
@@ -217,6 +196,7 @@ export class ProjectOperations {
     if (!plan.steps.length || plan.id !== reviewedId) throw new Error('The detected install plan changed. Refresh detection and review it again.');
     const { commands } = await resolveStartup(project, plan.steps, plan.identity);
     task.phase = 'detected';
+    await Promise.all(commands.map(({ cwd }) => options.loadLogSecrets(cwd)));
     for (const { tool, command, args, directory, executable, wrapper, program, shell, cwd } of commands) {
       throwIfCancelled(options.signal);
       options.log(`[${directory}] ${command}\n`);
@@ -422,14 +402,7 @@ export class ProjectOperations {
     }
     const details = exists && await verifyVolume(containers, true);
     const [container] = containers;
-    const published = (spec.ports ?? []).filter(item => Number(item.target) === (project.database === 'mysql' ? 3306 : 5432) &&
-      (!item.protocol || item.protocol === 'tcp') && /^\d+$/.test(String(item.published ?? '')));
-    const bound = Object.entries(container?.portBindings ?? {}).filter(([key]) => key.endsWith('/tcp')).flatMap(([, values]) => values ?? []);
-    const endpoints = [
-      ...published.map(item => ({ engine: project.database, host: item.host_ip ?? '0.0.0.0', port: Number(item.published) })),
-      ...bound.filter(item => /^\d+$/.test(item.HostPort)).map(item =>
-        ({ engine: project.database, host: item.HostIp || '0.0.0.0', port: Number(item.HostPort) }))
-    ];
+    const endpoints = databaseEndpoints(spec, container, project.database);
     const verifyFolder = async () => {
       await inspectRecordedProject(project);
       if (!sameDirectory(await lstat(config.cwd, { bigint: true }), folder)) throw new Error(unverifiedDatabase);

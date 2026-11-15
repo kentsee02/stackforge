@@ -7,6 +7,7 @@ import { run, terminateTree } from '../platform/process.mjs';
 import { defaultPorts, projectPathKey } from './project-config.mjs';
 import { sameDirectory } from '../platform/project-identity.mjs';
 import { resolveStartup } from './project-startup.mjs';
+import { addProjectLogSecrets, databaseRedactor, redactedOutput } from '../database/security/secrets.mjs';
 
 const logLimit = 64 * 1024;
 const active = new Set(['starting', 'running', 'stopping']);
@@ -146,11 +147,12 @@ export class ProjectRuntime {
     }
     if (effective.frontend) services.frontend = { url: `http://127.0.0.1:${effective.frontend}/`, ready: false };
     if (effective.backend) services.backend = { url: `http://127.0.0.1:${effective.backend}/api/health`, ready: false };
-    const entry = { status: 'starting', ports, services, readiness: new AbortController(), log: '', truncated: false };
+    const entry = { status: 'starting', ports, services, readiness: new AbortController(), log: '', truncated: false,
+      redact: databaseRedactor(process.env) };
     this.runs.set(key, entry);
     const launch = startup ? this.launchStartup(project, entry, startup) : this.launch(project, entry, effective, overrides, verifyDatabase);
     entry.done = launch.catch(error => {
-      if (entry.status !== 'stopping') entry.error = error.message;
+      if (entry.status !== 'stopping') entry.error = entry.redact.text(error.message);
     }).finally(() => { entry.readiness.abort(); entry.status = entry.error ? 'failed' : 'stopped'; entry.child = undefined; });
   }
 
@@ -168,8 +170,9 @@ export class ProjectRuntime {
   }
 
   async launchStartup(project, entry, services) {
-    const { commands } = await resolveStartup(project, services, project.startup.identity);
+    const { root, commands } = await resolveStartup(project, services, project.startup.identity);
     const signal = entry.readiness.signal;
+    await Promise.all([...new Set([root, ...commands.map(service => service.cwd)])].map(cwd => addProjectLogSecrets(entry.redact, cwd)));
     for (const port of entry.ports) {
       if (signal.aborted) return;
       if (!await this.probePort(port)) throw new Error(`Development port ${port} is already in use.`);
@@ -179,16 +182,23 @@ export class ProjectRuntime {
     let remaining = commands.length;
     const onSpawn = () => { if (--remaining === 0) this.markRunning(entry); };
     await Promise.all(commands.map(({ name, cwd, command, port }) => {
+      const append = chunk => this.capture(entry, `[${name}] ${chunk}`);
+      const discard = () => { entry.truncated = true; };
+      const output = redactedOutput(append, entry.redact, discard);
+      const stderr = redactedOutput(append, entry.redact, discard);
       const ended = error => {
+        output.flush();
+        stderr.flush();
         if (signal.aborted) return;
-        this.capture(entry, `[${name}] ${error?.message ?? 'Process exited (0).'}\n`);
+        const message = Number.isInteger(error?.exitCode) ? `Process exited (${error.exitCode}).` : error?.message?.split('\n')[0] ?? 'Process exited (0).';
+        this.capture(entry, `[${name}] ${entry.redact.text(message)}\n`);
         entry.error = 'A startup service exited. See the runtime log for details.';
         this.stopRun(entry);
       };
       return run(command, [], {
         cwd, env: { ...process.env, ...(port && { PORT: String(port) }) },
         shell: true, timeout: 0, signal, onSpawn,
-        log: chunk => this.capture(entry, `[${name}] ${chunk}`)
+        log: (chunk, stream) => (stream === 'stderr' ? stderr : output).write(chunk)
       }).then(() => ended(), ended);
     }));
   }
@@ -197,6 +207,7 @@ export class ProjectRuntime {
     const { directory, manifest } = await inspectRecordedProject(project);
     if (Object.keys(overrides).length && manifest.portConfig !== 1) throw new Error('This project uses an older launcher with fixed app ports.');
     const script = await developmentScript(directory);
+    await Promise.all(['', 'frontend', 'backend'].map(path => addProjectLogSecrets(entry.redact, join(directory, path))));
     if (entry.status === 'stopping') return;
     // A database left running from the previous session may already own its port.
     for (const port of [effective.frontend, effective.backend].filter(Boolean)) if (!await this.probePort(port)) throw new Error(`Development port ${port} is already in use.`);
@@ -210,12 +221,17 @@ export class ProjectRuntime {
       stdio: ['ignore', 'pipe', 'pipe']
     });
     entry.child = child;
-    const capture = chunk => this.capture(entry, chunk);
-    child.stdout.setEncoding('utf8').on('data', capture);
-    child.stderr.setEncoding('utf8').on('data', capture);
+    const append = chunk => this.capture(entry, chunk);
+    const discard = () => { entry.truncated = true; };
+    const stdout = redactedOutput(append, entry.redact, discard);
+    const stderr = redactedOutput(append, entry.redact, discard);
+    child.stdout.setEncoding('utf8').on('data', stdout.write);
+    child.stderr.setEncoding('utf8').on('data', stderr.write);
     child.once('spawn', () => this.markRunning(entry));
-    child.once('error', error => { if (entry.status !== 'stopping') entry.error = `Could not start the development process: ${error.message}`; });
+    child.once('error', error => { if (entry.status !== 'stopping') entry.error = `Could not start the development process: ${entry.redact.text(error.message)}`; });
     const [code, signal] = await new Promise(resolve => child.once('close', (...result) => resolve(result)));
+    stdout.flush();
+    stderr.flush();
     await entry.termination;
     if (entry.status !== 'stopping' && !entry.error && code !== 0) entry.error = `Development process exited (${code ?? signal}). See the log for details.`;
   }

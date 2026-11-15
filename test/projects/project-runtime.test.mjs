@@ -118,7 +118,7 @@ test('a managed run streams logs, rejects overlapping ports, stops its children,
 
 test('stopping during startup prevents execution and a failed run retains bounded output', async t => {
   const parent = await workspace(t);
-  const project = await createProject(parent, 'failed-app', "process.stderr.write('x'.repeat(100000) + ' END', () => process.exit(3));");
+  const project = await createProject(parent, 'failed-app', "process.stderr.write(('x'.repeat(1000) + '\\n').repeat(100) + ' END', () => process.exit(3));");
   const runtime = new ProjectRuntime({ probePort: async () => true });
   t.after(() => runtime.shutdown());
   runtime.start(project);
@@ -136,6 +136,31 @@ test('stopping during startup prevents execution and a failed run retains bounde
   await until(() => runtime.status(project).status === 'failed');
   assert.match(runtime.status(project).error, /no longer matches its record/);
   assert.equal(runtime.status(project, true).log, '');
+});
+
+test('running project logs redact complete and fragmented connection URLs and dotenv passwords', async t => {
+  const parent = await workspace(t);
+  const project = await createProject(parent, 'redaction-app', `
+    process.stdout.write('postgresql://user:');
+    setTimeout(() => process.stderr.write('separate diagnostic\\n'), 40);
+    setTimeout(() => process.stdout.write('fakeSecret%40part@localhost:5432/test\\n'), 80);
+    setTimeout(() => process.stdout.write('password alone fakeSecret@part\\n'), 120);
+    setTimeout(() => process.stderr.write('done\\n'), 160);
+    setInterval(() => {}, 1500);
+  `);
+  await writeFile(join(project.path, '.env'), 'DATABASE_URL=postgresql://user:fakeSecret%40part@localhost:5432/test\n');
+  const runtime = new ProjectRuntime({ probePort: async () => true });
+  t.after(() => runtime.shutdown());
+  runtime.start(project);
+  const log = await until(() => {
+    const { log } = runtime.status(project, true);
+    assert.doesNotMatch(log, /fakeSecret|postgresql:\/\//);
+    return log.includes('done') && log;
+  });
+  assert.match(log, /separate diagnostic/);
+  assert.match(log, /password alone \[redacted\]/);
+  runtime.stop(project);
+  await until(() => runtime.status(project).status === 'stopped');
 });
 
 test('startup diagnostics distinguish missing packages, Java mismatch, Docker, and occupied ports', () => {

@@ -157,3 +157,5 @@
   .project-search input { font-size: 16px; }
   .project-detail-head, .runtime-log { padding-inline: 13px; }
 }
+.project-offline > :is(details, .project-operation), .project-offline :is(#runtime-action, #runtime-error, #runtime-diagnostic,
+  #runtime-database-config, #project-runtime-log) { display: none; }

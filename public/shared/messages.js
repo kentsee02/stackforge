@@ -1,5 +1,10 @@
 // [Chinese source, English translation]. {name} slots preserve runtime values.
 export const messages = [
+  ['客户端版本 {version}', 'Client version {version}'],
+  ['服务器版本 {version}', 'Server version {version}'],
+  ['项目目录缺失', 'Project folder missing'],
+  ['找不到项目目录。可用「导入项目」在新位置重新登记原目录。', 'The project folder is missing. Use Import project to reconnect the original folder at its new location.'],
+  ['其他项目正在使用该数据库。StackForge 会阻止恢复共享数据库。', 'Another project uses this database. Shared databases cannot be restored from StackForge.'],
   ['数据库文件或远程目标', 'Database file or remote target'],
   ['可信 CA 证书的绝对路径', 'Absolute path to the trusted CA certificate'],
   ['测试并保存连接', 'Test and save connection'],
@@ -71,6 +76,7 @@ export const messages = [
   ['参数不明确', 'Ambiguous configuration'],
   ['声明的依赖', 'Declared dependency'],
   ['缺少环境变量 {variable}', 'Environment variable {variable} is missing'],
+  ['{file} 中缺少环境变量 {variable}', 'Environment variable {variable} is missing from {file}'],
   ['配置数据库连接', 'Configure database connection'],
   ['查看数据库配置', 'Review database configuration'],
   ['数据库连接地址', 'Database connection URL'],

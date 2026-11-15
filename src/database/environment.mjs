@@ -60,7 +60,8 @@ export async function saveDatabaseEnvironment(project, { requirementId, value },
   const text = await readEnvironment(file, stat);
   if (parseEnv(text)[variable]?.trim()) throw new Error(existing);
   const local = join(folder, '.env.local');
-  if (Object.hasOwn(parseEnv(await readEnvironment(local, await readStat(local))), variable)) {
+  const overridden = parseEnv(await readEnvironment(local, await readStat(local)))[variable];
+  if (overridden !== undefined && !(requirement.environmentFile === '.env' && overridden === url)) {
     throw new Error('This variable is defined in .env.local. Update it there and rescan.');
   }
   await verifyGit(folder);

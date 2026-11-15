@@ -1,4 +1,4 @@
-import { setText, translate } from '/i18n.js';
+import { setText } from '/i18n.js';
 
 export function createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
   selectedId, selectedProject, renderPage, refresh, act }) {
@@ -8,6 +8,11 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
   let restoring;
   let deletingDatabase;
   let transferMessage;
+
+  function showParts(element, parts) {
+    delete element.dataset.message;
+    setText(element, parts);
+  }
 
   const databaseLabels = { absent: 'Database not created', stopped: '已停止', running: '运行中', starting: '正在启动…', stopping: '正在停止…', restarting: 'Restarting…', unhealthy: 'Health check failed', paused: 'Paused' };
 
@@ -41,7 +46,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     const issue = task?.diagnostic ?? view.diagnostic;
     const hint = issue === 'docker' ? 'Start Docker Desktop or the Docker Engine to manage the database.' : diagnosticMessages[issue];
     const error = state.actionError?.id === project.id && state.actionError.action?.startsWith('database-') ? state.actionError.message :
-      hint ?? task?.error ?? view.error ?? view.startHint ?? view.deleteHint;
+      hint ?? task?.error ?? view.error ?? view.startHint ?? view.restoreHint ?? view.deleteHint;
     showMessage($('database-error'), error);
     $('database-error').hidden = !error;
     $('database-transition').hidden = !transitioning || Boolean(error);
@@ -101,7 +106,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     try {
       // Allow time for the Compose list, inspection, and optional log commands.
       const result = await request(`/api/projects/${view.id}/database?capabilities=1${logs ? '&logs=1' : ''}`, { signal: AbortSignal.timeout(50_000) });
-      Object.assign(view, { startHint: undefined, deleteHint: undefined }, result, { error: undefined, diagnostic: undefined });
+      Object.assign(view, { startHint: undefined, restoreHint: undefined, deleteHint: undefined }, result, { error: undefined, diagnostic: undefined });
       if (logs && result.log === undefined) view.log = '';
       if (!logs && result.status === 'absent') view.log = undefined;
     } catch (error) { Object.assign(view, { error: error.message, diagnostic: error.diagnostic }); }
@@ -140,10 +145,10 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       $('database-local-form').reset();
       $('database-local-form').hidden = true;
       $('database-local-help').hidden = true;
-      $('database-local-status').textContent = '';
+      setText($('database-local-status'), '');
       $('database-requirements').replaceChildren();
-      $('database-discovery-message').textContent = '';
-      $('database-initialization-message').textContent = '';
+      showMessage($('database-discovery-message'), '');
+      showMessage($('database-initialization-message'), '');
       $('database-resources').hidden = true;
       $('database-resource').replaceChildren();
       resetResource();
@@ -188,8 +193,10 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
         const binding = sources.get(item.id);
         const target = [item.host && `${item.host}:${item.port}`, item.name, item.path].filter(Boolean).join(' / ');
         const verification = binding?.instance.verification?.status;
-        const status = verification === 'connected' ? 'Connection previously verified' : verification === 'missing' ? 'Database is missing' :
-          item.status === 'missing' && item.environmentVariable ? `Environment variable ${item.environmentVariable} is missing` :
+      const missingVariable = item.environmentFile ? `Environment variable ${item.environmentVariable} is missing from ${item.environmentFile}` :
+        `Environment variable ${item.environmentVariable} is missing`;
+      const status = verification === 'connected' ? 'Connection previously verified' : verification === 'missing' ? 'Database is missing' :
+        item.status === 'missing' && item.environmentVariable ? missingVariable :
           discoveryStates[item.status] ?? 'Declared dependency';
         row.append([discoveredEngines[item.engine], item.source, target].filter(Boolean).join(' · '), ' · ');
         const label = document.createElement('span');
@@ -284,12 +291,12 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
         return row;
       }));
       if (action === 'database-remote-profile' && mode !== 'remove') {
-        $('database-resource-message').textContent = [
-          translate('Remote connection verified'), result.version,
-          translate(result.capabilities.backup ? 'Backup allowed' : 'Backup unavailable'),
-          translate(result.capabilities.restore ? 'Restore allowed' : 'Restore unavailable'),
-          translate('Provider management unavailable')
-        ].join(' · ');
+        showParts($('database-resource-message'), [
+          'Remote connection verified', result.version,
+          result.capabilities.backup ? 'Backup allowed' : 'Backup unavailable',
+          result.capabilities.restore ? 'Restore allowed' : 'Restore unavailable',
+          'Provider management unavailable'
+        ]);
       } else showMessage($('database-resource-message'), mode === 'remove' ? 'Remote connection profile removed.' :
         result.exists ? 'SQLite schema inspected.' : 'The SQLite file is missing.');
     } catch (error) {
@@ -322,23 +329,23 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       if (view !== databaseDiscovery) return;
       if (result.installation) {
         const { clientVersion, serverVersion, serviceStatus, portOpen, help } = result.installation;
-        $('database-local-status').textContent = [
-          clientVersion ? `${translate('Client')} ${clientVersion}` : translate('Database client unavailable'),
-          serverVersion ? `${translate('Server')} ${serverVersion}` : '',
-          translate({ running: 'Local service running', stopped: 'Local service stopped', unknown: 'Local service status unknown' }[serviceStatus]),
-          translate(portOpen ? 'Port reachable' : 'Port unavailable')
-        ].filter(Boolean).join(' · ');
+        showParts($('database-local-status'), [
+          clientVersion ? `Client version ${clientVersion}` : 'Database client unavailable',
+          serverVersion ? `Server version ${serverVersion}` : '',
+          { running: 'Local service running', stopped: 'Local service stopped', unknown: 'Local service status unknown' }[serviceStatus],
+          portOpen ? 'Port reachable' : 'Port unavailable'
+        ]);
         $('database-local-help').href = help;
         $('database-local-help').hidden = Boolean(clientVersion && portOpen);
       } else if (action === 'database-initialization-plan') {
         resetInitialization();
         view.plan = { id: result.id, name: binding.instance.name };
         $('database-initialize-expected').textContent = binding.instance.name;
-        $('database-initialization-summary').textContent = [
-          result.verified ? `${discoveredEngines[binding.instance.engine]} ${result.version}` : translate('Database server identity is unverified'),
-          translate(result.exists ? result.empty ? 'Existing empty database' : 'Existing database with objects' : 'Database is missing'),
-          ...result.steps.map(step => translate(step === 'create' ? 'Create database' : 'Initialize empty schema'))
-        ].join(' · ');
+        showParts($('database-initialization-summary'), [
+          result.verified ? `${discoveredEngines[binding.instance.engine]} ${result.version}` : 'Database server identity is unverified',
+          result.exists ? result.empty ? 'Existing empty database' : 'Existing database with objects' : 'Database is missing',
+          ...result.steps.map(step => step === 'create' ? 'Create database' : 'Initialize empty schema')
+        ]);
         $('database-migration-preview').replaceChildren(...result.migrations.map(item => {
           const row = document.createElement('li');
           row.textContent = `${item.file} · ${item.table} (${item.columns.join(', ')})`;
@@ -441,7 +448,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     $('database-restore-form').reset();
     $('database-restore-name').required = false;
     $('database-restore-confirm-field').hidden = true;
-    $('database-restore-preview').textContent = '';
+    showMessage($('database-restore-preview'), '');
     setText($('database-restore-submit'), 'Preview restore');
     $('database-restore-submit').disabled = true;
     $('database-restore-dialog').showModal();
@@ -460,7 +467,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     restoring.approval = undefined;
     $('database-restore-name').required = false;
     $('database-restore-confirm-field').hidden = true;
-    $('database-restore-preview').textContent = '';
+    showMessage($('database-restore-preview'), '');
     setText($('database-restore-submit'), 'Preview restore');
     $('database-restore-submit').disabled = !validRestore();
   });
@@ -486,12 +493,12 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
         if (binding && databaseDiscovery) databaseDiscovery.resourceStatus = undefined;
       } else {
         restoring.approval = result;
-        $('database-restore-preview').textContent = [
+        showParts($('database-restore-preview'), [
           result.name, `${discoveredEngines[result.metadata.engine]} ${result.metadata.version}`,
-          translate(result.limited ? '{count}+ objects verified in isolation' : '{count} objects verified in isolation').replace('{count}', result.objects),
-          ...(result.metadata.legacy ? [translate('Checksum calculated for this older backup')] : []),
+          `${result.objects}${result.limited ? '+' : ''} objects verified in isolation`,
+          result.metadata.legacy ? 'Checksum calculated for this older backup' : '',
           `SHA-256 ${result.metadata.checksum}`
-        ].join(' · ');
+        ]);
         $('database-restore-expected').textContent = result.name;
         $('database-restore-name').value = '';
         $('database-restore-name').required = true;
@@ -546,6 +553,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
 
   return {
     render(project, busy, unavailable) {
+      if (project.offline) return;
       renderDatabase(project, busy, unavailable);
       renderDatabaseDiscovery(project, busy || unavailable);
     },

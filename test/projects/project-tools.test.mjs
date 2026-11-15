@@ -15,7 +15,8 @@ test('project checks run only supported commands, and Git compares the selected 
   await Promise.all([
     writeFile(join(directory, 'stackforge.json'), JSON.stringify({ generator: 'StackForge', options })),
     writeFile(join(directory, 'scripts/dev.mjs'), ''),
-    writeFile(join(directory, 'scripts/check.mjs'), "console.log('fixture check output'); if (process.argv[2] === 'wait') setInterval(() => {}, 1000);"),
+    writeFile(join(directory, '.env'), 'DATABASE_URL=postgresql://operator:check-test-password@localhost/db\n'),
+    writeFile(join(directory, 'scripts/check.mjs'), "console.log('fixture check output', 'check-test-password'); if (process.argv[2] === 'wait') setInterval(() => {}, 1000);"),
     writeFile(join(directory, 'package.json'), JSON.stringify({ scripts: { build: 'node scripts/check.mjs', test: 'node scripts/check.mjs wait', deploy: 'exit 1' } })),
     writeFile(join(directory, 'frontend/package.json'), JSON.stringify({ scripts: { lint: 'node -e "console.error(12345); process.exit(7)"' } })),
     writeFile(join(directory, 'backend/pom.xml'), '<project/>'),
@@ -56,7 +57,9 @@ test('project checks run only supported commands, and Git compares the selected 
   assert.equal((await post(route + '/run-check', { check: 'root:deploy' })).status, 409);
   assert.equal((await post(route + '/run-check', { check: 'root:build' }, { 'x-stackforge-token': 'invalid' })).status, 403);
   assert.equal((await post(route + '/run-check', { check: 'root:build' })).status, 202);
-  assert.match((await state('root:build', task => task.status === 'succeeded')).log, /fixture check output/);
+  const build = await state('root:build', task => task.status === 'succeeded');
+  assert.match(build.log, /fixture check output \[redacted\]/);
+  assert.doesNotMatch(build.log, /check-test-password/);
   assert.equal((await post(route + '/run-check', { check: 'frontend:lint' })).status, 202);
   const failed = await state('frontend:lint', task => task.status === 'failed');
   assert.match(failed.log, /12345/);

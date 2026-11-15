@@ -1,7 +1,10 @@
-import { posix } from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { join, posix } from 'node:path';
+import { parseEnv } from 'node:util';
+import { localText } from '../../projects/detection/project-detection.mjs';
 
 const hidden = '[redacted]';
-const secretKey = /(?:PASSWORD|PASSWD|(?:^|_)PWD|SECRET|TOKEN|DATABASE_URL|CONNECTION_STRING)/i;
+const secretKey = /(?:PASSWORD|PASSWD|(?:^|_)PWD|SECRET|TOKEN|DATABASE_URL|DB_URL|DIRECT_URL|SHADOW_DATABASE_URL|PGURL|CONNECTION_STRING)/i;
 const databaseUrl = /(?:jdbc:)?\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|mssql|sqlserver):\/\/[^\s"'<>]+/gi;
 const assignment = /(\b[\w.]*(?:PASSWORD|PASSWD|PWD|SECRET|TOKEN|DATABASE_URL|CONNECTION_STRING)[\w.]*\s*[:=]\s*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s;,]+)/gi;
 const redactionError = 'Could not verify database log redaction.';
@@ -90,4 +93,44 @@ export function databaseRedactor(environment) {
     const masked = literals ? value.replace(literals, hidden) : value;
     return masked.replace(databaseUrl, hidden).replace(assignment, (_, prefix) => prefix + hidden);
   } };
+}
+
+export async function addProjectLogSecrets(redact, directory) {
+  const files = ['.env', '.env.local', '.env.development', '.env.development.local', '.env.test', '.env.test.local', '.env.production', '.env.production.local'];
+  for (const file of files) {
+    if (await realpath(join(directory, file)).catch(() => '') === join(directory, file)) {
+      redact.add(parseEnv(await localText(directory, file)));
+    }
+  }
+}
+
+export function redactedOutput(append, redact, onDiscard = () => {}) {
+  let line = '';
+  let discard = false;
+  const emit = value => append(redact.text(value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')));
+  return {
+    write(chunk) {
+      if (discard) {
+        const end = chunk.indexOf('\n');
+        if (end < 0) return;
+        chunk = chunk.slice(end + 1);
+        discard = false;
+      }
+      line += chunk;
+      const end = line.lastIndexOf('\n') + 1;
+      if (end) {
+        emit(line.slice(0, end));
+        line = line.slice(end);
+      }
+      if (line.length > secretLimit) {
+        line = '';
+        discard = true;
+        onDiscard();
+      }
+    },
+    flush() {
+      if (line) emit(line);
+      line = '';
+    }
+  };
 }

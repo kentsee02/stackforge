@@ -58,7 +58,7 @@ async function start(engine, name) {
       { ...options, env: process.env });
   };
   const credentials = { user: pg ? 'operator' : 'root', password };
-  const target = { engine, host: '127.0.0.1', port: tcp, name: 'isolated' };
+  const target = { engine, host: '127.0.0.1', port: tcp, name: pg ? 'isolated-db' : 'isolated' };
   return { options, exec, credentials, target };
 }
 
@@ -71,7 +71,7 @@ async function initialize(session, engine) {
     recordMigration: async () => {}, revalidate: async () => {} };
   const plan = await initializationPlan(context);
   assert.deepEqual(plan.steps, ['create', 'schema']);
-  assert.deepEqual(await executeInitialization({ ...context, id: plan.id, confirmName: 'isolated' }), { initialized: true, schema: 'verified' });
+  assert.deepEqual(await executeInitialization({ ...context, id: plan.id, confirmName: session.target.name }), { initialized: true, schema: 'verified' });
   assert.deepEqual((await initializationPlan(context)).steps, []);
 }
 
@@ -98,8 +98,8 @@ async function remoteRoundTrip(engine) {
   const password = randomBytes(18).toString('hex');
   await session.query(pg ? `CREATE ROLE limited LOGIN PASSWORD '${password}'; GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO limited;
     GRANT CREATE ON SCHEMA public TO limited;` : `CREATE USER 'limited'@'%' IDENTIFIED BY '${password}' REQUIRE SSL;
-    GRANT ALL PRIVILEGES ON isolated.* TO 'limited'@'%';`, 'isolated');
-  await session.query('DROP TABLE items;', 'isolated');
+    GRANT ALL PRIVILEGES ON isolated.* TO 'limited'@'%';`, fixture.target.name);
+  await session.query('DROP TABLE items;', fixture.target.name);
   const profile = { ...fixture.target, host: 'localhost', user: 'limited', ca: '/tmp/sf-cert.pem' };
   const remote = remoteSession(profile, password, { command: fixture.exec });
   const info = await remote.test();
@@ -108,8 +108,8 @@ async function remoteRoundTrip(engine) {
   await assert.rejects(remoteSession({ ...profile, host: '127.0.0.1' }, password, { command: fixture.exec }).test(), /remote database operation failed/);
   await remote.restore(dump.data, info.identity);
   assert.deepEqual((await remote.inventory()).objects, original.objects);
-  assert.equal(await session.query('SELECT id FROM notes;', 'isolated'), '41');
-  assert.equal(await session.query('SELECT answer();', 'isolated'), '42');
+  assert.equal(await session.query('SELECT id FROM notes;', fixture.target.name), '41');
+  assert.equal(await session.query('SELECT answer();', fixture.target.name), '42');
   assert.equal((await remote.test()).capabilities.restore, false);
   let backupAccount = remote;
   if (!pg) {

@@ -2,7 +2,7 @@ import { isIP } from 'node:net';
 import { isAbsolute } from 'node:path';
 import { lstat, realpath } from 'node:fs/promises';
 import { run } from '../../platform/process.mjs';
-import { databaseKey, sqlName } from '../discovery.mjs';
+import { databaseKey, databaseName, sqlName } from '../discovery.mjs';
 import { backupLimit, databaseObjects, mysqlCanBackUp, mysqlRestoreIsScoped, mysqlScopeQuery, parseDatabaseInventory, portableMysqlDump } from '../backup/docker-transfer.mjs';
 
 const unsupported = 'Remote connections support PostgreSQL and MySQL profiles.';
@@ -27,7 +27,7 @@ export async function remoteProfile(server, instance, { user, ca }) {
   if (instance?.provider !== 'remote' || !['postgres', 'mysql'].includes(instance.engine) ||
       !(isIP(server?.host ?? '') || hostName.test(server?.host ?? '')) ||
       !Number.isInteger(server?.port) || server.port < 1 || server.port > 65535 ||
-      !sqlName.test(instance.name ?? '') || !sqlName.test(user ?? '') ||
+      !databaseName.test(instance.name ?? '') || !sqlName.test(user ?? '') ||
       /^(?:postgres|template[01]|mysql|information_schema|performance_schema|sys)$/i.test(instance.name)) {
     throw new Error(unsupported);
   }

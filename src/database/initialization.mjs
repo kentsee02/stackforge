@@ -1,6 +1,6 @@
 import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
-import { databaseKey, sqlName } from './discovery.mjs';
+import { databaseKey, databaseName } from './discovery.mjs';
 import { localSession } from './adapters/local.mjs';
 
 const changed = 'The initialization plan changed. Preview the database initialization again.';
@@ -64,7 +64,7 @@ export function publicInitializationPlan(plan) {
 
 export async function executeInitialization({ project, binding, target, credentials, command, signal, id, confirmName, schema,
   recordMigration, revalidate, recordVerification = async () => {} }) {
-  if (target.name !== confirmName || !sqlName.test(confirmName)) throw new Error('Type the exact database name to confirm initialization.');
+  if (target.name !== confirmName || !databaseName.test(confirmName)) throw new Error('Type the exact database name to confirm initialization.');
   const plan = await initializationPlan({ project, binding, target, credentials, command, signal, schema });
   if (plan.id !== id || !plan.steps.length || !plan.state.fingerprint) throw new Error(changed);
   const { session, tables, state } = plan;

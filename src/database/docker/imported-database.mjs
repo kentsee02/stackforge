@@ -3,7 +3,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { composeProjectLabel as projectLabel, composeServiceLabel as serviceLabel, composeVolumeLabel as volumeLabel,
-  databaseDataDirectory, databaseDockerEnvironment, databaseImageEngine, databaseMountMatches, databaseSecretTargets, pinnedDatabaseCompose,
+  databaseDataDirectory, databaseDockerEnvironment, databaseEndpoints, databaseImageEngine, databaseMountMatches, databaseSecretTargets, pinnedDatabaseCompose,
   verifyComposeDatabaseStartup, verifyExistingDatabaseStartup } from './compose.mjs';
 
 const composeFiles = ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'];
@@ -79,11 +79,11 @@ export async function inspectImportedDatabase(project, command, signal) {
   const projectIds = await ids([...list, `label=${projectLabel}=${model.name}`]);
   const matching = [];
   if (projectIds.length) {
-    const format = '{{.Id}}\t{{json .Config.Labels}}\t{{json .Config.Image}}\t{{json .State}}\t{{json .Mounts}}';
+    const format = '{{.Id}}\t{{json .Config.Labels}}\t{{json .Config.Image}}\t{{json .State}}\t{{json .Mounts}}\t{{json .NetworkSettings.Ports}}';
     const lines = (await docker(['inspect', '--type', 'container', '--format', format, ...projectIds])).trim().split(/\r?\n/);
     if (lines.length !== projectIds.length) throw new Error(notOwned);
     for (const line of lines) {
-      const [id, rawLabels, image, rawState, rawMounts] = line.split('\t');
+      const [id, rawLabels, image, rawState, rawMounts, rawPorts] = line.split('\t');
       const labels = JSON.parse(rawLabels);
       if (!projectIds.includes(id) || labels?.[projectLabel] !== model.name || !await matchesPath(labels['com.docker.compose.project.working_dir'], cwd)) throw new Error(notOwned);
       if (labels[serviceLabel] !== service) continue;
@@ -94,7 +94,7 @@ export async function inspectImportedDatabase(project, command, signal) {
       if (!Array.isArray(mounts) || !databaseMountMatches(mounts, name, mount.target, secretTargets)) throw new Error(notOwned);
       const state = JSON.parse(rawState);
       const status = state.Status === 'running' && ['starting', 'unhealthy'].includes(state.Health?.Status) ? state.Health.Status : state.Status;
-      matching.push({ id, status });
+      matching.push({ id, status, portBindings: JSON.parse(rawPorts) });
     }
   }
   if (matching.length > 1) throw new Error(notOwned);
@@ -117,7 +117,7 @@ export async function inspectImportedDatabase(project, command, signal) {
     if (container && !['running', 'starting', 'unhealthy'].includes(container.status)) await verifyExistingDatabaseStartup(docker, container.id, engine);
     await resolveStartup(project, [], identity);
   };
-  return { engine, container, config, environment: spec.environment, verifyStartup, async start(options) {
+  return { engine, container, config, endpoints: databaseEndpoints(spec, container, engine), environment: spec.environment, verifyStartup, async start(options) {
     await verifyStartup();
     if (container) {
       if (!['running', 'starting', 'unhealthy'].includes(container.status)) {

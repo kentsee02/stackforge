@@ -35,10 +35,10 @@ export function run(command, args, { cwd, env = process.env, log = () => {}, tim
     let stdout = '';
     let stopped;
     let killing;
-    const collect = chunk => {
+    const collect = (chunk, stream) => {
       const value = chunk.replace(/\x1b\[[0-9;]*m/g, '');
       tail = (tail + value).slice(-4000);
-      log(value);
+      log(value, stream);
     };
     const stop = error => {
       if (stopped) return;
@@ -57,10 +57,10 @@ export function run(command, args, { cwd, env = process.env, log = () => {}, tim
     } else {
       child.stdout.setEncoding('utf8').on('data', chunk => {
         if (stdoutOnly) stdout = (stdout + chunk).slice(-stdoutLimit);
-        collect(chunk);
+        collect(chunk, 'stdout');
       });
     }
-    child.stderr.setEncoding('utf8').on('data', collect);
+    child.stderr.setEncoding('utf8').on('data', chunk => collect(chunk, 'stderr'));
     let inputError;
     if (input) {
       child.stdin.once('error', error => { inputError = error; });

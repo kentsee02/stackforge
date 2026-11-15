@@ -9,6 +9,7 @@ import { localInstallation } from '../../src/database/adapters/local.mjs';
 import { ProjectOperations } from '../../src/projects/project-operations.mjs';
 import { discoverDatabases } from '../../src/database/discovery.mjs';
 import { run } from '../../src/platform/process.mjs';
+import { archiveBackup } from '../../src/database/backup/archive.mjs';
 
 test('Prisma config reports its missing environment variable and discovers a configured target without running code', async t => {
   const path = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-prisma-config-')));
@@ -16,7 +17,8 @@ test('Prisma config reports its missing environment variable and discovers a con
   await mkdir(join(path, 'prisma'));
   await writeFile(join(path, 'package.json'), JSON.stringify({ dependencies: { pg: '8.0.0' } }));
   await writeFile(join(path, 'prisma', 'schema.prisma'), 'datasource db { provider = "postgresql" }');
-  await writeFile(join(path, 'prisma.config.ts'), `import { defineConfig, env } from 'prisma/config';
+  await writeFile(join(path, 'prisma.config.ts'), `import 'dotenv/config';
+    import { defineConfig, env } from 'prisma/config';
     throw new Error('discovery must not run this file');
     export default defineConfig({ schema: 'prisma/schema.prisma', datasource: { url: env('DATABASE_URL') } });`);
   const scan = () => discoverDatabases({ id: 'prisma-config', path });
@@ -26,10 +28,14 @@ test('Prisma config reports its missing environment variable and discovers a con
     ['prisma.config.ts', 'missing', 'DATABASE_URL'],
     ['prisma/schema.prisma', 'declared', undefined]
   ]);
-  await writeFile(join(path, '.env'), 'DATABASE_URL=postgresql://operator:prisma-test-secret@localhost:5432/portal');
+  await writeFile(join(path, '.env.local'), 'DATABASE_URL=postgresql://operator:prisma-test-secret@localhost:5432/portal');
+  const missing = (await scan()).requirements.find(item => item.source === 'prisma.config.ts');
+  assert.equal(missing.status, 'missing');
+  assert.equal(missing.environmentFile, '.env');
+  await writeFile(join(path, '.env'), 'DATABASE_URL=postgresql://operator:prisma-test-secret@localhost:5432/game-portal');
   const { requirements } = await scan();
   const configured = requirements.find(item => item.source === 'prisma.config.ts');
-  assert.deepEqual([configured.status, configured.host, configured.port, configured.name], ['configured', 'localhost', 5432, 'portal']);
+  assert.deepEqual([configured.status, configured.host, configured.port, configured.name], ['configured', 'localhost', 5432, 'game-portal']);
   assert.doesNotMatch(JSON.stringify(requirements), /prisma-test-secret/);
 });
 
@@ -57,7 +63,7 @@ test('database connection setup writes only a missing variable to an ignored env
   const route = `/api/projects/${id}`;
   const scan = () => fetch(base + route + '/database-discovery').then(response => response.json());
   const { id: requirementId } = (await scan()).requirements.find(item => item.environmentVariable === 'DATABASE_URL');
-  const value = 'postgresql://operator:connection-test-secret@localhost:5432/portal?schema=public';
+  const value = 'postgresql://operator:connection-test-secret@localhost:5432/game-portal?schema=public';
   const save = (body = {}, key = token) => post(route + '/database-connection-config', { requirementId, value, ...body }, key);
   const file = join(path, '.env');
   assert.equal((await save({}, 'bad-token')).status, 403);
@@ -81,7 +87,7 @@ test('database connection setup writes only a missing variable to an ignored env
   assert.deepEqual(await (await save()).json(), { saved: true, file: '.env' });
   assert.equal(await readFile(file, 'utf8'), unrelated + `\r\nDATABASE_URL="${value}"\r\n`);
   const result = await scan();
-  assert.ok(result.bindings.some(item => item.requirementId === requirementId && item.instance.name === 'portal' && item.instance.provider === 'local'));
+  assert.ok(result.bindings.some(item => item.requirementId === requirementId && item.instance.name === 'game-portal' && item.instance.provider === 'local'));
   assert.doesNotMatch(JSON.stringify(result), /connection-test-secret/);
   assert.equal((await save()).status, 409);
 });
@@ -121,7 +127,7 @@ test('import and clone discover multiple databases, preserve shared bindings on 
   };
   const app = createApp({ stateDir, localDatabase: { command }, clone: async () => {
     await mkdir(checkout);
-    await writeFile(join(checkout, '.env'), 'DATABASE_URL=postgresql://operator@127.0.0.1:5432/shared');
+    await writeFile(join(checkout, '.env'), 'DATABASE_URL=postgresql://operator@[::1]:5432/shared');
     return { path: checkout };
   } }).listen(0, '127.0.0.1');
   await once(app, 'listening');
@@ -186,17 +192,26 @@ test('Docker volume deletion rechecks registered database users and disables sha
     options: { name: 'managed', frontend: 'none', backend: 'express', database: 'postgres' } }));
   const volume = 'managed_db_data';
   const endpoints = [{ engine: 'postgres', host: '0.0.0.0', port: 16432 }];
-  const operations = new ProjectOperations();
+  let restoreWrites = 0;
+  const operations = new ProjectOperations({ command: async (_tool, args) => {
+    const script = args[args.indexOf('-c') + 1];
+    if (script.includes('pg_restore')) { restoreWrites++; return ''; }
+    if (args.at(-1)?.startsWith('SHOW server_version')) return '17.11\n';
+    if (args.at(-1)?.includes('NOT EXISTS')) return 't';
+    if (script.includes('SELECT 1')) return '1';
+    assert.fail('Unexpected Docker fixture command');
+  } });
   const target = { volume, endpoints };
   operations.databaseDeletionTarget = async () => target;
-  operations.database = async () => ({ status: 'stopped', capabilities: { delete: true }, endpoints });
+  operations.databaseTarget = async () => ({ ...target, engine: 'postgres', config: {}, container: { status: 'running', id: 'a'.repeat(64) } });
+  operations.database = async () => ({ status: 'stopped', capabilities: { delete: true, restore: true }, endpoints });
   let mutations = 0;
   operations.removeDatabase = async (_project, _ports, confirmation, _signal, verify) => {
     assert.equal(confirmation, volume);
     await verify(target);
     mutations++;
   };
-  const app = createApp({ stateDir: false, operations }).listen(0, '127.0.0.1');
+  const app = createApp({ stateDir: false, operations, databaseAdapters: { verifyRestore: async () => ({ objects: [] }) } }).listen(0, '127.0.0.1');
   await once(app, 'listening');
   t.after(async () => {
     await app.shutdownTasks();
@@ -213,11 +228,23 @@ test('Docker volume deletion rechecks registered database users and disables sha
   const { id } = await add(managed);
   const external = await add(consumer);
   const route = '/api/projects/' + id;
+  const archive = archiveBackup({ data: Buffer.from('PGDMPfixture'), engine: 'postgres', version: '17.11', project: 'fixture' }).data;
+  const submitArchive = (action, headers = {}) => fetch(base + route + '/database-archive/' + action, { method: 'POST', headers: {
+    'Content-Type': 'application/octet-stream', 'X-StackForge-Token': token, ...headers
+  }, body: archive });
+  const firstPreview = await submitArchive('preview');
+  assert.equal(firstPreview.status, 200);
+  const approval = await firstPreview.json();
+  const restore = () => submitArchive('restore', { 'X-StackForge-Preview': approval.id, 'X-StackForge-Target': Buffer.from(approval.name).toString('base64') });
   assert.equal((await get(route + '/database-delete')).status, 200);
   await writeFile(join(consumer, '.env'), 'DATABASE_URL=postgresql://user@127.0.0.1:16432/another_schema');
   assert.equal((await get(route + '/database-delete')).status, 409);
   const status = await (await get(route + '/database?capabilities=1')).json();
   assert.equal(status.capabilities.delete, false);
+  assert.equal(status.capabilities.restore, false);
+  assert.equal((await submitArchive('preview')).status, 409);
+  assert.equal((await restore()).status, 409);
+  assert.equal(restoreWrites, 0);
   assert.equal(Object.hasOwn(status, 'endpoints'), false);
   assert.equal((await post(route + '/database-delete', { confirmVolume: volume })).status, 202);
   let task;
@@ -230,8 +257,15 @@ test('Docker volume deletion rechecks registered database users and disables sha
   assert.equal(task.status, 'failed');
   assert.match(task.error, /Shared databases/);
   assert.equal(mutations, 0);
-  assert.equal((await post('/api/projects/' + external.id + '/remove', { confirmName: external.name })).status, 200);
+  const displaced = join(root, 'displaced-consumer');
+  await rename(consumer, displaced);
+  assert.equal((await (await get('/api/projects')).json()).projects.find(item => item.id === external.id).offline, true);
   assert.equal((await get(route + '/database-delete')).status, 200);
+  assert.equal((await restore()).status, 200);
+  assert.equal(restoreWrites, 1);
+  const returned = await add(displaced);
+  assert.equal(returned.id, external.id);
+  assert.equal((await get(route + '/database-delete')).status, 409);
 });
 
 test('local installation checks recognize Windows and Linux services without installing them', async () => {

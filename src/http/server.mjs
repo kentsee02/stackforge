@@ -134,9 +134,11 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         const projects = await Promise.all(managedProjects().map(async project => {
           const deleting = removals.has(project.path);
           const session = runtime.status(project, project.id === selected);
-          if (!deleting && !['starting', 'running', 'stopping'].includes(session.status) && !await locationExists(project.path)) return;
-          const detail = { ...projectDetails(project), ...session, ...operations.status(project, project.id === selected), deleting };
-          if (project.unmanaged) detail.hasComposeDatabase = await hasImportedCompose(project);
+          const offline = !deleting && !['starting', 'running', 'stopping'].includes(session.status) && !await locationExists(project.path);
+          if (offline && projectConfig.value.hiddenWhenMissing[project.id]) return;
+          const detail = { ...projectDetails(project), ...session, ...operations.status(project, project.id === selected), deleting,
+            ...(offline && { offline: true, removeOnly: true }) };
+          if (project.unmanaged && !offline) detail.hasComposeDatabase = await hasImportedCompose(project);
           const databaseOperation = database.operation(project);
           if (databaseOperation) detail.operation = databaseOperation;
           if (project.id === selected) {
@@ -334,12 +336,17 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           }
           if (action === 'trash' || action === 'remove') {
             if (payload.confirmName !== project.name) return send(res, 400, { error: 'Enter the exact project name to confirm deletion.' });
-            if (action === 'remove' && !project.imported) return send(res, 409, { error: 'Only imported projects can be removed from the list.' });
+            const offline = !await locationExists(project.path);
+            if (removals.has(project.path) || configWrites.has(project.path) || database.blocksProjectAction(project, action) || operations.active(project)) {
+              return send(res, 409, { error: 'Wait for the current project operation to finish.' });
+            }
+            if (action === 'remove' && !project.imported && !offline) return send(res, 409, { error: 'Only imported projects can be removed from the list.' });
             if (jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
             if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before moving it to the trash.' });
-            if (action === 'remove' || removeOnly(project)) {
+            if (action === 'remove' || offline || removeOnly(project)) {
               await database.removeProfiles(project);
-              await projectConfig.removeImport(project.id);
+              if (project.imported) await projectConfig.removeImport(project.id);
+              else await projectConfig.hideMissingProject(project.id);
               await database.removeRegistration(project.id);
               return send(res, 200, { removed: true });
             }
@@ -352,6 +359,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
               const cleanup = database.record(project, 'database-profile-cleanup');
               await database.removeProfiles(project).then(() => cleanup('succeeded'), () => cleanup('failed'));
               if (project.cloneId) await projectConfig.removeImport(project.id);
+              else await projectConfig.hideMissingProject(project.id);
               await database.removeRegistration(project.id);
               return { trashed: true, databaseDeleted: false };
             })();
