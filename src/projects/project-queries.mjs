@@ -5,6 +5,7 @@ import { removeOnly } from './project-removal.mjs';
 import { inspectRecordedProject } from './project-folder.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
 import { detectStartupSuggestions } from './detection/startup-suggestions.mjs';
+import { startupPreflight } from './project-preflight.mjs';
 
 function projectDetails(project) {
   const { cloneId, cloneIdentity, folderIdentity, startup, ...details } = project;
@@ -44,6 +45,10 @@ export function createProjectQueries({ projects, projectConfig, runtime, operati
   }
 
   async function inspect(project, view) {
+    if (view === 'startup-preflight') {
+      if (!project.imported) throw new Error('Startup preflight is available for imported and cloned projects.');
+      return startupPreflight(project, { runtime, operations, ports: projectConfig.ports(project) });
+    }
     if (view === 'checks') {
       const customChecks = projectConfig.checks(project);
       return { checks: await operations.checks({ ...project, customChecks }), customChecks: customChecks?.commands ?? [] };

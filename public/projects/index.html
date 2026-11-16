@@ -68,6 +68,17 @@
           <p id="runtime-diagnostic" class="runtime-diagnostic" role="status" hidden></p>
           <p id="project-offline" class="runtime-diagnostic" role="status" data-i18n="找不到项目目录。可用「导入项目」在新位置重新登记原目录。" hidden>The project folder is missing. Use Import project to reconnect the original folder at its new location.</p>
           <button id="runtime-database-config" class="text-button" type="button" data-i18n="查看数据库配置" hidden>Review database configuration</button>
+          <section id="project-preflight" class="project-operation" aria-labelledby="project-preflight-title" hidden>
+            <div class="project-operation-heading">
+              <h3 id="project-preflight-title" data-i18n="项目启动前检查">Startup preflight</h3>
+              <button id="preflight-check" class="secondary" type="button" data-i18n="运行启动前检查">Run preflight</button>
+            </div>
+            <p id="preflight-status" class="hint" role="status" hidden></p>
+            <ul id="preflight-results" class="preflight-results" aria-labelledby="project-preflight-title" hidden></ul>
+            <div class="project-operation-actions" id="preflight-start-actions" hidden>
+              <button id="preflight-start" class="primary" type="button" data-i18n="继续启动项目">Continue to start</button>
+            </div>
+          </section>
           <section id="project-dependencies" class="project-operation" aria-labelledby="project-dependencies-title">
             <div class="project-operation-heading"><h3 id="project-dependencies-title" data-i18n="依赖安装">Dependencies</h3><span id="dependency-status" class="small" role="status"></span></div>
             <div id="dependency-plan" hidden>

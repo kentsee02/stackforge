@@ -4,6 +4,7 @@
 - Product baseline [StackForge v0.32.0](docs/PRODUCT-BASELINE-v0.32.0.md)
 - Implementation map [StackForge code map](docs/CODE-MAP.md)
 - Work and verification [Architecture refactor checklist](docs/REFACTOR-CHECKLIST.md)
+- Development priorities [Product backlog](docs/PRODUCT-BACKLOG.md)
 - Status Approved product boundary and incremental refactoring direction
 
 ## 1. Project overview
@@ -13,7 +14,7 @@ StackForge is a local development tool for creating, importing, and running proj
 ### 1.1 Current product scope
 
 - **Create project** generates a selected frontend, backend, and database stack in a new directory. This workflow includes templates, preflight, resumable generation, dependency installation, and optional Git initialization and GitHub publishing.
-- **Projects** supports local import and GitHub HTTPS clone, discovery, startup and dependency settings, start and stop, logs, checks, Git status, and eligible database operations.
+- **Projects** supports local import and GitHub HTTPS clone, discovery, startup preflight, startup and dependency settings, start and stop, logs, checks, Git status, and eligible database operations.
 - The [v0.32.0 product baseline](docs/PRODUCT-BASELINE-v0.32.0.md) records supported combinations, prerequisites, limits, and verified behavior. These are the capabilities to preserve during refactoring.
 
 ### 1.2 Core workflows

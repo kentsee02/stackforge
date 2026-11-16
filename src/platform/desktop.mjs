@@ -3,7 +3,7 @@ import { stat, lstat } from 'node:fs/promises';
 import { posix, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run, throwIfCancelled } from './process.mjs';
-import { absoluteDirectory } from './paths.mjs';
+import { absoluteDirectory, findPathExecutable } from './paths.mjs';
 import { cloneFolderChanged, sameDirectory } from './project-identity.mjs';
 
 const pickerScript = `
@@ -53,14 +53,7 @@ export function launchApplication(command, args, { cwd, env = process.env } = {}
 export function createDesktop({ platform = process.platform, env = process.env, fileExists = exists, statDirectory = stat, lstatDirectory = lstat, command = run, launch = launchApplication } = {}) {
   const paths = platform === 'win32' ? win32 : posix;
   let pickerController;
-  const find = async name => {
-    const extensions = platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
-    for (let directory of (env.PATH || env.Path || '').split(platform === 'win32' ? ';' : ':')) {
-      directory = directory.replace(/^"|"$/g, '');
-      if (!paths.isAbsolute(directory)) continue;
-      for (const extension of extensions) { const candidate = paths.join(directory, name + extension); if (await fileExists(candidate)) return candidate; }
-    }
-  };
+  const find = name => findPathExecutable(name, { platform, env, fileExists });
   async function tools() {
     if (platform === 'win32') {
       const system = env.SystemRoot || env.WINDIR || 'C:\\Windows';

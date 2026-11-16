@@ -44,6 +44,15 @@
 .runtime-custom-links a { overflow-wrap: anywhere; max-width: 100%; }
 .project-ports { padding: 10px 19px; border-top: 1px solid var(--border); }
 .project-ports summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.preflight-results { margin: 10px 0 0; padding: 0; list-style: none; }
+.preflight-row { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 6px 12px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--border); }
+.preflight-row .runtime-state[data-state=attention] { color: var(--warning); }
+.preflight-row p { margin: 0; overflow-wrap: anywhere; }
+.preflight-context { margin-top: 2px; color: var(--muted); font-size: 12px; }
+.preflight-row .text-button { justify-self: start; text-align: start; }
+@media (max-width: 560px) {
+  .preflight-row { grid-template-columns: 1fr; gap: 4px; }
+}
 .startup-service { min-width: 0; margin: 12px 0 0; padding: 8px 0 12px; border: 0; border-bottom: 1px solid var(--border); }
 .startup-service legend { padding: 0; font-weight: 600; font-size: 13px; }
 .startup-fields { display: grid; grid-template-columns: 1fr 1.2fr minmax(108px, .8fr); gap: 8px 10px; }

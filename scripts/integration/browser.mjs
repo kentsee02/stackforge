@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,7 @@ import { cloneGithub } from '../../src/projects/project-clone.mjs';
 
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-browser-')));
 const project = join(root, 'portal');
+const monorepo = join(root, 'monorepo');
 const fixtureRepo = join(root, 'upstream');
 const checkoutParent = join(root, 'checkouts');
 const repository = 'https://github.com/stackforge-test/cloned-portal';
@@ -53,7 +54,6 @@ try {
   }));
   await writeFile(join(project, 'prisma', 'schema.prisma'), 'datasource db { provider = "postgresql" }');
   await writeFile(join(project, 'prisma.config.ts'), 'import "dotenv/config";\nexport default { datasource: { url: env("DATABASE_URL") } };');
-  await writeFile(join(project, '.env'), 'DATABASE_URL=postgresql://demo:changeme@127.0.0.1:5432/example\n');
   await writeFile(join(project, 'server.mjs'), fixtureServer('Imported portal'));
   await mkdir(fixtureRepo);
   await writeFile(join(fixtureRepo, 'server.mjs'), fixtureServer('Cloned portal'));
@@ -73,6 +73,11 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   const contains = (selector, text) => page.waitForFunction(({ selector, text }) =>
     document.querySelector(selector)?.textContent.includes(text), { selector, text });
+  const check = code => '#preflight-results [data-check="' + code + '"]';
+  async function runPreflight(code) {
+    await page.locator('#preflight-check').click();
+    await page.locator(check(code)).first().waitFor();
+  }
   await page.goto(origin);
   assert.equal(await page.locator('html').getAttribute('lang'), 'en');
   await page.locator('#language').selectOption('zh-CN');
@@ -83,6 +88,24 @@ try {
   await page.locator('#project-import-path').fill(project);
   await page.locator('#project-import-submit').click();
   await contains('#selected-project-name', 'portal');
+  await runPreflight('database-missing');
+  await contains(check('database-missing'), '缺少数据库配置 DATABASE_URL。');
+  await contains(check('startup-missing'), '需要处理');
+  await page.locator('#language').selectOption('en');
+  await contains(check('database-missing'), 'Missing database setting DATABASE_URL.');
+  await page.locator(check('startup-missing')).getByRole('button', { name: 'Review startup configuration' }).click();
+  assert.equal(await page.locator('#project-startup').getAttribute('open'), '');
+  await page.locator(check('database-missing')).getByRole('button', { name: 'Set up PostgreSQL' }).click();
+  await contains('#postgres-setup-status', 'No server responded on this port.');
+  await page.keyboard.press('Escape');
+  await assert.rejects(stat(join(project, '.env')), { code: 'ENOENT' });
+  await writeFile(join(project, '.env'), 'DATABASE_URL=postgresql://demo:changeme@127.0.0.1:5432/example\n');
+  await runPreflight('database-placeholder');
+  await contains(check('database-placeholder'), 'contains a placeholder.');
+  await page.locator(check('dependencies-unverified')).getByRole('button', { name: 'Review dependency plan' }).click();
+  await contains('#dependency-steps', 'npm install');
+  assert.equal((await fetch(origin + '/api/projects').then(response => response.json())).projects[0].operation, undefined);
+  await page.locator('#language').selectOption('zh-CN');
   await page.locator('#project-database-discovery summary').click();
   await contains('#database-requirements', '声明的依赖');
   await page.locator('#language').selectOption('en');
@@ -103,7 +126,7 @@ try {
   await contains('#check-config-message', 'Custom check commands saved.');
   await page.locator('#project-git summary').click();
   await contains('#git-message', 'This project has no local Git repository.');
-  async function exerciseRuntime(name, kind) {
+  async function exerciseRuntime(name, kind, viaPreflight = false) {
     const row = page.locator('#project-startup-services .startup-service').first();
     const port = await availablePort();
     await row.locator('[name="port"]').fill(String(port));
@@ -114,7 +137,14 @@ try {
     const action = page.locator('#runtime-action');
     const link = page.locator('#runtime-custom-links').getByRole('link', { name: kind === 'api' ? 'Open API' : 'Open app' });
     assert.equal(await link.isVisible(), false);
-    await action.click();
+    if (viaPreflight) {
+      await runPreflight('port-free');
+      await contains(check('port-free'), 'Port ' + port + ' is available.');
+      await page.locator('#language').selectOption('zh-CN');
+      await contains(check('port-free'), '端口 ' + port + ' 可用。');
+      await page.getByRole('button', { name: '继续启动项目' }).click();
+      await page.locator('#language').selectOption('en');
+    } else await action.click();
     await page.locator('#selected-project-state[data-state="ready"]').waitFor();
     await contains('#runtime-output', name + ' is listening');
     const expected = `http://127.0.0.1:${port}${healthPath}`;
@@ -131,7 +161,8 @@ try {
     await assert.rejects(fetch(expected, { signal: AbortSignal.timeout(2000) }), /fetch failed/);
   }
   await exerciseRuntime('Imported portal', 'web');
-  await page.getByRole('button', { name: 'Set up PostgreSQL' }).click();
+  const setup = page.locator('#database-requirements');
+  await setup.getByRole('button', { name: 'Set up PostgreSQL' }).click();
   await contains('#postgres-setup-status', 'No server responded on this port.');
   assert.equal(await page.locator('#postgres-setup-guide').isVisible(), true);
   assert.equal(await page.locator('#postgres-setup-next').isVisible(), false);
@@ -140,7 +171,7 @@ try {
   await page.locator('#language').selectOption('zh-CN');
   await contains('#database-requirements', '声明的依赖');
   await page.setViewportSize({ width: 390, height: 780 });
-  await page.getByRole('button', { name: '设置 PostgreSQL' }).click();
+  await setup.getByRole('button', { name: '设置 PostgreSQL' }).click();
   await contains('#postgres-setup-status', '此端口没有服务器响应');
   const box = await page.locator('#postgres-setup-dialog').boundingBox();
   assert.ok(box && box.x >= 0 && box.x + box.width <= 391);
@@ -148,7 +179,7 @@ try {
   await page.locator('#language').selectOption('en');
   await writeFile(join(project, '.env.local'), 'DATABASE_URL=postgresql://other@127.0.0.1:5432/other\n');
   await page.locator('#database-discovery-refresh').click();
-  await page.getByRole('button', { name: 'Set up PostgreSQL' }).click();
+  await setup.getByRole('button', { name: 'Set up PostgreSQL' }).click();
   await contains('#postgres-setup-status', 'Review .env, .env.local and rescan database configuration.');
   assert.equal(await page.locator('#postgres-setup-next').isVisible(), false);
   await page.keyboard.press('Escape');
@@ -163,6 +194,34 @@ try {
   assert.deepEqual(projects, []);
   assert.equal(JSON.parse(await readFile(join(project, 'package.json'), 'utf8')).name, 'portal');
   await page.setViewportSize({ width: 1280, height: 820 });
+  await mkdir(join(monorepo, 'frontend'), { recursive: true });
+  await mkdir(join(monorepo, 'backend'));
+  const { token } = await fetch(origin + '/api/state').then(response => response.json());
+  const post = (path, body) => fetch(origin + path, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, body: JSON.stringify(body) });
+  const importedMono = await post('/api/projects/import', { path: monorepo });
+  assert.equal(importedMono.status, 201);
+  const { id: monoId } = await importedMono.json();
+  const occupied = createServer().listen(0, '127.0.0.1');
+  await once(occupied, 'listening');
+  try {
+    const port = occupied.address().port;
+    assert.equal((await post('/api/projects/' + monoId + '/startup', { services: [
+      { name: 'Frontend service', directory: 'frontend', command: 'node app.mjs', port },
+      { name: 'Backend service', directory: 'backend', command: 'node app.mjs' }
+    ] })).status, 200);
+    await rename(join(monorepo, 'backend'), join(monorepo, 'moved-backend'));
+    await contains('#selected-project-name', 'monorepo');
+    await runPreflight('working-directory-invalid');
+    await contains(check('working-directory-invalid'), 'Backend service · backend');
+    await contains(check('port-in-use'), 'Frontend service · frontend');
+    await contains(check('port-in-use'), 'Port ' + port + ' is unavailable.');
+    await page.locator('#language').selectOption('zh-CN');
+    await contains(check('working-directory-invalid'), '已保存的工作目录不存在，或位于项目之外。');
+    await contains(check('port-in-use'), '端口 ' + port + ' 不可用。');
+    assert.equal(await page.locator('#preflight-start').isVisible(), false);
+    await page.locator('#language').selectOption('en');
+  } finally { await new Promise(resolve => occupied.close(resolve)); }
   await page.locator('#project-import-toggle').click();
   await page.locator('#project-clone-url').fill(repository);
   await page.locator('#project-clone-parent').fill(checkoutParent);
@@ -182,9 +241,9 @@ try {
   await service.locator('[name="name"]').fill('Cloned API');
   await service.locator('[name="directory"]').fill('.');
   await service.locator('[name="command"]').fill('node server.mjs');
-  await exerciseRuntime('Cloned portal', 'api');
+  await exerciseRuntime('Cloned portal', 'api', true);
   assert.deepEqual(errors, []);
-  console.log('Verified browser import and clone, saved startup, ready links, retained logs and stop, localization, project tools, and PostgreSQL setup.');
+  console.log('Verified bilingual preflight for Prisma setup, independent service folders, and launching a cloned project through its ready link.');
 } finally {
   try {
     await browser?.close();

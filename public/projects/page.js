@@ -1,6 +1,7 @@
 import { setText, setupI18n } from '/i18n.js';
 import { createDatabasePanel } from '/projects/database.js';
 import { createStartupPanel } from '/projects/startup.js';
+import { createPreflightPanel } from '/projects/preflight.js';
 import { createDependenciesPanel } from '/projects/dependencies.js';
 import { createProjectToolsPanel } from '/projects/tools.js';
 
@@ -166,7 +167,7 @@ function render() {
   $('project-empty').hidden = projects.length > 0;
   renderRows();
   const project = projects.find(item => item.id === selected);
-  if (!project) return;
+  if (!project) { preflight.render(); return; }
   $('project-detail').classList.toggle('project-offline', Boolean(project.offline));
   $('project-offline').hidden = !project.offline;
   for (const id of ['runtime-action', 'selected-project-state', 'project-runtime-log']) $(id).hidden = Boolean(project.unmanaged && !project.hasStartup);
@@ -189,6 +190,7 @@ function render() {
   action.className = running || project.status === 'stopping' ? 'secondary' : 'primary';
   action.disabled = Boolean(state.pending) || deleting || project.status === 'stopping' || (!running && (Boolean(project.operation) || startupDirty));
   setText(action.firstElementChild, project.status === 'stopping' ? 'Stopping…' : running ? 'Stop project' : 'Start project');
+  preflight.render(project, unavailable, !busy && !project.offline && !action.hidden && !action.disabled);
   const devError = state.actionError?.id === project.id && ['start', 'stop'].includes(state.actionError.action) ? state.actionError : undefined;
   const error = devError?.message ?? project.error;
   $('runtime-error').hidden = !error;
@@ -300,6 +302,15 @@ function showImport(open) {
     $('project-import-path').focus();
     request('/api/state').then(({ defaultDir }) => { $('project-clone-parent').value ||= defaultDir; }).catch(() => {});
   }
+}
+
+function openProjectSection(id) {
+  const panel = $(id);
+  if (panel.tagName === 'DETAILS') panel.open = true;
+  const heading = panel.querySelector('summary, h3');
+  if (heading.tagName === 'H3') heading.tabIndex = -1;
+  panel.scrollIntoView({ block: 'start' });
+  heading.focus({ preventScroll: true });
 }
 
 async function importAction(browse, clone = false) {
@@ -432,4 +443,14 @@ const dependencies = createDependenciesPanel({ $, request, showMessage, renderOu
 const tools = createProjectToolsPanel({ $, request, showMessage, renderOutput, state, selectedId, renderPage: render, act });
 const database = createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
   selectedId, selectedProject, renderPage: render, refresh, act });
+const preflight = createPreflightPanel({ $, request, selectedProject, start: async id => {
+  await act(id, 'start');
+  if (selected === id && !$('runtime-action').disabled) $('runtime-action').focus({ preventScroll: true });
+}, followAction(item) {
+  if (item.action === 'import') return showImport(true);
+  if (item.action === 'postgres') return database.openDetectedSetup(item.requirementId);
+  const panel = { startup: 'project-startup', dependencies: 'project-dependencies',
+    database: 'project-database-discovery', ports: 'project-ports' }[item.action];
+  if (panel) openProjectSection(panel);
+} });
 refresh();

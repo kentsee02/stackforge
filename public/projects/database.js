@@ -596,6 +596,17 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       renderDatabaseDiscovery(project, busy || unavailable);
     },
     refresh: loadDatabase,
+    async openDetectedSetup(requirementId) {
+      const project = selectedProject();
+      if (!project) return;
+      const { requirements } = await request('/api/projects/' + encodeURIComponent(project.id) + '/database-discovery',
+        { signal: AbortSignal.timeout(25000) });
+      if (selectedId() !== project.id) return;
+      const requirement = requirements.find(item => item.id === requirementId && item.guidedSetup &&
+        ['missing', 'configured', 'placeholder'].includes(item.status));
+      if (!requirement) throw new Error('Database configuration changed. Run preflight again.');
+      openPostgresSetup(project.id, project.name, requirement);
+    },
     clearTransferMessage() { transferMessage = undefined; }
   };
 }

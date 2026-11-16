@@ -1,6 +1,32 @@
 import { homedir } from 'node:os';
 import { posix, win32 } from 'node:path';
-import { lstat } from 'node:fs/promises';
+import { access, lstat, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+
+async function executableFile(path, platform) {
+  try {
+    if (!(await stat(path)).isFile()) return false;
+    if (platform !== 'win32') await access(path, constants.X_OK);
+    return true;
+  } catch { return false; }
+}
+
+export async function findPathExecutable(name, { cwd, platform = process.platform, env = process.env,
+  fileExists = path => executableFile(path, platform) } = {}) {
+  const paths = platform === 'win32' ? win32 : posix;
+  const extensions = platform === 'win32' && !paths.extname(name) ? ['.exe', '.cmd', '.bat', ''] : [''];
+  const directories = (env.PATH || env.Path || '').split(paths.delimiter);
+  if (cwd && platform === 'win32') directories.unshift(cwd);
+  for (const entry of directories) {
+    const path = entry.replace(/^"|"$/g, '');
+    const directory = paths.isAbsolute(path) ? path : cwd && paths.resolve(cwd, path);
+    if (!directory) continue;
+    for (const extension of extensions) {
+      const candidate = paths.join(directory, name + extension);
+      if (await fileExists(candidate)) return candidate;
+    }
+  }
+}
 
 export async function locationExists(path) {
   try { await lstat(path); return true; }
