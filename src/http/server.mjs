@@ -1,118 +1,71 @@
 import { createServer } from 'node:http';
-import { lstat, realpath } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
-import { randomBytes, createHash, randomUUID } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import metadata from '../../package.json' with { type: 'json' };
-import { catalog, validateOptions } from '../generation/catalog.mjs';
+import { catalog } from '../generation/catalog.mjs';
 import { generateProject } from '../generation/generator.mjs';
 import { checkEnvironment } from '../generation/environment.mjs';
 import { publishProject } from '../platform/git.mjs';
-import { run, throwIfCancelled } from '../platform/process.mjs';
+import { run } from '../platform/process.mjs';
 import { Jobs } from '../generation/jobs.mjs';
-import { absoluteDirectory, defaultProjectsDirectory, locationExists } from '../platform/paths.mjs';
+import { defaultProjectsDirectory } from '../platform/paths.mjs';
 import { Settings } from '../platform/settings.mjs';
 import { createDesktop } from '../platform/desktop.mjs';
-import { ProjectRuntime, inspectRecordedProject, projectDirectory, readProjectFolder, developmentScript, startupDiagnostic, recordedProjectChanged } from '../projects/project-runtime.mjs';
-import { ProjectConfig, defaultPorts, validatePorts, importedProject, projectPathKey } from '../projects/project-config.mjs';
+import { ProjectRuntime } from '../projects/project-runtime.mjs';
+import { ProjectConfig } from '../projects/project-config.mjs';
 import { ProjectOperations } from '../projects/project-operations.mjs';
-import { cloneGithub, verifyClone } from '../projects/project-clone.mjs';
-import { detectFrameworks } from '../projects/detection/project-services.mjs';
-import { directoryIdentity, sameDirectory } from '../platform/project-identity.mjs';
-import { resolveStartup, validateCustomChecks, validateStartup } from '../projects/project-startup.mjs';
-import { detectDependencyPlan } from '../projects/dependency-plan.mjs';
-import { detectStartupSuggestions } from '../projects/detection/startup-suggestions.mjs';
-import { databaseDockerEnvironment } from '../database/docker/compose.mjs';
-import { hasImportedCompose } from '../database/docker/imported-database.mjs';
+import { cloneGithub } from '../projects/project-clone.mjs';
+import { createProjectRegistry } from '../projects/project-registry.mjs';
+import { createProjectRemoval } from '../projects/project-removal.mjs';
+import { createProjectQueries } from '../projects/project-queries.mjs';
 import { discoverDatabases } from '../database/discovery.mjs';
+import { createDatabaseWorkflows } from '../database/workflows.mjs';
 import { serveAsset } from './assets.mjs';
 import { createDatabaseRoutes } from './database-routes.mjs';
+import { createProjectWorkflows } from '../projects/project-workflows.mjs';
+import { createProjectRoutes, matchProjectAction } from './project-routes.mjs';
+import { createGenerationRoutes } from './generation-routes.mjs';
 import { send } from './response.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const identity = { application: 'stackforge-local', version: metadata.version, project: createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex') };
 
-function removeOnly(project) {
-  return project.cloneId ? !project.cloneIdentity : project.unmanaged === true;
+function retryPublication(path, options, report, { signal, verifyProject }) {
+  const command = (name, args, config = {}) => run(name, args, { ...config, signal });
+  return publishProject(path, options, report, command, verifyProject);
 }
 
-function projectDetails(project) {
-  const { cloneId, cloneIdentity, folderIdentity, startup, ...details } = project;
-  return { ...details, ...(cloneId && { cloned: true }), ...(removeOnly(project) && { removeOnly: true }),
-    ...(project.unmanaged && { external: !project.frameworks.length,
-      hasStartup: Boolean(startup?.services.some(service => service.command)),
-      hasInstallCommands: Boolean(startup?.services.some(service => service.installCommand)) }) };
-}
-
-export function createApp({ generate = generateProject, check = checkEnvironment, publish = (path, options, report, { signal } = {}) => publishProject(path, options, report, (name, args, config = {}) => run(name, args, { ...config, signal })), clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations(), localDatabase = {}, databaseAdapters = {} } = {}) {
+export function createApp({ generate = generateProject, check = checkEnvironment, publish = retryPublication, clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations(), localDatabase = {}, databaseAdapters = {} } = {}) {
   const token = randomBytes(32).toString('hex');
-  const jobs = new Jobs({ directory: stateDir, generate, check, publish });
   const settings = new Settings(settingsFile);
   const projectConfig = new ProjectConfig(stateDir ? join(dirname(stateDir), 'projects.json') : false);
+  const jobs = new Jobs({ directory: stateDir, generate, check, publish, relocatedPath: id => projectConfig.value.locations[id] });
   const removals = new Map();
   const configWrites = new Map();
-  let cloneTask;
   let closing = false;
-  const database = createDatabaseRoutes({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
+  const managedProjects = () => projects.list();
+  const database = createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
     runtime, removals, configWrites, localDatabase, isClosing: () => closing });
-  function managedProjects() {
-    const created = jobs.projects().map(project => ({ ...project, path: projectConfig.value.locations[project.id] ?? project.path }));
-    const paths = new Set(created.map(project => projectPathKey(project.path)));
-    return [...projectConfig.value.imports.filter(project => !paths.has(projectPathKey(project.path))), ...created];
-  }
-  async function relocateProject(project, directory) {
-    const current = managedProjects().find(item => item.id === project.id);
-    if (!current || !project.folderIdentity || removals.has(current.path) || configWrites.has(current.path) ||
-        database.blocksProjectAction(current) || operations.active(current) ||
-        ['starting', 'running', 'stopping'].includes(runtime.status(current).status) || await locationExists(current.path) ||
-        !sameDirectory(await lstat(directory, { bigint: true }), project.folderIdentity) ||
-        managedProjects().some(item => projectPathKey(item.path) === projectPathKey(directory))) {
-      throw new Error('Choose the original project folder at its new location.');
-    }
-    const moved = { ...current, path: directory };
-    await inspectRecordedProject(moved);
-    if (moved.cloneId) await verifyClone(directory, moved.cloneId, moved.cloneIdentity);
-    await projectConfig.relocate(current, directory);
-    return moved;
-  }
+  const databaseRoutes = createDatabaseRoutes({ database, managedProjects, runtime });
+  const isProjectBusy = project => removals.has(project.path) || configWrites.has(project.path) ||
+    database.blocksProjectAction(project) || Boolean(operations.active(project));
+  const isProjectRunning = project => ['starting', 'running', 'stopping'].includes(runtime.status(project).status);
+  const projects = createProjectRegistry({ projectConfig, generatedProjects: () => jobs.projects(), isProjectBusy, isProjectRunning,
+    discoverDatabases, syncDatabaseBindings: database.scan, removeDatabaseRegistration: database.removeRegistration });
+  const removeProject = createProjectRemoval({ projectConfig, removals, isProjectBusy, isProjectRunning,
+    trashProject: (...args) => desktop.trashProject(...args), isCreatingProject: () => jobs.busy,
+    removeDatabaseProfiles: database.removeProfiles, removeDatabaseRegistration: database.removeRegistration,
+    recordProfileCleanup: project => database.record(project, 'database-profile-cleanup') });
 
-  async function registerProject(path, clone = {}) {
-    const directory = await projectDirectory(absoluteDirectory(path)).catch(() => {
-      throw new Error('Choose an existing project directory.');
-    });
-    const folderIdentity = directoryIdentity(await lstat(directory, { bigint: true }));
-    const previous = !clone.cloneId && folderIdentity && managedProjects().find(item => item.folderIdentity &&
-      ['dev', 'ino', 'birth'].every(key => item.folderIdentity[key] === folderIdentity[key]) &&
-      projectPathKey(item.path) !== projectPathKey(directory));
-    if (previous) {
-      const project = await relocateProject(previous, directory);
-      await database.scan(project);
-      return { ...projectDetails(project), ...(project.unmanaged && { hasComposeDatabase: await hasImportedCompose(project) }) };
-    }
-    let project;
-    try {
-      const { manifest } = await readProjectFolder(directory);
-      await developmentScript(directory);
-      const { name, frontend, backend, database } = manifest.options ?? {};
-      project = importedProject(randomUUID(), directory, { name, frontend, backend, database, folderIdentity, ...clone });
-    } catch {
-      project = importedProject(randomUUID(), directory, { unmanaged: true, folderIdentity, ...clone, frameworks: await detectFrameworks({ path: directory, folderIdentity, ...clone }) });
-    }
-    const existing = await Promise.all(managedProjects().filter(item => !item.imported).map(item => realpath(item.path).catch(() => item.path)));
-    if (existing.some(item => projectPathKey(item) === projectPathKey(project.path))) throw new Error('This folder is already in Projects.');
-    const discovery = await discoverDatabases(project);
-    const previousClone = project.cloneId && projectConfig.value.imports.find(item =>
-      item.cloneId && projectPathKey(item.path) === projectPathKey(project.path));
-    await projectConfig.addProject(project);
-    try {
-      if (previousClone) await database.removeRegistration(previousClone.id);
-      await database.scan(project, discovery);
-    } catch {
-      // Registration remains usable if the database catalog cannot be written.
-      // Opening the discovery panel retries the catalog update.
-    }
-    return { ...projectDetails(project), ...(project.unmanaged && { hasComposeDatabase: await hasImportedCompose(project) }) };
-  }
+  const execute = createProjectWorkflows({ projectConfig, operations, runtime, removals, configWrites, removeProject,
+    databaseBusy: database.blocksProjectAction, chooseDatabase: database.selectedCompose, recordDatabase: database.record,
+    verifyDeletion: database.verifyDeletion, syncDatabaseBindings: database.scan });
+  const queries = createProjectQueries({ projects, projectConfig, operations, runtime, removals, databaseOperation: database.operation });
+  const projectRoutes = createProjectRoutes({ projects, queries, databaseRoutes, removals,
+    isCreatingProject: () => jobs.busy, clone, execute });
+  const generationRoutes = createGenerationRoutes({ jobs, check, desktop });
+
   function authorized(req, contentType) {
     const origin = req.headers.origin;
     return (!origin || origin === `http://${req.headers.host}`) && req.headers['x-stackforge-token'] === token &&
@@ -129,61 +82,10 @@ export function createApp({ generate = generateProject, check = checkEnvironment
       if (req.method === 'GET' && url.pathname === '/api/identity') return send(res, 200, identity);
       await Promise.all([jobs.ready, settings.ready, projectConfig.ready]);
       if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, { catalog, token, defaultDir, node: process.version, platform: process.platform, version: identity.version, jobs: jobs.list(), preferences: settings.value, desktop: await desktop.capabilities() });
-      if (req.method === 'GET' && url.pathname === '/api/projects') {
-        const selected = url.searchParams.get('logs');
-        const projects = await Promise.all(managedProjects().map(async project => {
-          const deleting = removals.has(project.path);
-          const session = runtime.status(project, project.id === selected);
-          const offline = !deleting && !['starting', 'running', 'stopping'].includes(session.status) && !await locationExists(project.path);
-          if (offline && projectConfig.value.hiddenWhenMissing[project.id]) return;
-          const detail = { ...projectDetails(project), ...session, ...operations.status(project, project.id === selected), deleting,
-            ...(offline && { offline: true, removeOnly: true }) };
-          if (project.unmanaged && !offline) detail.hasComposeDatabase = await hasImportedCompose(project);
-          const databaseOperation = database.operation(project);
-          if (databaseOperation) detail.operation = databaseOperation;
-          if (project.id === selected) {
-            if (project.unmanaged) detail.startupServices = project.startup?.services ?? [];
-            else {
-              const info = await inspectRecordedProject(project).catch(() => null);
-              Object.assign(detail, { portDefaults: defaultPorts(project), ports: projectConfig.ports(project), canConfigurePorts: info?.manifest.portConfig === 1 });
-            }
-          }
-          return detail;
-        }));
-        return send(res, 200, { projects: projects.filter(Boolean) });
-      }
-      const projectView = /^\/api\/projects\/([^/]+)\/(database|database-discovery|database-delete|checks|git|dependencies|startup-suggestions)$/.exec(url.pathname);
-      if (req.method === 'GET' && projectView) {
-        const [, id, view] = projectView;
-        const project = managedProjects().find(item => item.id === id);
-        if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
-        try {
-          if (view.startsWith('database')) return await database.view(res, project, view, url.searchParams);
-          if (view === 'checks') {
-            const customChecks = projectConfig.checks(project);
-            return send(res, 200, { checks: await operations.checks({ ...project, customChecks }), customChecks: customChecks?.commands ?? [] });
-          }
-          if (view === 'git') return send(res, 200, await operations.git(project));
-          if (view === 'startup-suggestions') {
-            if (!project.unmanaged) return send(res, 409, { error: 'This project uses the StackForge launcher.' });
-            return send(res, 200, await detectStartupSuggestions(project));
-          }
-          if (view === 'dependencies') {
-            if (!project.unmanaged) return send(res, 409, { error: 'This project uses the StackForge launcher.' });
-            const { id, steps, issues } = await detectDependencyPlan(project);
-            return send(res, 200, { id, steps: steps.map(({ tool, command, directory, evidence }) => ({ tool, command, directory, evidence })), issues });
-          }
-        } catch (error) {
-          return send(res, 409, { error: error.message.split('\n')[0].trim() });
-        }
-      }
-      if (req.method === 'POST' && await database.archive(req, res, url.pathname, authorized)) return;
-      if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, jobs.list());
-      if (req.method === 'GET' && url.pathname.startsWith('/api/jobs/')) {
-        const job = jobs.view(url.pathname.slice('/api/jobs/'.length));
-        return send(res, job ? 200 : 404, job ?? { error: '找不到这个创建任务。' });
-      }
-      const projectAction = /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|database-connection-config|database-postgres-setup|database-local-status|database-remote-profile|database-sqlite-inspect|database-sqlite-create|run-check|check-cancel|check-config)$/.exec(url.pathname);
+      if (req.method === 'GET' && await projectRoutes.get(res, url)) return;
+      if (req.method === 'POST' && await databaseRoutes.archive(req, res, url.pathname, authorized)) return;
+      if (req.method === 'GET' && generationRoutes.get(res, url)) return;
+      const projectAction = matchProjectAction(url.pathname);
       if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
@@ -194,194 +96,15 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         let payload;
         try { payload = JSON.parse(body); if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error(); }
         catch { return send(res, 400, { error: 'Invalid JSON request.' }); }
-        if (url.pathname === '/api/projects/clone-cancel') {
-          if (typeof payload.requestId !== 'string' || cloneTask?.requestId !== payload.requestId) {
-            return send(res, 409, { error: 'This clone is no longer running.' });
-          }
-          if (!cloneTask.cancellable) return send(res, 409, { error: 'The repository is ready and StackForge is adding it to Projects.' });
-          cloneTask.controller.abort();
-          return send(res, 202, { cancelling: true });
-        }
-        if (cloneTask && (['/api/projects', '/api/projects/import', '/api/projects/clone'].includes(url.pathname) || /\/api\/jobs\/[^/]+\/retry$/.test(url.pathname))) {
+        if (projectRoutes.cloning && (['/api/projects', '/api/projects/import', '/api/projects/clone'].includes(url.pathname) || /\/api\/jobs\/[^/]+\/retry$/.test(url.pathname))) {
           return send(res, 409, { error: 'Wait for the GitHub clone to finish.' });
         }
-        if (url.pathname === '/api/projects/clone') {
-          if (jobs.busy || removals.size) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
-          const { requestId } = payload;
-          if (requestId !== undefined && (typeof requestId !== 'string' || !/^[a-f0-9-]{36}$/.test(requestId))) {
-            return send(res, 400, { error: 'Invalid JSON request.' });
-          }
-          const controller = new AbortController();
-          const task = { requestId, controller, cancellable: true };
-          cloneTask = task;
-          res.once('close', () => { if (!res.writableFinished && task.cancellable) controller.abort(); });
-          task.done = (async () => {
-            const { path, cloneId, cloneIdentity } = await clone(payload.repository, payload.parentDir, {
-              signal: controller.signal, onPromote: () => { task.cancellable = false; }
-            });
-            throwIfCancelled(controller.signal);
-            task.cancellable = false;
-            return registerProject(path, { cloneId, cloneIdentity });
-          })();
-          try {
-            const project = await task.done;
-            if (!res.destroyed) return send(res, 201, project);
-          } catch (error) {
-            if (!res.destroyed) return send(res, 409, { error: error.name === 'AbortError' ? 'Cloning cancelled.' : error.message });
-          }
-          finally { cloneTask = undefined; }
-          return;
+        if (removals.size && (['/api/projects', '/api/projects/import'].includes(url.pathname) || /\/api\/jobs\/[^/]+\/(publish|retry|open)$/.test(url.pathname))) {
+          const moving = [...removals.values()].some(removal => removal.moving);
+          return send(res, 409, { error: moving ? 'Wait for the project to finish moving to the trash.' : 'Wait for StackForge to finish its current task.' });
         }
-        if (removals.size && (['/api/projects', '/api/projects/import'].includes(url.pathname) || /\/api\/jobs\/[^/]+\/(publish|retry|open)$/.test(url.pathname))) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
-        if (url.pathname === '/api/projects/import') {
-          if (jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
-          try { return send(res, 201, await registerProject(payload.path)); }
-          catch (error) { return send(res, 400, { error: error.message }); }
-        }
-        if (projectAction) {
-          const [, id, action] = projectAction;
-          const project = managedProjects().find(item => item.id === id);
-          if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
-          if (await database.action(req, res, project, action, payload)) return;
-          if (database.blocksProjectAction(project, action)) {
-            return send(res, 409, { error: 'Wait for the current project operation to finish.' });
-          }
-          if (project.unmanaged && !['start', 'stop', 'startup', 'install', 'install-cancel', 'run-check', 'check-cancel', 'check-config', 'trash', 'remove', 'database-start', 'database-stop'].includes(action)) {
-            return send(res, 409, { error: 'This action requires a StackForge project.' });
-          }
-          if (project.unmanaged && action === 'start' && !project.startup?.services.some(service => service.command)) return send(res, 409, { error: 'Save a startup configuration before starting this project.' });
-          const detectedInstall = project.unmanaged && action === 'install' && payload.mode === 'detected';
-          if (detectedInstall && (typeof payload.planId !== 'string' || !/^[a-f0-9]{64}$/.test(payload.planId))) return send(res, 400, { error: 'Review the detected install plan before running it.' });
-          if (project.unmanaged && action === 'install' && !detectedInstall && !project.startup?.services.some(service => service.installCommand)) return send(res, 409, { error: 'Save an install command before installing dependencies.' });
-          if (removals.has(project.path)) return send(res, 409, { error: 'Wait for the project to finish moving to the trash.' });
-          if (configWrites.has(project.path)) return send(res, 409, { error: 'Wait for the project settings to finish saving.' });
-          if (action === 'install-cancel' || action === 'check-cancel') {
-            operations.cancel(project, action === 'install-cancel' ? 'dependencies' : 'checkTask');
-            return send(res, 202, operations.status(project, true));
-          }
-          if (action !== 'stop' && operations.active(project)) return send(res, 409, { error: 'Wait for the current project operation to finish.' });
-          if (action === 'install' || action === 'run-check' || action.startsWith('database-')) {
-            const session = runtime.status(project);
-            const inTransition = ['starting', 'stopping'].includes(session.status);
-            if (action === 'database-delete') {
-              if (inTransition || session.status === 'running') return send(res, 409, { error: 'Stop the project before deleting its database.' });
-              if (typeof payload.confirmVolume !== 'string' || !payload.confirmVolume) {
-                return send(res, 400, { error: 'Enter the exact volume name to confirm database deletion.' });
-              }
-            }
-            if (action === 'install' && (inTransition || session.status === 'running')) return send(res, 409, { error: 'Stop the project before installing dependencies.' });
-            if (action === 'run-check' && (inTransition || session.status === 'running')) return send(res, 409, { error: 'Stop the project before running checks.' });
-            if (action.startsWith('database-') && (inTransition || !project.unmanaged && session.status === 'running' && !session.initialized)) return send(res, 409, { error: 'Wait for the project to become ready or stop it first.' });
-            try {
-              const target = action === 'run-check' ? { ...project, customChecks: projectConfig.checks(project) } : project;
-              operations.start(target, action, projectConfig.ports(project), {
-                checkId: payload.check, installPlanId: detectedInstall ? payload.planId : undefined, confirmVolume: payload.confirmVolume,
-                chooseDatabase: ['database-start', 'database-stop'].includes(action) && payload.bindingId !== undefined ?
-                  () => database.selectedCompose(project, payload.bindingId) : undefined,
-                record: action.startsWith('database-') ? database.record(project, action) : undefined,
-                verifyDeletion: action === 'database-delete' ? target => database.verifyDeletion(project, target) : undefined
-              });
-              return send(res, 202, operations.status(project, true));
-            } catch (error) { return send(res, 409, { error: error.message }); }
-          }
-          if (action === 'ports') {
-            if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before changing its ports.' });
-            const saving = (async () => {
-              const ports = validatePorts(project, payload.ports);
-              const { manifest } = await inspectRecordedProject(project);
-              if (manifest.portConfig !== 1) throw new Error('This project uses an older launcher with fixed app ports.');
-              await projectConfig.savePorts(project, ports);
-              await database.scan(project).catch(() => {});
-              return ports;
-            })();
-            configWrites.set(project.path, saving);
-            try { return send(res, 200, { ports: await saving }); }
-            catch (error) { return send(res, 400, { error: error.message }); }
-            finally { configWrites.delete(project.path); }
-          }
-          if (action === 'check-config') {
-            const saving = (async () => {
-              const commands = validateCustomChecks(payload.commands);
-              let config;
-              if (commands.length) {
-                await inspectRecordedProject(project);
-                const previous = projectConfig.checks(project)?.identity;
-                const { identity } = await resolveStartup(project, commands, previous);
-                config = { identity, commands };
-              }
-              await projectConfig.saveChecks(project, config);
-              return { commands };
-            })();
-            configWrites.set(project.path, saving);
-            try { return send(res, 200, await saving); }
-            catch (error) { return send(res, 400, { error: error.message }); }
-            finally { configWrites.delete(project.path); }
-          }
-          if (action === 'startup') {
-            if (!project.unmanaged) return send(res, 409, { error: 'This project uses the StackForge launcher.' });
-            if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before changing its startup configuration.' });
-            const saving = (async () => {
-              const services = validateStartup(payload.services);
-              let startup;
-              if (services.length) {
-                const { identity } = await resolveStartup(project, services);
-                startup = { identity, services };
-              }
-              const frameworks = await detectFrameworks({ ...project, startup }).catch(() => project.frameworks);
-              await projectConfig.saveStartup(id, startup, frameworks);
-              return { services };
-            })();
-            configWrites.set(project.path, saving);
-            try { return send(res, 200, await saving); }
-            catch (error) { return send(res, 400, { error: error.message }); }
-            finally { configWrites.delete(project.path); }
-          }
-          if (action === 'trash' || action === 'remove') {
-            if (payload.confirmName !== project.name) return send(res, 400, { error: 'Enter the exact project name to confirm deletion.' });
-            const offline = !await locationExists(project.path);
-            if (removals.has(project.path) || configWrites.has(project.path) || database.blocksProjectAction(project, action) || operations.active(project)) {
-              return send(res, 409, { error: 'Wait for the current project operation to finish.' });
-            }
-            if (action === 'remove' && !project.imported && !offline) return send(res, 409, { error: 'Only imported projects can be removed from the list.' });
-            if (jobs.busy) return send(res, 409, { error: 'Wait for StackForge to finish its current task.' });
-            if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) return send(res, 409, { error: 'Stop the project before moving it to the trash.' });
-            if (action === 'remove' || offline || removeOnly(project)) {
-              await database.removeProfiles(project);
-              if (project.imported) await projectConfig.removeImport(project.id);
-              else await projectConfig.hideMissingProject(project.id);
-              await database.removeRegistration(project.id);
-              return send(res, 200, { removed: true });
-            }
-            const moving = (async () => {
-              const info = await inspectRecordedProject(project);
-              if (project.cloneId) await verifyClone(info.directory, project.cloneId, project.cloneIdentity);
-              if (project.cloneId) await desktop.trashProject(info.directory, project.cloneIdentity);
-              else await desktop.trashProject(info.directory, project.folderIdentity, recordedProjectChanged);
-              if (await locationExists(project.path)) throw new Error('The project is still at its original location. Check the system trash before retrying.');
-              const cleanup = database.record(project, 'database-profile-cleanup');
-              await database.removeProfiles(project).then(() => cleanup('succeeded'), () => cleanup('failed'));
-              if (project.cloneId) await projectConfig.removeImport(project.id);
-              else await projectConfig.hideMissingProject(project.id);
-              await database.removeRegistration(project.id);
-              return { trashed: true, databaseDeleted: false };
-            })();
-            removals.set(project.path, moving);
-            try { return send(res, 200, await moving); }
-            catch (error) { return send(res, 409, { error: error.message }); }
-            finally { removals.delete(project.path); }
-          }
-          try {
-            if (action === 'start') {
-              const ports = projectConfig.ports(project);
-              runtime.start(project, ports, !project.unmanaged && project.database !== 'none' ? async signal => {
-                const target = await operations.databaseTarget(project, ports, signal);
-                await target.verifyLauncher();
-                return { ...databaseDockerEnvironment(), COMPOSE_FILE: target.config.composeFile };
-              } : undefined);
-            }
-            else runtime.stop(project);
-            return send(res, 202, runtime.status(project));
-          } catch (error) { return send(res, 409, { error: error.message, diagnostic: startupDiagnostic(project, error.message) }); }
+        if (projectAction || ['/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel'].includes(url.pathname)) {
+          return await projectRoutes.post(req, res, url.pathname, projectAction, payload);
         }
         if (url.pathname === '/api/preferences') {
           try { return send(res, 200, await settings.save(payload)); }
@@ -393,33 +116,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
           try { return send(res, 200, { path: await desktop.pickDirectory(payload.initialDir || defaultDir, { language: payload.language, signal: controller.signal }) }); }
           catch (error) { return send(res, 400, { error: error.message }); }
         }
-        if (url.pathname.endsWith('/open')) {
-          const job = jobs.view(url.pathname.split('/')[3]);
-          if (!job) return send(res, 404, { error: '找不到这个创建任务。' });
-          try {
-            if (job.status !== 'complete' || !job.result?.path) throw new Error('The local project is not ready to open.');
-            const expected = resolve(job.options.parentDir, job.options.name);
-            const actual = absoluteDirectory(job.result.path);
-            const normalized = value => process.platform === 'win32' ? value.toLowerCase() : value;
-            if (normalized(actual) !== normalized(expected)) throw new Error('The recorded project location does not match this task.');
-            await desktop.openProject(expected, payload.action);
-            return send(res, 200, { requested: true });
-          } catch (error) { return send(res, 400, { error: error.message }); }
-        }
-        if (/\/(publish|retry|cancel)$/.test(url.pathname)) {
-          const id = url.pathname.split('/')[3];
-          try {
-            if (url.pathname.endsWith('/cancel')) await jobs.cancel(id);
-            else await jobs.retry(id, url.pathname.endsWith('/publish'));
-            return send(res, 202, { id });
-          } catch (error) { return send(res, 400, { error: error.message }); }
-        }
-        let input;
-        try { input = validateOptions(payload); }
-        catch (error) { return send(res, 400, { error: error.message }); }
-        if (url.pathname === '/api/checks') return send(res, 200, await check(input));
-        try { return send(res, 202, { id: await jobs.create(input) }); }
-        catch (error) { return send(res, 409, { error: error.message }); }
+        return await generationRoutes.post(res, url, payload);
       }
       if (req.method === 'GET' && await serveAsset(res, url.pathname)) return;
       return send(res, 404, { error: '页面不存在。' });
@@ -429,9 +126,9 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   server.shutdownTasks = async () => {
     closing = true;
     desktop.shutdown();
-    if (cloneTask?.cancellable) cloneTask.controller.abort();
+    const clone = projectRoutes.shutdown();
     await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), operations.shutdown(),
-      cloneTask?.done, ...removals.values(), ...configWrites.values(), database.shutdown()]);
+      clone, ...Array.from(removals.values(), removal => removal.done), ...configWrites.values(), database.shutdown()]);
   };
   server.jobs = jobs;
   return server;

@@ -1,17 +1,18 @@
 import { spawn } from 'node:child_process';
-import { lstat, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { portAvailable } from '../generation/environment.mjs';
-import { run, terminateTree } from '../platform/process.mjs';
+import { portAvailable } from '../platform/ports.mjs';
+import { run, stopProcessTree } from '../platform/process.mjs';
 import { defaultPorts, projectPathKey } from './project-config.mjs';
-import { sameDirectory } from '../platform/project-identity.mjs';
+import { commandDiagnostic } from './project-diagnostics.mjs';
 import { resolveStartup } from './project-startup.mjs';
-import { addProjectLogSecrets, databaseRedactor, redactedOutput } from '../database/security/secrets.mjs';
+import { developmentScript, inspectRecordedProject } from './project-folder.mjs';
+import { addProjectLogSecrets, databaseRedactor, redactedProcessOutput } from '../database/security/secrets.mjs';
+
+export { developmentScript, inspectRecordedProject, projectDirectory, readProjectFolder, recordedProjectChanged } from './project-folder.mjs';
 
 const logLimit = 64 * 1024;
 const active = new Set(['starting', 'running', 'stopping']);
-export const recordedProjectChanged = 'The recorded StackForge project is missing, has moved, or no longer matches its record.';
 
 async function probeService(url, signal, custom, requireRoute) {
   try {
@@ -32,78 +33,6 @@ async function probeService(url, signal, custom, requireRoute) {
   } catch { return false; }
 }
 
-export function startupDiagnostic(_project, output) {
-  if (/EADDRINUSE|address already in use|port [^\r\n]{1,32}(?:already in use|already allocated)|ports are not available/i.test(output)) return 'port';
-  if (/(?:cannot resolve environment variable|missing required environment variable|environment variable not found)\s*:\s*["']?DATABASE_URL\b|\bDATABASE_URL\b[^\r\n]{0,10}\b(?:is (?:not set|missing|required|undefined)|must be set)\b/i.test(output)) return 'databaseUrl';
-  if (/\bP1001\s*:|can.t reach database server/i.test(output)) return 'databaseConnection';
-  if (/\bJAVA_HOME\b[^\r\n]*(?:not set|not defined|not found|incorrect|invalid|not correctly|does not)|invalid (?:target|source) release|release version \d+ not supported|UnsupportedClassVersionError|Unsupported class file major version|No compiler is provided in this environment|(?:cannot|could not) find a Java installation|\b(?:java|javac)\b[^\r\n]*(?:not found|not recognized|不是内部或外部命令)/i.test(output)) return 'java';
-  if (/NETSDK1045|compatible \.NET SDK (?:was not found|could not be found)|no \.NET SDKs were found/i.test(output)) return 'dotnetSdk';
-  if (/ERR_PNPM_OUTDATED_LOCKFILE|\bYN0028\b|(?:package-lock\.json|npm-shrinkwrap\.json)[^\r\n]*(?:in sync|out of sync)|the lock file [^\r\n]*needs to be updated but --locked/i.test(output)) return 'lockfile';
-  if (/cannot connect to the docker daemon|is the docker daemon running|dockerDesktopLinuxEngine|docker_engine.*(?:cannot|not find|denied)|spawn docker ENOENT|\bdocker\b[^\r\n]*(?:not recognized|command not found|不是内部或外部命令)/i.test(output)) return 'docker';
-  if (/Database startup failed/i.test(output)) return 'database';
-  if (/ModuleNotFoundError:\s*No module named|\bpython(?:3|\.exe)?\s*:\s*No module named/i.test(output)) return 'pythonDependencies';
-  if (/(?:\bspawn\s+(?:dotnet|go|cargo|composer|bundle|gradle|mvn|uv|python3?)\s+ENOENT|\b(?:dotnet|go|cargo|composer|bundle|gradle|mvn|uv|python3?)\b["']?\s*:?\s*(?:command not found|is not recognized|不是内部或外部命令))/i.test(output)) return 'toolMissing';
-  if (/Cannot find (?:package|module) ['"](?:vite|vue|react|express|mysql2|pg|@vitejs\/[^'"]+|@nestjs\/[^'"]+)['"]|(?:vite|\bnest)['"]?[^\r\n]{0,32}(?:not recognized|not found|不是内部或外部命令)|failed to load config[^\r\n]*\n[^\r\n]*Cannot find package/i.test(output)) return 'dependencies';
-}
-
-export async function projectDirectory(path) {
-  const root = await lstat(path);
-  if (!root.isDirectory() || root.isSymbolicLink()) throw new Error();
-  return realpath(path);
-}
-
-export async function readProjectFolder(path) {
-  const directory = await projectDirectory(path);
-  const manifestFile = join(directory, 'stackforge.json');
-  const manifestInfo = await lstat(manifestFile);
-  if (!manifestInfo.isFile() || manifestInfo.size > 64 * 1024) throw new Error();
-  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
-  if (manifest.generator !== 'StackForge') throw new Error();
-  return { directory, manifest };
-}
-
-export async function inspectRecordedProject(project) {
-  if (project.unmanaged) {
-    const { root: directory } = await resolveStartup(project, []);
-    if (projectPathKey(directory) !== projectPathKey(project.path)) throw new Error(recordedProjectChanged);
-    return { directory, manifest: {} };
-  }
-  try {
-    const info = await readProjectFolder(project.path);
-    if (project.folderIdentity && !sameDirectory(await lstat(info.directory, { bigint: true }), project.folderIdentity)) throw new Error();
-    if (['name', 'frontend', 'backend', 'database'].some(key => info.manifest.options?.[key] !== project[key])) throw new Error();
-    return info;
-  } catch {
-    throw new Error(recordedProjectChanged);
-  }
-}
-
-export async function developmentScript(directory) {
-  const script = join(directory, 'scripts', 'dev.mjs');
-  try {
-    if (!(await lstat(script)).isFile() || projectPathKey(await realpath(script)) !== projectPathKey(script)) throw new Error();
-    return script;
-  } catch { throw new Error('The recorded StackForge project or its development script is missing or has moved.'); }
-}
-
-function stopTree(child) {
-  if (!child.pid) return Promise.resolve();
-  if (process.platform === 'win32') return terminateTree(child);
-
-  // Generated launchers handle SIGTERM and shut down their own child groups.
-  // Signal the group too so a Compose startup command in progress is interrupted.
-  try { process.kill(-child.pid, 'SIGTERM'); } catch { return Promise.resolve(); }
-  return new Promise(resolve => {
-    const closed = () => { clearTimeout(timer); resolve(); };
-    const timer = setTimeout(async () => {
-      child.off('close', closed);
-      await terminateTree(child);
-      resolve();
-    }, 3000);
-    child.once('close', closed);
-  });
-}
-
 export class ProjectRuntime {
   constructor({ probePort = portAvailable, probeEndpoint = probeService } = {}) {
     this.probePort = probePort;
@@ -121,7 +50,7 @@ export class ProjectRuntime {
       runtime.initialized = entry.initialized === true;
     }
     if (entry && (runtime.status === 'failed' || runtime.status === 'running' && !runtime.ready)) {
-      runtime.diagnostic = startupDiagnostic(project, (entry.error || '') + '\n' + entry.log.slice(-12000));
+      runtime.diagnostic = commandDiagnostic((entry.error || '') + '\n' + entry.log.slice(-12000));
       if (!runtime.diagnostic && runtime.status === 'running' && Date.now() - entry.launchedAt > 30000) {
         runtime.diagnostic = Object.values(entry.services).some(service => service.openUrl && !service.ready) ? 'waitingLink' : 'waiting';
       }
@@ -184,11 +113,9 @@ export class ProjectRuntime {
     await Promise.all(commands.map(({ name, cwd, command, port }) => {
       const append = chunk => this.capture(entry, `[${name}] ${chunk}`);
       const discard = () => { entry.truncated = true; };
-      const output = redactedOutput(append, entry.redact, discard);
-      const stderr = redactedOutput(append, entry.redact, discard);
+      const output = redactedProcessOutput(append, entry.redact, discard);
       const ended = error => {
         output.flush();
-        stderr.flush();
         if (signal.aborted) return;
         const message = Number.isInteger(error?.exitCode) ? `Process exited (${error.exitCode}).` : error?.message?.split('\n')[0] ?? 'Process exited (0).';
         this.capture(entry, `[${name}] ${entry.redact.text(message)}\n`);
@@ -198,7 +125,7 @@ export class ProjectRuntime {
       return run(command, [], {
         cwd, env: { ...process.env, ...(port && { PORT: String(port) }) },
         shell: true, timeout: 0, signal, onSpawn,
-        log: (chunk, stream) => (stream === 'stderr' ? stderr : output).write(chunk)
+        log: output.write
       }).then(() => ended(), ended);
     }));
   }
@@ -223,15 +150,13 @@ export class ProjectRuntime {
     entry.child = child;
     const append = chunk => this.capture(entry, chunk);
     const discard = () => { entry.truncated = true; };
-    const stdout = redactedOutput(append, entry.redact, discard);
-    const stderr = redactedOutput(append, entry.redact, discard);
-    child.stdout.setEncoding('utf8').on('data', stdout.write);
-    child.stderr.setEncoding('utf8').on('data', stderr.write);
+    const output = redactedProcessOutput(append, entry.redact, discard);
+    child.stdout.setEncoding('utf8').on('data', chunk => output.write(chunk, 'stdout'));
+    child.stderr.setEncoding('utf8').on('data', chunk => output.write(chunk, 'stderr'));
     child.once('spawn', () => this.markRunning(entry));
     child.once('error', error => { if (entry.status !== 'stopping') entry.error = `Could not start the development process: ${entry.redact.text(error.message)}`; });
     const [code, signal] = await new Promise(resolve => child.once('close', (...result) => resolve(result)));
-    stdout.flush();
-    stderr.flush();
+    output.flush();
     await entry.termination;
     if (entry.status !== 'stopping' && !entry.error && code !== 0) entry.error = `Development process exited (${code ?? signal}). See the log for details.`;
   }
@@ -258,7 +183,7 @@ export class ProjectRuntime {
     if (!active.has(entry.status) || entry.status === 'stopping') return;
     entry.status = 'stopping';
     entry.readiness.abort();
-    if (entry.child) entry.termination = stopTree(entry.child);
+    if (entry.child) entry.termination = stopProcessTree(entry.child);
   }
 
   async shutdown() {

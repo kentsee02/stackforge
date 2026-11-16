@@ -6,7 +6,8 @@ import { cp, mkdtemp, mkdir, writeFile, rm, rename, readFile, realpath } from 'n
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { ProjectRuntime, startupDiagnostic } from '../../src/projects/project-runtime.mjs';
+import { ProjectRuntime } from '../../src/projects/project-runtime.mjs';
+import { commandDiagnostic } from '../../src/projects/project-diagnostics.mjs';
 import { createApp } from '../../src/http/server.mjs';
 import { createDesktop } from '../../src/platform/desktop.mjs';
 import { ProjectConfig, validatePorts } from '../../src/projects/project-config.mjs';
@@ -164,23 +165,21 @@ test('running project logs redact complete and fragmented connection URLs and do
 });
 
 test('startup diagnostics distinguish missing packages, Java mismatch, Docker, and occupied ports', () => {
-  const project = { backend: 'spring', database: 'postgres' };
-  assert.equal(startupDiagnostic(project, 'Fatal error compiling: error: release version 21 not supported'), 'java');
-  assert.equal(startupDiagnostic(project, 'Cannot connect to the Docker daemon. Is the docker daemon running?'), 'docker');
-  assert.equal(startupDiagnostic(project, 'Ports are not available: bind: address already in use\nDatabase startup failed'), 'port');
-  assert.equal(startupDiagnostic(project, 'Database startup failed. Ensure Docker Desktop is running, then check .env and ports.'), 'database');
-  assert.equal(startupDiagnostic({ ...project, backend: 'express' }, "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'express' imported from server.js"), 'dependencies');
-  assert.equal(startupDiagnostic(project, 'The frontend plugin printed a custom message.'), undefined);
-  const imported = { unmanaged: true, backend: 'none', database: 'none', frameworks: ['Spring Boot'] };
-  assert.equal(startupDiagnostic(imported, 'Error: JAVA_HOME is set to an invalid directory: local/jdk'), 'java');
-  assert.equal(startupDiagnostic(imported, 'No compiler is provided in this environment. Perhaps you are running on a JRE rather than a JDK?'), 'java');
-  assert.equal(startupDiagnostic(imported, 'PrismaConfigEnvError: Cannot resolve environment variable: DATABASE_URL.'), 'databaseUrl');
-  assert.equal(startupDiagnostic(imported, 'Error: P1001: Can\'t reach database server'), 'databaseConnection');
-  assert.equal(startupDiagnostic(imported, 'NETSDK1045: The current .NET SDK does not support this target.'), 'dotnetSdk');
-  assert.equal(startupDiagnostic(imported, 'ERR_PNPM_OUTDATED_LOCKFILE Cannot install with frozen-lockfile'), 'lockfile');
-  assert.equal(startupDiagnostic(imported, 'python.exe: No module named uvicorn'), 'pythonDependencies');
-  assert.equal(startupDiagnostic(imported, '无法执行 dotnet：spawn dotnet ENOENT'), 'toolMissing');
-  assert.equal(startupDiagnostic(imported, 'Configuration includes a DATABASE_URL setting.'), undefined);
+  assert.equal(commandDiagnostic('Fatal error compiling: error: release version 21 not supported'), 'java');
+  assert.equal(commandDiagnostic('Cannot connect to the Docker daemon. Is the docker daemon running?'), 'docker');
+  assert.equal(commandDiagnostic('Ports are not available: bind: address already in use\nDatabase startup failed'), 'port');
+  assert.equal(commandDiagnostic('Database startup failed. Ensure Docker Desktop is running, then check .env and ports.'), 'database');
+  assert.equal(commandDiagnostic("Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'express' imported from server.js"), 'dependencies');
+  assert.equal(commandDiagnostic('The frontend plugin printed a custom message.'), undefined);
+  assert.equal(commandDiagnostic('Error: JAVA_HOME is set to an invalid directory: local/jdk'), 'java');
+  assert.equal(commandDiagnostic('No compiler is provided in this environment. Perhaps you are running on a JRE rather than a JDK?'), 'java');
+  assert.equal(commandDiagnostic('PrismaConfigEnvError: Cannot resolve environment variable: DATABASE_URL.'), 'databaseUrl');
+  assert.equal(commandDiagnostic('Error: P1001: Can\'t reach database server'), 'databaseConnection');
+  assert.equal(commandDiagnostic('NETSDK1045: The current .NET SDK does not support this target.'), 'dotnetSdk');
+  assert.equal(commandDiagnostic('ERR_PNPM_OUTDATED_LOCKFILE Cannot install with frozen-lockfile'), 'lockfile');
+  assert.equal(commandDiagnostic('python.exe: No module named uvicorn'), 'pythonDependencies');
+  assert.equal(commandDiagnostic('无法执行 dotnet：spawn dotnet ENOENT'), 'toolMissing');
+  assert.equal(commandDiagnostic('Configuration includes a DATABASE_URL setting.'), undefined);
 });
 
 test('service links appear only after their readiness checks pass and disappear on stop', async t => {
@@ -302,6 +301,9 @@ test('project API protects runtime and recycling actions, locks moves, and redis
   assert.equal((await post(remove, { confirm: true })).status, 400);
   assert.equal((await post(remove, { confirmName: project.name.toUpperCase() })).status, 400);
   assert.equal((await post(remove, { confirmName: project.name + ' ' })).status, 400);
+  const unregister = await post(`/api/projects/${id}/remove`, confirmation);
+  assert.equal(unregister.status, 409);
+  assert.deepEqual(await unregister.json(), { error: 'Only imported projects can be removed from the list.' });
   const manifest = join(project.path, 'stackforge.json');
   const original = await readFile(manifest, 'utf8');
   await writeFile(manifest, '{}');

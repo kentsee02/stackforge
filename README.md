@@ -175,7 +175,7 @@ Use `--only=node`, `--only=java`, or `--only=nest` to check one stack. The expli
 npm run test:integration -- --only=node --github --repo-name=your-test-repository
 ```
 
-See the [code map](docs/ARCHITECTURE.md) for the application entry points, project and database modules, and their tests. See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
+See the [code map](docs/CODE-MAP.md) for entry points, modules, and tests. The [architecture specification](ARCHITECTURE.md) defines product boundaries and module responsibilities. See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
 
 ## Scope
 

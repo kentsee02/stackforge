@@ -114,13 +114,14 @@ export function createDesktop({ platform = process.platform, env = process.env, 
         return result;
       } finally { if (pickerController === controller) pickerController = undefined; }
     },
-    async openProject(path, action) {
+    async openProject(path, action, verifyProject) {
       if (!['folder', 'vscode', 'terminal'].includes(action)) throw new Error('Unsupported project action.');
       path = absoluteDirectory(path, platform);
       let info; try { info = await lstatDirectory(path); } catch { throw new Error('The project directory is no longer available. Check its location.'); }
       if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('The project directory was moved or replaced. Check its location.');
       const available = await tools();
       if (!available[action]) throw new Error(action === 'vscode' ? 'VS Code was not found. Install it, then refresh this page.' : 'No compatible desktop application was found for this action.');
+      if (verifyProject) await verifyProject();
       const config = { cwd: path, env: { ...env, STACKFORGE_OPEN_PATH: path } };
       if (action === 'folder') {
         if (platform === 'win32') await launch(available.folder, [path], config);

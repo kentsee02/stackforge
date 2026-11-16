@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, readFile, writeFile, appendFile, stat, rm, mkdir, rename } from 'node:fs/promises';
+import { cp, lstat, mkdtemp, readFile, writeFile, appendFile, stat, rm, mkdir, realpath, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, request } from 'node:http';
@@ -11,6 +11,7 @@ import { createApp, identity } from '../../src/http/server.mjs';
 import { Jobs } from '../../src/generation/jobs.mjs';
 import { JobStore } from '../../src/generation/job-store.mjs';
 import { run, cancelled } from '../../src/platform/process.mjs';
+import { directoryIdentity } from '../../src/platform/project-identity.mjs';
 import { launch } from '../../scripts/launcher.mjs';
 
 const base = { name: 'recovery-app', frontend: 'vue', backend: 'express', database: 'mysql', install: true, git: false };
@@ -220,18 +221,95 @@ test('loading job history skips invalid timestamps and keeps valid records', asy
   assert.deepEqual((await new JobStore(directory).load()).map(item => item.job.id), [validId]);
 });
 
-test('publication retry retains the latest error after reloading a saved checkpoint', async () => {
+test('publication retry retains the latest error after reloading a saved checkpoint', async t => {
+  const parentDir = await temp(t, 'stackforge-publish-record-');
+  const path = join(parentDir, base.name);
+  await mkdir(path);
+  const folderIdentity = directoryIdentity(await lstat(path, { bigint: true }));
   const jobs = new Jobs({ directory: false, publish: async () => { throw new Error('New publication failure'); } });
   await jobs.ready;
   const id = randomUUID();
-  const previous = { path: '/project', remote: { status: 'failed', error: 'Old publication failure' } };
+  const previous = { path, remote: { status: 'failed', error: 'Old publication failure' } };
   jobs.records.set(id, {
     job: { id, status: 'complete', logs: [], result: structuredClone(previous) },
-    options: base, checkpoint: { result: structuredClone(previous) }
+    options: { ...base, parentDir }, checkpoint: { folderIdentity, result: structuredClone(previous) }
   });
   await jobs.retry(id, true);
   await eventually(() => jobs.busy, busy => !busy);
   assert.equal(jobs.view(id).result.remote.error, 'New publication failure');
+});
+
+test('creation history verifies targets before desktop open and GitHub retry, including after relocation', async t => {
+  const parentDir = await realpath(await temp(t, 'stackforge-history-identity-'));
+  const stateDir = join(parentDir, 'state', 'jobs');
+  const options = { ...base, parentDir, database: 'none', install: false };
+  const checkpoint = {};
+  const result = await generateProject(options, () => {}, { checkpoint, fetchImpl });
+  result.remote = { status: 'failed', error: 'offline' };
+  const store = new JobStore(stateDir);
+  const record = { id: randomUUID(), status: 'complete', createdAt: new Date().toISOString(), logs: [], result };
+  await store.save(record, options, checkpoint);
+  const legacy = { ...options, name: 'legacy-app' };
+  const legacyPath = join(parentDir, legacy.name);
+  await mkdir(legacyPath);
+  await cp(join(result.path, 'stackforge.json'), join(legacyPath, 'stackforge.json'));
+  const legacyId = randomUUID();
+  await store.save({ ...record, id: legacyId, result: { ...result, path: legacyPath } }, legacy, { promoted: true });
+
+  const opened = [], published = [];
+  const app = createApp({ stateDir, desktop: { capabilities: async () => ({}), shutdown() {},
+    async openProject(path, action, verify) { await verify(); opened.push([path, action]); } },
+    async publish(path, _options, _report, { verifyProject }) { await verifyProject(); published.push(path); return { status: 'published' }; }
+  }).listen(0, '127.0.0.1');
+  await once(app, 'listening');
+  t.after(async () => { await app.shutdownTasks(); await new Promise(resolve => app.close(resolve)); });
+  const url = 'http://127.0.0.1:' + app.address().port;
+  const get = async path => (await fetch(url + path)).json();
+  const { token } = await get('/api/state');
+  const post = (path, body = {}) => fetch(url + path, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, body: JSON.stringify(body) });
+  const open = id => post('/api/jobs/' + id + '/open', { action: 'folder' });
+  const retry = async id => {
+    assert.equal((await post('/api/jobs/' + id + '/publish')).status, 202);
+    await app.jobs.executions.get(id);
+    return (await get('/api/jobs/' + id)).result.remote;
+  };
+  const assertRejected = async (id, reason) => {
+    const reply = await open(id);
+    assert.equal(reply.status, 400);
+    assert.match((await reply.json()).error, reason);
+    const remote = await retry(id);
+    assert.equal(remote.status, 'failed');
+    assert.match(remote.error, reason);
+  };
+
+  const moved = join(parentDir, 'moved-project');
+  await rename(result.path, moved);
+  await cp(moved, result.path, { recursive: true });
+  await assertRejected(record.id, /missing or has been replaced/);
+  await assertRejected(legacyId, /no recorded folder identity/);
+  assert.deepEqual({ opened, published }, { opened: [], published: [] });
+
+  const replacement = join(parentDir, 'original-path-copy');
+  await rename(result.path, replacement);
+  const imported = await post('/api/projects/import', { path: moved });
+  assert.equal(imported.status, 201);
+  assert.equal((await imported.json()).id, record.id);
+  assert.equal((await get('/api/jobs/' + record.id)).result.path, moved);
+  await rename(replacement, result.path);
+  assert.equal((await open(record.id)).status, 200);
+  assert.deepEqual(opened, [[moved, 'folder']]);
+
+  const parked = join(parentDir, 'parked-project');
+  await rename(moved, parked);
+  await mkdir(moved);
+  await assertRejected(record.id, /missing or has been replaced/);
+  assert.deepEqual(opened, [[moved, 'folder']]);
+  assert.deepEqual(published, []);
+  await rename(moved, replacement);
+  await rename(parked, moved);
+  assert.equal((await retry(record.id)).status, 'published');
+  assert.deepEqual(published, [moved]);
 });
 
 test('double-click launcher avoids an occupied port and reuses the same project server', async t => {

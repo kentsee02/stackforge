@@ -588,7 +588,6 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     $('database-delete-dialog').close();
     act(deletingDatabase.id, 'database-delete', { confirmVolume: deletingDatabase.volume });
   });
-  for (const tool of ['checks', 'git']) $('project-' + tool).addEventListener('toggle', () => loadProjectTool(tool, true));
 
   return {
     render(project, busy, unavailable) {

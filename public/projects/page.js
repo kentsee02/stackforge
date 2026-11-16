@@ -1,5 +1,8 @@
-import { setText, setupI18n, translate } from '/i18n.js';
+import { setText, setupI18n } from '/i18n.js';
 import { createDatabasePanel } from '/projects/database.js';
+import { createStartupPanel } from '/projects/startup.js';
+import { createDependenciesPanel } from '/projects/dependencies.js';
+import { createProjectToolsPanel } from '/projects/tools.js';
 
 setupI18n();
 
@@ -30,11 +33,6 @@ let confirming;
 let importing = false;
 let cloneRequest;
 let portMessage;
-let startupMessage;
-let startupDetection;
-let displayedStartupSuggestions;
-let dependencyPlanView;
-let toolsView;
 let timer;
 let revision = 0;
 
@@ -90,188 +88,6 @@ function renderServices(project) {
   }
 }
 
-function startupDraft() {
-  return [...$('project-startup-services').children].map(row => {
-    const { name, directory, command, port, installCommand, kind, openPath } = Object.fromEntries([...row.querySelectorAll('input, select')].map(input => [input.name, input.value.trim()]));
-    return { name, directory: directory.replaceAll('\\', '/') || '.', ...(command && { command }), ...(port && { port: Number(port) }), ...(installCommand && { installCommand }), ...(kind && { kind }), ...(openPath && { openPath }) };
-  });
-}
-
-function addStartupService(service = {}) {
-  const row = $('project-startup-service').content.firstElementChild.cloneNode(true);
-  for (const element of row.querySelectorAll('[data-i18n]')) setText(element, element.dataset.i18n);
-  for (const input of row.querySelectorAll('input, select')) {
-    input.value = service[input.name] ?? '';
-    if (input.dataset.i18nPlaceholder) input.placeholder = translate(input.dataset.i18nPlaceholder);
-  }
-  $('project-startup-services').append(row);
-  return row;
-}
-
-function startupDirectoryKey(directory) {
-  return (directory || '.').split('/').filter(part => part && part !== '.').join('/') || '.';
-}
-
-function matchingStartup(group, choice, draft) {
-  const folder = startupDirectoryKey(group.directory);
-  return draft.findIndex(service => startupDirectoryKey(service.directory) === folder && service.command === choice.command);
-}
-
-function missingLinkFields(service, choice, draft) {
-  const port = !service.port && choice.port && !draft.some(item => item.port === choice.port) ? choice.port : undefined;
-  const openPath = !service.openPath && choice.openPath;
-  return { ...(port && { port }), ...(openPath && { openPath }) };
-}
-
-function startupSuggestionConflict(group, choice, draft) {
-  const folder = startupDirectoryKey(group.directory);
-  const existing = matchingStartup(group, choice, draft);
-  if (existing !== -1) return Object.keys(missingLinkFields(draft[existing], choice, draft)).length ? undefined : 'Already in the configuration.';
-  if (choice.orchestrates && draft.some(service => {
-    const path = startupDirectoryKey(service.directory);
-    return service.command && (folder === '.' || path === folder || path.startsWith(folder + '/'));
-  })) return 'This workspace command overlaps an existing startup service.';
-  if (draft.some(service => service.command && startupDirectoryKey(service.directory) === folder &&
-      (!service.kind || !choice.kind || service.kind === choice.kind))) return 'A startup command is already configured for this folder. Edit it below to use another command.';
-  if (draft.length >= 6) return 'Configure up to six startup services.';
-}
-
-function suggestionRow(group, id) {
-  const row = $('startup-suggestion-row').content.firstElementChild.cloneNode(true);
-  const title = row.querySelector('.startup-suggestion-title');
-  title.querySelector('strong').textContent = group.name;
-  const folder = title.querySelector('.small');
-  if (group.directory === '.') setText(folder, 'Project root');
-  else folder.textContent = group.directory;
-  for (const element of row.querySelectorAll('[data-i18n]')) setText(element, element.dataset.i18n);
-  const select = row.querySelector('select');
-  select.parentElement.hidden = group.choices.length < 2;
-  select.append(...group.choices.map((choice, index) => new Option(choice.script, String(index))));
-  select.addEventListener('change', render);
-  row.querySelector('button').addEventListener('click', () => {
-    if (selected !== id) return;
-    const draft = startupDraft();
-    const choice = group.choices[Number(select.value)];
-    if (startupSuggestionConflict(group, choice, draft)) return;
-    const existing = matchingStartup(group, choice, draft);
-    if (existing !== -1) {
-      const service = draft[existing];
-      const fields = missingLinkFields(service, choice, draft);
-      if (!service.kind && choice.kind) fields.kind = choice.kind;
-      const target = $('project-startup-services').children[existing];
-      for (const [name, value] of Object.entries(fields)) target.querySelector(`[name="${name}"]`).value = value;
-      startupMessage = { id, message: 'Missing link settings were added to the draft. Save to use them.' };
-      render();
-      target.querySelector('[name="port"]').focus();
-      return;
-    }
-    const names = new Set(draft.map(service => service.name.toLowerCase()));
-    let name = group.name;
-    for (let count = 2; names.has(name.toLowerCase()); count++) name = group.name.slice(0, 35) + ' (' + count + ')';
-    const portInUse = choice.port && draft.some(service => service.port === choice.port);
-    const added = addStartupService({ name, directory: group.directory, command: choice.command, port: portInUse ? undefined : choice.port, kind: choice.kind, openPath: choice.openPath });
-    startupMessage = { id, message: portInUse ? 'Suggestion added. Its port is already configured, so the port field was left blank.' : 'Suggestion added to the draft. Save to use it.' };
-    render();
-    added.querySelector('input').focus();
-  });
-  return row;
-}
-
-function renderStartupSuggestions(project, locked, draft) {
-  const view = startupDetection?.id === project.id ? startupDetection : undefined;
-  $('detect-startup').disabled = locked || Boolean(view?.loading);
-  const status = $('startup-detection-status');
-  const list = $('startup-suggestions');
-  const data = view?.data;
-  status.hidden = !view;
-  status.classList.toggle('project-operation-error', Boolean(view?.error));
-  if (view) showMessage(status, view.error ?? (view.loading ? 'Looking for startup commands…' : data.limited
-    ? 'The scan limit was reached. Review these suggestions and add any remaining services manually.'
-    : data.groups.length ? 'Choose a command and add it to the draft. Review and save before starting.'
-    : 'No reliable startup commands were detected. Add a service manually.'));
-  if (displayedStartupSuggestions !== data) {
-    displayedStartupSuggestions = data;
-    list.replaceChildren(...(data?.groups ?? []).map(group => suggestionRow(group, project.id)));
-  }
-  list.hidden = !data?.groups.length;
-  for (const [index, row] of [...list.children].entries()) {
-    const group = data.groups[index];
-    const select = row.querySelector('select');
-    const choice = group.choices[Number(select.value)];
-    const conflict = startupSuggestionConflict(group, choice, draft);
-    select.disabled = locked;
-    const command = row.querySelector('.startup-suggestion-command');
-    if (command.textContent !== choice.command) command.textContent = choice.command;
-    const evidence = choice.source ?? `package.json · scripts.${choice.script}`;
-    const kind = choice.kind === 'web' ? 'Web app' : choice.kind === 'api' ? 'API service' : '';
-    const notes = [evidence, translate(kind), choice.orchestrates && translate('Workspace launcher'), choice.port && translate(`Port ${choice.port}`), choice.openPath && translate(`Path ${choice.openPath}`)].filter(Boolean);
-    const source = row.querySelector('.startup-suggestion-source');
-    if (source.textContent !== notes.join(' · ')) source.textContent = notes.join(' · ');
-    const button = row.querySelector('button');
-    setText(button, matchingStartup(group, choice, draft) !== -1 && !conflict ? 'Fill missing link settings' : 'Add to draft');
-    button.disabled = locked || Boolean(conflict);
-    const hint = row.querySelector('.startup-suggestion-conflict');
-    hint.hidden = !conflict;
-    showMessage(hint, conflict);
-  }
-}
-
-async function detectStartup() {
-  const project = projects.find(item => item.id === selected);
-  if (!project?.unmanaged) return;
-  const view = { id: project.id, loading: true };
-  startupDetection = view;
-  render();
-  try {
-    view.data = await request(`/api/projects/${project.id}/startup-suggestions`, { signal: AbortSignal.timeout(12000) });
-  } catch (error) { view.error = error.message; }
-  finally {
-    view.loading = false;
-    if (startupDetection === view && selected === view.id) render();
-  }
-}
-
-function renderStartup(project, locked) {
-  const panel = $('project-startup');
-  const form = $('project-startup-form');
-  const rows = $('project-startup-services');
-  panel.hidden = !project.unmanaged;
-  if (panel.hidden) return false;
-  if (form.dataset.project !== project.id) {
-    panel.open = !project.hasStartup;
-    form.dataset.project = project.id;
-    delete form.dataset.saved;
-    rows.replaceChildren();
-  }
-  if (project.startupServices) {
-    const saved = JSON.stringify(project.startupServices);
-    if (form.dataset.saved !== saved) {
-      form.dataset.saved = saved;
-      rows.replaceChildren();
-      project.startupServices.forEach(addStartupService);
-    }
-  }
-  form.hidden = form.dataset.saved === undefined;
-  const draft = startupDraft();
-  const dirty = !form.hidden && JSON.stringify(draft) !== form.dataset.saved;
-  renderStartupSuggestions(project, locked, draft);
-  for (const [index, row] of [...rows.children].entries()) {
-    setText(row.querySelector('legend'), `Service ${index + 1}`);
-    row.disabled = locked;
-  }
-  $('project-startup-empty').hidden = Boolean(rows.childElementCount);
-  $('project-startup-hint').hidden = !rows.childElementCount;
-  $('project-startup-link-hint').hidden = !rows.childElementCount;
-  $('project-startup-add').disabled = locked || rows.childElementCount >= 6;
-  $('project-startup-save').disabled = locked || !dirty;
-  const message = startupMessage?.id === project.id ? startupMessage : undefined;
-  const saving = state.pending?.id === project.id && state.pending.action === 'startup';
-  const feedback = $('project-startup-message');
-  feedback.classList.toggle('project-operation-error', Boolean(message?.error) && !saving);
-  showMessage(feedback, saving ? 'Saving startup configuration…' : message?.message || (dirty ? 'Save configuration changes before running commands.' : ''));
-  return dirty;
-}
-
 function renderPorts(project, busy) {
   const details = $('project-ports');
   const form = $('project-port-form');
@@ -304,234 +120,6 @@ function renderOutput(output, id, log = '') {
   if (output.textContent !== log) {
     output.textContent = log;
     if (follow) output.scrollTop = output.scrollHeight;
-  }
-}
-
-function renderDependencies(project, busy, unavailable, startupDirty) {
-  const task = project.dependencies;
-  const installing = project.operation === 'dependencies' || (state.pending?.id === project.id && state.pending.action === 'install');
-  const view = dependencyPlanView?.id === project.id ? dependencyPlanView : undefined;
-  const automatic = Boolean(view?.data?.steps.length);
-  const canInstall = !project.unmanaged || automatic || project.hasInstallCommands;
-  renderDependencyPlan(project, view);
-  const hint = $('dependency-config-hint');
-  hint.hidden = !project.unmanaged || (automatic && !startupDirty && !project.hasInstallCommands);
-  if (project.unmanaged) showMessage(hint, startupDirty ? 'Save configuration changes before installing dependencies.' : project.hasInstallCommands
-    ? 'Saved install commands run in order. Services without an install command are skipped.'
-    : 'Add an install command under Startup configuration if this project needs one.');
-  const phases = { npm: 'Installing npm dependencies…', maven: 'Downloading Maven dependencies…', custom: 'Running install commands…', detected: 'Installing detected dependencies…' };
-  const results = { succeeded: 'Dependencies installed.', failed: 'Installation failed.', cancelled: 'Installation cancelled.' };
-  let status = results[task?.status] ?? (busy ? 'Stop the project before installing dependencies.' : '');
-  if (installing) status = task?.status === 'cancelling' ? 'Cancelling installation…' : phases[task?.phase] ?? 'Preparing installation…';
-  showMessage($('dependency-status'), status);
-  const install = $('install-dependencies');
-  showMessage(install, automatic ? 'Install detected dependencies' : project.unmanaged ? 'Run custom install' : 'Install dependencies');
-  install.hidden = installing || !canInstall;
-  install.disabled = busy || unavailable || startupDirty;
-  const custom = $('install-custom-dependencies');
-  custom.hidden = !project.unmanaged || !automatic || !project.hasInstallCommands || installing;
-  custom.disabled = install.disabled;
-  $('refresh-dependencies').hidden = !project.unmanaged || installing;
-  $('refresh-dependencies').disabled = Boolean(view?.loading);
-  $('cancel-install').hidden = !installing;
-  $('cancel-install').disabled = Boolean(state.pending) || task?.status === 'cancelling';
-  const installError = state.actionError?.id === project.id && state.actionError.action?.startsWith('install') ? state.actionError : undefined;
-  const issue = installError ? installError.diagnostic : task?.diagnostic;
-  const hintText = issue === 'dependencies' ? 'An installation script could not find a dependency. Check the failing script and package in the installation log.' : diagnosticMessages[issue];
-  const error = hintText ?? installError?.message ?? task?.error;
-  showMessage($('dependency-error'), error);
-  $('dependency-error').hidden = !error;
-  const details = $('dependency-log');
-  if (details.dataset.project !== project.id) details.open = false;
-  details.dataset.project = project.id;
-  details.hidden = !task?.log;
-  renderOutput($('dependency-output'), project.id, task?.log);
-}
-
-function renderDependencyPlan(project, view) {
-  $('dependency-plan').hidden = !project.unmanaged;
-  if (!project.unmanaged) return;
-  const steps = $('dependency-steps');
-  const issues = $('dependency-issues');
-  const plan = view?.data;
-  const key = plan?.id ?? '';
-  if (steps.dataset.plan !== key) {
-    steps.dataset.plan = key;
-    steps.replaceChildren(...(plan?.steps ?? []).map(step => {
-      const row = document.createElement('li');
-      const command = document.createElement('code');
-      const source = document.createElement('small');
-      const folder = document.createElement('span');
-      command.textContent = step.command;
-      if (step.directory === '.') setText(folder, 'Project root');
-      else folder.textContent = step.directory;
-      source.append(folder, ' · ', step.evidence);
-      row.append(command, source);
-      return row;
-    }));
-    issues.replaceChildren(...(plan?.issues ?? []).map(issue => {
-      const row = document.createElement('li');
-      const folder = document.createElement('span');
-      const message = document.createElement('span');
-      if (issue.directory === '.') setText(folder, 'Project root');
-      else folder.textContent = issue.directory;
-      setText(message, issue.message);
-      row.append(folder, ' · ', message);
-      return row;
-    }));
-  }
-  steps.hidden = !plan?.steps.length;
-  issues.hidden = !plan?.issues.length;
-  showMessage($('dependency-detection'), view?.error ?? (view?.loading || !view
-    ? 'Detecting dependency files…'
-    : plan.steps.length ? 'Review these commands and folders before installing. Install commands can run project scripts.'
-    : 'No reliable install commands were detected.'));
-}
-
-async function loadDependencyPlan(force = false) {
-  const project = projects.find(item => item.id === selected);
-  if (!project?.unmanaged || !project.startupServices) return;
-  const key = JSON.stringify(project.startupServices);
-  if (dependencyPlanView?.id === project.id && dependencyPlanView.key === key && (!force || dependencyPlanView.loading)) return;
-  const view = { id: project.id, key, loading: true };
-  dependencyPlanView = view;
-  render();
-  try {
-    view.data = await request(`/api/projects/${project.id}/dependencies`, { signal: AbortSignal.timeout(12000) });
-  } catch (error) {
-    view.error = error.message;
-  } finally {
-    view.loading = false;
-    if (dependencyPlanView === view && selected === view.id) render();
-  }
-}
-
-const checkStates = { running: 'Check running…', cancelling: 'Cancelling check…', succeeded: 'Check passed', failed: 'Check failed', cancelled: 'Check cancelled' };
-const checkScopes = { root: 'Project · {command}', frontend: 'Frontend · {command}', backend: 'Backend · {command}', maven: 'Backend · {command}' };
-const checkTypes = { build: 'Build', test: 'Test', lint: 'Lint' };
-let checkConfigMessage;
-
-function checkLabel(id, check) {
-  const parts = id.split(':');
-  const scope = parts[0], name = parts.at(-1);
-  const command = check?.command ?? (scope === 'maven' ? `Maven Wrapper ${name}` : `npm run ${name}`);
-  if (scope === 'custom') return check ? `${check.directory} · Custom ${checkTypes[check.name]} · ${command}` : checkTypes[name];
-  if (scope === 'service' || scope === 'tool') return check ? `${check.directory} · ${command}` : checkTypes[name];
-  return checkScopes[scope].replace('{command}', command);
-}
-
-function checkDraft() {
-  return [...$('check-config-rows').children].map(row => ({
-    name: row.querySelector('[name="name"]').value,
-    directory: row.querySelector('[name="directory"]').value.trim().replaceAll('\\', '/') || '.',
-    command: row.querySelector('[name="command"]').value.trim()
-  }));
-}
-
-function addCheckRow(check = { name: 'build', directory: '.', command: '' }) {
-  const row = $('check-config-row').content.firstElementChild.cloneNode(true);
-  for (const element of row.querySelectorAll('[data-i18n]')) setText(element, element.dataset.i18n);
-  for (const field of row.querySelectorAll('input, select')) field.value = check[field.name];
-  $('check-config-rows').append(row);
-  return row;
-}
-
-function renderCheckConfig(project, locked, data) {
-  const rows = $('check-config-rows');
-  if (rows.dataset.project !== project.id) {
-    rows.dataset.project = project.id;
-    delete rows.dataset.saved;
-    rows.replaceChildren();
-    $('check-config-editor').open = false;
-  }
-  if (data && rows.dataset.saved === undefined) {
-    rows.dataset.saved = JSON.stringify(data.customChecks);
-    data.customChecks.forEach(addCheckRow);
-  }
-  const ready = rows.dataset.saved !== undefined;
-  $('check-config-editor').hidden = !ready;
-  for (const row of rows.children) row.disabled = locked;
-  $('check-config-add').disabled = locked || rows.childElementCount >= 12;
-  $('check-config-save').disabled = locked || !ready || JSON.stringify(checkDraft()) === rows.dataset.saved;
-  const feedback = checkConfigMessage?.id === project.id ? checkConfigMessage : undefined;
-  const message = $('check-config-message');
-  message.classList.toggle('project-operation-error', Boolean(feedback?.error));
-  showMessage(message, feedback?.message ?? '');
-}
-
-function renderChecks(project, busy, unavailable) {
-  const view = toolsView.checks;
-  const task = project.checkTask;
-  const launching = state.pending?.id === project.id && state.pending.action === 'run-check';
-  const status = launching ? 'running' : task?.status;
-  const active = project.operation === 'checkTask' || launching;
-  const loaded = Boolean(view.data?.checks.length);
-  const statusLabel = $('check-status');
-  statusLabel.dataset.status = status ?? '';
-  showMessage(statusLabel, active ? checkStates[status] ?? checkStates.running : checkStates[status]);
-  $('check-form').hidden = !loaded && !active;
-  $('check-command').disabled = unavailable || view.loading || !loaded;
-  $('run-check').disabled = busy || unavailable || view.loading || !loaded;
-  $('run-check').hidden = active;
-  $('check-cancel').hidden = !active;
-  $('check-cancel').disabled = Boolean(state.pending) || status === 'cancelling';
-  showMessage($('check-message'), view.loading ? 'Reading available checks…' : view.data && !loaded ? 'No build, test, or lint commands were found.' : loaded && busy ? 'Stop the project before running checks.' : '');
-  const error = state.actionError?.id === project.id && ['run-check', 'check-cancel'].includes(state.actionError.action) ? state.actionError.message : view.error ?? task?.error;
-  showMessage($('check-error'), error);
-  $('check-error').hidden = !error;
-  $('check-last').hidden = !task?.phase;
-  const lastCheck = view.data?.checks.find(check => check.id === task?.phase);
-  showMessage($('check-last-command'), task?.phase ? checkLabel(task.phase, lastCheck) : '');
-  $('check-output').hidden = !task?.log;
-  renderOutput($('check-output'), project.id, task?.log);
-  renderCheckConfig(project, unavailable || view.loading, view.data);
-}
-
-function renderGit() {
-  const { data, loading, error } = toolsView.git;
-  const available = data?.status === 'available' && !error;
-  $('git-summary').hidden = !available;
-  $('git-initial').hidden = !available || !data.initial;
-  $('git-refresh').disabled = Boolean(loading);
-  showMessage($('git-message'), loading ? 'Reading Git status…' : error ?? (data?.status === 'absent' ? 'This project has no local Git repository.' : ''));
-  if (!available) return;
-  $('git-branch').textContent = data.branch ?? '';
-  $('git-branch').hidden = !data.branch;
-  $('git-detached').hidden = Boolean(data.branch);
-  showMessage($('git-changes'), data.changes === 0 ? 'Clean' : data.changes === 1 ? '1 change' : `${data.changes} changes`);
-  $('git-upstream').textContent = data.upstream ?? '';
-  $('git-upstream').hidden = !data.upstream;
-  $('git-no-upstream').hidden = Boolean(data.upstream);
-  $('git-comparison').hidden = !data.upstream;
-  showMessage($('git-comparison'), data.ahead === null ? 'Local comparison unavailable' : `${data.ahead} ahead · ${data.behind} behind`);
-}
-
-async function loadProjectTool(tool, reload = false) {
-  const current = toolsView;
-  const view = current?.[tool];
-  if (!view || current.id !== selected || !$('project-' + tool).open || view.loading || (!reload && (view.data || view.error))) return;
-  view.loading = true;
-  render();
-  try {
-    view.data = await request(`/api/projects/${current.id}/${tool}`, { signal: AbortSignal.timeout(12000) });
-    view.error = undefined;
-    if (tool === 'checks' && current === toolsView) {
-      const field = $('check-command');
-      const previous = field.value;
-      field.replaceChildren(...view.data.checks.map(check => {
-        const option = document.createElement('option');
-        option.value = check.id;
-        setText(option, checkLabel(check.id, check));
-        return option;
-      }));
-      if (view.data.checks.some(check => check.id === previous)) field.value = previous;
-    }
-  } catch (error) {
-    view.data = undefined;
-    view.error = error.message;
-  } finally {
-    view.loading = false;
-    if (current === toolsView) render();
   }
 }
 
@@ -589,18 +177,13 @@ function render() {
   renderServices(project);
   const running = project.status === 'running' || project.status === 'starting';
   const busy = running || project.status === 'stopping';
-  const deleting = project.deleting || (state.pending?.id === project.id && state.pending.action === 'trash');
+  const deleting = project.deleting || (removesFiles(project) && state.pending?.id === project.id && state.pending.action === 'trash');
   const unavailable = deleting || Boolean(state.pending) || Boolean(project.operation);
-  const startupDirty = renderStartup(project, busy || unavailable);
+  const startupDirty = startup.render(project, busy || unavailable);
   renderPorts(project, busy || unavailable);
-  renderDependencies(project, busy, unavailable, startupDirty);
+  dependencies.render(project, busy, unavailable, startupDirty);
   database.render(project, busy, unavailable);
-  if (toolsView?.id !== project.id) {
-    toolsView = { id: project.id, checks: {}, git: {} };
-    $('check-command').replaceChildren();
-  }
-  renderChecks(project, busy, unavailable);
-  renderGit();
+  tools.render(project, busy, unavailable);
   const action = $('runtime-action');
   action.dataset.action = running ? 'stop' : 'start';
   action.className = running || project.status === 'stopping' ? 'secondary' : 'primary';
@@ -646,9 +229,9 @@ async function refresh() {
     if (selected && selected !== requested) { refresh(); return; }
     if (projects.find(item => item.id === selected)?.offline) return;
     database.refresh();
-    loadDependencyPlan();
-    loadProjectTool('checks');
-    loadProjectTool('git');
+    dependencies.load();
+    tools.load('checks');
+    tools.load('git');
   } catch {
     if (version !== revision) return;
     $('project-connection').hidden = false;
@@ -682,14 +265,10 @@ async function act(id, action, body = {}) {
       if (project) Object.assign(project, { startupServices: runtime.services,
         hasStartup: runtime.services.some(service => service.command),
         hasInstallCommands: runtime.services.some(service => service.installCommand) });
-      if (toolsView?.id === id) toolsView = { ...toolsView, checks: {} };
-      startupMessage = { id, message: 'Startup configuration saved.' };
+      tools.invalidateChecks(id);
+      startup.setMessage({ id, message: 'Startup configuration saved.' });
     } else if (action === 'check-config') {
-      if (toolsView?.id === id) {
-        $('check-config-rows').dataset.saved = JSON.stringify(runtime.commands);
-        toolsView = { ...toolsView, checks: {} };
-      }
-      checkConfigMessage = { id, message: 'Custom check commands saved.' };
+      tools.saveChecks(id, runtime.commands);
     } else if (['install', 'install-cancel', 'database-start', 'database-stop', 'database-delete', 'run-check', 'check-cancel'].includes(action)) {
       const project = projects.find(item => item.id === id);
       if (project) Object.assign(project, runtime);
@@ -702,8 +281,8 @@ async function act(id, action, body = {}) {
       $('project-feedback').dataset.status = 'error';
       setText($('project-feedback'), error.message);
     } else if (action === 'ports') portMessage = { id, message: error.message };
-    else if (action === 'startup') startupMessage = { id, message: error.message, error: true };
-    else if (action === 'check-config') checkConfigMessage = { id, message: error.message, error: true };
+    else if (action === 'startup') startup.setMessage({ id, message: error.message, error: true });
+    else if (action === 'check-config') tools.setMessage({ id, message: error.message, error: true });
     else state.actionError = { id, action, message: error.message, diagnostic: error.diagnostic };
   }
   finally {
@@ -808,65 +387,7 @@ $('project-port-form').addEventListener('submit', event => {
   act(selected, 'ports', { ports });
 });
 $('runtime-action').addEventListener('click', event => act(selected, event.currentTarget.dataset.action));
-$('detect-startup').addEventListener('click', detectStartup);
 $('language').addEventListener('change', render);
-$('project-startup-add').addEventListener('click', () => {
-  startupMessage = undefined;
-  const row = addStartupService();
-  render();
-  row.querySelector('input').focus();
-});
-$('project-startup-services').addEventListener('click', event => {
-  if (!event.target.closest('.startup-remove')) return;
-  const row = event.target.closest('.startup-service');
-  const next = row.nextElementSibling ?? row.previousElementSibling;
-  row.remove();
-  startupMessage = undefined;
-  render();
-  (next?.querySelector('input') ?? $('project-startup-add')).focus();
-});
-$('project-startup-form').addEventListener('input', () => {
-  startupMessage = undefined;
-  render();
-});
-$('project-startup-form').addEventListener('submit', event => {
-  event.preventDefault();
-  act(selected, 'startup', { services: startupDraft() });
-});
-function installDependencies(detected) {
-  const plan = dependencyPlanView?.id === selected ? dependencyPlanView.data : undefined;
-  $('dependency-log').open = true;
-  act(selected, 'install', detected && plan?.steps.length ? { mode: 'detected', planId: plan.id } : {});
-}
-$('install-dependencies').addEventListener('click', () => installDependencies(true));
-$('install-custom-dependencies').addEventListener('click', () => installDependencies(false));
-$('refresh-dependencies').addEventListener('click', () => loadDependencyPlan(true));
-$('cancel-install').addEventListener('click', () => act(selected, 'install-cancel'));
-$('git-refresh').addEventListener('click', () => loadProjectTool('git', true));
-$('check-form').addEventListener('submit', event => {
-  event.preventDefault();
-  act(selected, 'run-check', { check: $('check-command').value });
-});
-$('check-cancel').addEventListener('click', () => act(selected, 'check-cancel'));
-$('check-config-add').addEventListener('click', () => {
-  const row = addCheckRow();
-  checkConfigMessage = undefined;
-  render();
-  row.querySelector('select').focus();
-});
-$('check-config-rows').addEventListener('click', event => {
-  const remove = event.target.closest('.startup-remove');
-  if (!remove) return;
-  remove.closest('fieldset').remove();
-  checkConfigMessage = undefined;
-  render();
-  $('check-config-add').focus();
-});
-$('check-config-form').addEventListener('input', () => { checkConfigMessage = undefined; render(); });
-$('check-config-form').addEventListener('submit', event => {
-  event.preventDefault();
-  act(selected, 'check-config', { commands: checkDraft() });
-});
 function confirmProjectRemoval(action) {
   const project = projects.find(item => item.id === selected);
   if (!project || state.pending) return;
@@ -900,6 +421,11 @@ $('project-trash-form').addEventListener('submit', event => {
   act(confirming.id, confirming.action, { confirmName });
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else refresh(); });
+const selectedId = () => selected;
+const selectedProject = () => projects.find(project => project.id === selected);
+const startup = createStartupPanel({ $, request, showMessage, state, selectedId, selectedProject, renderPage: render, act });
+const dependencies = createDependenciesPanel({ $, request, showMessage, renderOutput, diagnosticMessages, state, selectedId, selectedProject, renderPage: render, act });
+const tools = createProjectToolsPanel({ $, request, showMessage, renderOutput, state, selectedId, renderPage: render, act });
 const database = createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
-  selectedId: () => selected, selectedProject: () => projects.find(project => project.id === selected), renderPage: render, refresh, act });
+  selectedId, selectedProject, renderPage: render, refresh, act });
 refresh();

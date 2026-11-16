@@ -184,6 +184,59 @@ test('remote profile testing pins TLS and saves an opaque credential reference',
   assert.equal(values.size, 0);
 });
 
+test('unregistering a project blocks concurrent writes and can retry a failed credential cleanup', { timeout: 15000 }, async t => {
+  const cleanupStarted = Promise.withResolvers();
+  const releaseCleanup = Promise.withResolvers();
+  let attempts = 0;
+  let credential;
+  const vault = {
+    async save(secret) { credential = secret; return randomUUID(); },
+    async read() { return credential; },
+    async remove() {
+      if (++attempts === 1) {
+        cleanupStarted.resolve();
+        await releaseCleanup.promise;
+        throw new Error('Credential store is temporarily unavailable.');
+      }
+      credential = undefined;
+    }
+  };
+  const { project, root, request, register } = await fixture(t, {
+    vault, command: async () => '17.4\tapp\tt\tt\tt\t123456789\tf\tt\tt\t16384\n'
+  });
+  const ca = join(root, 'ca.pem');
+  const env = 'DATABASE_URL=postgresql://operator@db.example.net:5432/app';
+  await writeFile(ca, 'test fixture');
+  await writeFile(join(project, '.env'), env);
+  const route = await register();
+  const { bindings: [binding] } = await (await request(route + '/database-discovery')).json();
+  const profile = payload => request(route + '/database-remote-profile', { bindingId: binding.id, ...payload });
+  assert.equal((await profile({ mode: 'save', ca, user: 'operator', password: 'test-secret' })).status, 200);
+  const name = { confirmName: 'project' };
+  const remove = () => request(route + '/remove', name);
+  const first = remove();
+  try {
+    await Promise.race([cleanupStarted.promise, first.then(response => assert.fail('Removal finished before cleanup with status ' + response.status))]);
+    assert.equal((await request(route + '/check-config', { commands: [] })).status, 409);
+    const { projects: [pending] } = await (await request('/api/projects')).json();
+    assert.equal(pending.operation, 'projectRemoval');
+    assert.equal(pending.deleting, false);
+    assert.equal((await remove()).status, 409);
+    assert.equal((await profile({ mode: 'remove' })).status, 409);
+  } finally {
+    releaseCleanup.resolve();
+    await first;
+  }
+  assert.equal((await first).status, 500);
+  const { projects: [registered] } = await (await request('/api/projects')).json();
+  assert.equal(registered.operation, undefined);
+  assert.deepEqual(await (await remove()).json(), { removed: true });
+  assert.equal(credential, undefined);
+  assert.equal(attempts, 2);
+  assert.equal((await request(route + '/database-discovery')).status, 404);
+  assert.equal(await readFile(join(project, '.env'), 'utf8'), env);
+});
+
 test('Windows saves and reads a real user-bound DPAPI credential', { skip: process.platform !== 'win32' }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'stackforge-vault-'));
   t.after(() => rm(root, { recursive: true, force: true }));

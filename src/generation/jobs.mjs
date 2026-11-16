@@ -1,13 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { JobStore } from './job-store.mjs';
+import { absoluteDirectory } from '../platform/paths.mjs';
 import { cancelled, throwIfCancelled } from '../platform/process.mjs';
-import { recordedIdentity } from '../platform/project-identity.mjs';
+import { assertDirectoryIdentity, recordedIdentity } from '../platform/project-identity.mjs';
+
+const pathKey = path => process.platform === 'win32' ? path.toLowerCase() : path;
 
 export class Jobs {
-  constructor({ directory, generate, check, publish }) {
+  constructor({ directory, generate, check, publish, relocatedPath = () => undefined }) {
     this.store = new JobStore(directory);
     this.generate = generate; this.check = check; this.publish = publish;
+    this.relocatedPath = relocatedPath;
     this.records = new Map(); this.controllers = new Map(); this.executions = new Map();
     this.ready = this.store.load().then(records => { for (const record of records) this.records.set(record.job.id, record); });
   }
@@ -18,7 +22,30 @@ export class Jobs {
     const record = this.records.get(id);
     if (!record) return;
     const { job, options, checkpoint } = record;
-    return { ...job, options, canResume: ['failed', 'cancelled'].includes(job.status), completed: checkpoint.completed ?? [], retainedPath: checkpoint.promoted ? resolve(options.parentDir, options.name) : checkpoint.staging };
+    const moved = this.relocatedPath(id);
+    return { ...job, ...(moved && job.result && { result: { ...job.result, path: moved } }),
+      options, canResume: ['failed', 'cancelled'].includes(job.status), completed: checkpoint.completed ?? [],
+      retainedPath: checkpoint.promoted ? moved ?? resolve(options.parentDir, options.name) : checkpoint.staging };
+  }
+
+  async openProject(id, action, open) {
+    const record = this.records.get(id);
+    if (record?.job.status !== 'complete' || !record.job.result?.path) throw new Error('The local project is not ready to open.');
+    const { path, verify } = await this.verifyProject(record);
+    await open(path, action, verify);
+  }
+
+  async verifyProject({ job, options, checkpoint }) {
+    const expected = resolve(options.parentDir, options.name);
+    const actual = absoluteDirectory(job.result?.path);
+    if (pathKey(actual) !== pathKey(expected)) throw new Error('The recorded project location does not match this task.');
+    const identity = recordedIdentity(checkpoint.folderIdentity);
+    if (!identity) throw new Error('This task has no recorded folder identity. Manage the folder in Projects or import its new location if it was moved.');
+    const path = this.relocatedPath(job.id) ?? expected;
+    const verify = () => assertDirectoryIdentity(path, identity,
+      'The project folder is missing or has been replaced. Re-import the original folder if it was moved.');
+    await verify();
+    return { path, verify };
   }
 
   list() {
@@ -30,8 +57,8 @@ export class Jobs {
     for (const { job, options, checkpoint } of [...this.records.values()].reverse()) {
       if (typeof job.result?.path !== 'string' || (job.status !== 'complete' && job.retryKind !== 'publish')) continue;
       const path = resolve(options.parentDir, options.name);
-      const key = process.platform === 'win32' ? path.toLowerCase() : path;
-      const recorded = process.platform === 'win32' ? job.result.path.toLowerCase() : job.result.path;
+      const key = pathKey(path);
+      const recorded = pathKey(job.result.path);
       if (key !== recorded || projects.has(key)) continue;
       const { name, frontend, backend, database } = options;
       projects.set(key, { id: job.id, name, path, frontend, backend, database, folderIdentity: recordedIdentity(checkpoint.folderIdentity) });
@@ -101,7 +128,9 @@ export class Jobs {
     try {
       throwIfCancelled(signal);
       if (publicationOnly) {
-        job.result.remote = await this.publish(job.result.path, options, report, { signal });
+        const { path, verify } = await this.verifyProject(record);
+        throwIfCancelled(signal);
+        job.result.remote = await this.publish(path, options, report, { signal, verifyProject: verify });
       } else {
         if (!checkpoint.staging && !checkpoint.promoted) {
           const environment = await this.check(options, { signal });

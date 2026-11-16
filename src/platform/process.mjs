@@ -28,6 +28,24 @@ export async function terminateTree(child) {
   }
 }
 
+export function stopProcessTree(child) {
+  if (!child.pid) return Promise.resolve();
+  if (process.platform === 'win32') return terminateTree(child);
+
+  // Generated launchers handle SIGTERM and shut down their own child groups.
+  // Signal the group too so a Compose startup command in progress is interrupted.
+  try { process.kill(-child.pid, 'SIGTERM'); } catch { return Promise.resolve(); }
+  return new Promise(resolve => {
+    const closed = () => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(async () => {
+      child.off('close', closed);
+      await terminateTree(child);
+      resolve();
+    }, 3000);
+    child.once('close', closed);
+  });
+}
+
 export function run(command, args, { cwd, env = process.env, log = () => {}, timeout = 600_000, signal, stdoutOnly = false, stdoutLimit = 4000,
   input, inputFile, allowPartialInput = false, binaryLimit, binaryFile, shell = false, onSpawn } = {}) {
   return new Promise((resolve, reject) => {

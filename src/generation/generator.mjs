@@ -7,8 +7,10 @@ import { extractZip } from './zip.mjs';
 import { installMavenDependencies, installNodeDependencies, npm, run, throwIfCancelled } from '../platform/process.mjs';
 import { initializeGit, publishProject } from '../platform/git.mjs';
 import { createSteps, verifyStaging, wasPromoted, writeOwnedFiles } from './checkpoint.mjs';
-import { directoryIdentity, sameDirectory } from '../platform/project-identity.mjs';
+import { assertDirectoryIdentity, directoryIdentity, sameDirectory } from '../platform/project-identity.mjs';
 import { json, frontendFiles, expressFiles, nestFiles, databaseFiles, devScript, generatedReadme } from './templates.mjs';
+
+const promotedProjectChanged = '已创建的项目位置或标识发生变化，已停止恢复。';
 
 export async function download(url, { fetchImpl = fetch, binary = false, signal } = {}) {
   throwIfCancelled(signal);
@@ -52,10 +54,9 @@ export async function generateProject(input, report = () => {}, services = {}) {
   if (!checkpoint.promoted && await wasPromoted(target, checkpoint.owner)) { checkpoint.promoted = true; await save(); }
   if (checkpoint.promoted) {
     const info = await lstat(target, { bigint: true });
-    const changed = '已创建的项目位置或标识发生变化，已停止恢复。';
-    if (!info.isDirectory() || info.isSymbolicLink() || (checkpoint.folderIdentity && !sameDirectory(info, checkpoint.folderIdentity))) throw new Error(changed);
+    if (!info.isDirectory() || info.isSymbolicLink() || (checkpoint.folderIdentity && !sameDirectory(info, checkpoint.folderIdentity))) throw new Error(promotedProjectChanged);
     const manifest = JSON.parse(await readFile(join(target, 'stackforge.json'), 'utf8'));
-    if (manifest.generator !== 'StackForge' || manifest.options?.name !== options.name) throw new Error(changed);
+    if (manifest.generator !== 'StackForge' || manifest.options?.name !== options.name) throw new Error(promotedProjectChanged);
   }
   if (!checkpoint.promoted) {
     try { await access(target); throw new Error('目标目录已经存在，请更换项目名。'); }
@@ -196,7 +197,8 @@ export async function generateProject(input, report = () => {}, services = {}) {
     await save();
     throwIfCancelled(signal);
     if (options.publish && result.remote?.status !== 'published') {
-      try { result.remote = await publishProject(target, options, report, command); }
+      const verifyProject = () => assertDirectoryIdentity(target, checkpoint.folderIdentity, promotedProjectChanged);
+      try { result.remote = await publishProject(target, options, report, command, verifyProject); }
       catch (error) { throwIfCancelled(signal); result.remote = { status: 'failed', error: error.message }; log('GitHub 发布未完成，本地项目已保留。\n' + error.message); }
     }
     await save();

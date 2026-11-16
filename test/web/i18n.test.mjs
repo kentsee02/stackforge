@@ -31,7 +31,8 @@ test('both web entry points show the server version and load their allowlisted a
       await result.arrayBuffer();
     }
   }
-  for (const route of ['/projects/database.js', '/i18n.js', '/messages.js', '/template-store.js', '/plex-regular.ttf']) {
+  for (const route of ['/projects/database.js', '/projects/startup.js', '/projects/dependencies.js', '/projects/tools.js',
+    '/i18n.js', '/messages.js', '/template-store.js', '/plex-regular.ttf']) {
     const asset = await fetch(base + route);
     assert.equal(asset.status, 200, route);
     await asset.arrayBuffer();

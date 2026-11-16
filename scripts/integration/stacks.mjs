@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import assert from 'node:assert/strict';
 import { generateProject } from '../../src/generation/generator.mjs';
 import { run, npm, terminateTree } from '../../src/platform/process.mjs';
-import { portAvailable } from '../../src/generation/environment.mjs';
+import { portAvailable } from '../../src/platform/ports.mjs';
 
 const github = process.argv.includes('--github');
 const repoName = process.argv.find(arg => arg.startsWith('--repo-name='))?.slice(12);

@@ -134,3 +134,13 @@ export function redactedOutput(append, redact, onDiscard = () => {}) {
     }
   };
 }
+
+export function redactedProcessOutput(append, redact, onDiscard) {
+  // Keep incomplete lines separate for each stream so redaction sees uninterrupted values.
+  const stdout = redactedOutput(append, redact, onDiscard);
+  const stderr = redactedOutput(append, redact, onDiscard);
+  return {
+    write(chunk, stream) { (stream === 'stderr' ? stderr : stdout).write(chunk); },
+    flush() { stdout.flush(); stderr.flush(); }
+  };
+}

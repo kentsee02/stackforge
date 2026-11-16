@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { projectPathKey } from './project-config.mjs';
-import { inspectRecordedProject } from './project-runtime.mjs';
+import { inspectRecordedProject } from './project-folder.mjs';
 import { scanProjectServices } from './detection/project-services.mjs';
 import { findMavenWrapper } from './detection/project-detection.mjs';
 import { resolveStartup } from './project-startup.mjs';

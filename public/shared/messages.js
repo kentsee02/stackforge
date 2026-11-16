@@ -559,6 +559,8 @@ export const messages = [
   ['JSON 请求格式无效。', 'Invalid JSON request.'],
   ['本地项目尚未完成，暂时不能打开。', 'The local project is not ready to open.'],
   ['记录的项目位置与此任务不符。', 'The recorded project location does not match this task.'],
+  ['此任务没有记录目录身份。请在「项目」页管理原目录。如果移动了项目，请导入新位置。', 'This task has no recorded folder identity. Manage the folder in Projects or import its new location if it was moved.'],
+  ['项目目录不存在或已被替换。如果移动了项目，请重新导入原目录。', 'The project folder is missing or has been replaced. Re-import the original folder if it was moved.'],
   ['正在检测…', 'Checking…'],
   ['重复使用你的配置', 'Reuse your configuration'],
   ['选择技术栈', 'Choose your stack'],

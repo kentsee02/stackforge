@@ -106,3 +106,44 @@ export async function cloneGithub(repository, parentDir, { signal, command = run
     await rm(staging, { recursive: true, force: true, maxRetries: 3 });
   }
 }
+
+export function createProjectClone({ clone, register }) {
+  let current;
+
+  function start({ requestId, repository, parentDir }) {
+    const controller = new AbortController();
+    let cancellable = true;
+    const task = {
+      requestId,
+      get cancellable() { return cancellable; },
+      cancelIfPending() { if (cancellable) controller.abort(); }
+    };
+    current = task;
+    const checkout = async () => {
+      const { path, cloneId, cloneIdentity } = await clone(repository, parentDir, {
+        signal: controller.signal,
+        onPromote: () => { cancellable = false; }
+      });
+      throwIfCancelled(controller.signal);
+      cancellable = false;
+      return register(path, { cloneId, cloneIdentity });
+    };
+    task.done = checkout().finally(() => { if (current === task) current = undefined; });
+    return task;
+  }
+
+  function cancel(requestId) {
+    if (typeof requestId !== 'string' || current?.requestId !== requestId) {
+      throw new Error('This clone is no longer running.');
+    }
+    if (!current.cancellable) throw new Error('The repository is ready and StackForge is adding it to Projects.');
+    current.cancelIfPending();
+  }
+
+  function shutdown() {
+    current?.cancelIfPending();
+    return current?.done;
+  }
+
+  return { start, cancel, shutdown, get active() { return Boolean(current); } };
+}

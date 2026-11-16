@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { Settings } from '../../src/platform/settings.mjs';
 import { createDesktop } from '../../src/platform/desktop.mjs';
 import { createApp } from '../../src/http/server.mjs';
 import { run } from '../../src/platform/process.mjs';
+import { directoryIdentity } from '../../src/platform/project-identity.mjs';
 
 const directoryInfo = { isDirectory: () => true, isSymbolicLink: () => false };
 const windowsPath = "C:\\Projects\\研发 & O'Brien\\demo";
@@ -140,10 +141,16 @@ test('recycle adapters pass only the recorded path and reject roots, symlinks an
 });
 
 test('desktop and preference APIs require authorization and open only the project recorded by the completed task', async t => {
-  const parentDir = resolve(tmpdir(), 'desktop-api-parent'), expected = join(parentDir, 'desktop-api-app');
+  const parentDir = await mkdtemp(join(tmpdir(), 'desktop-api-parent-')), expected = join(parentDir, 'desktop-api-app');
+  t.after(() => rm(parentDir, { recursive: true, force: true }));
+  await mkdir(expected);
   const opened = [], picked = [];
-  const desktop = { capabilities: async () => ({ picker: true, folder: true, vscode: false, terminal: true }), pickDirectory: async path => { picked.push(path); return parentDir; }, openProject: async (...args) => opened.push(args), shutdown: () => {} };
-  const server = createApp({ stateDir: false, desktop, check: async () => ({ canCreate: true, checks: [] }), generate: async () => ({ path: expected, commands: ['npm run dev'] }) });
+  const desktop = { capabilities: async () => ({ picker: true, folder: true, vscode: false, terminal: true }), pickDirectory: async path => { picked.push(path); return parentDir; }, async openProject(path, action, verify) { await verify(); opened.push([path, action]); }, shutdown: () => {} };
+  const server = createApp({ stateDir: false, desktop, check: async () => ({ canCreate: true, checks: [] }),
+    generate: async (_options, _report, { checkpoint }) => {
+      checkpoint.folderIdentity = directoryIdentity(await lstat(expected, { bigint: true }));
+      return { path: expected, commands: ['npm run dev'] };
+    } });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await server.shutdownTasks(); await new Promise(resolve => server.close(resolve)); });
   const url = 'http://127.0.0.1:' + server.address().port, state = await (await fetch(url + '/api/state')).json();
@@ -156,7 +163,7 @@ test('desktop and preference APIs require authorization and open only the projec
   assert.equal((await post('/api/preferences', { rememberDirectory: true, directory: parentDir })).status, 200);
   assert.equal((await (await fetch(url + '/api/state')).json()).preferences.directory, parentDir);
   const response = await post('/api/projects', { name: 'desktop-api-app', parentDir, frontend: 'vue', backend: 'none', database: 'none', install: false, git: false });
-  const { id } = await response.json(); await new Promise(resolve => setImmediate(resolve));
+  const { id } = await response.json(); await server.jobs.executions.get(id);
   assert.equal((await post('/api/jobs/' + id + '/open', { action: 'folder', path: '/attacker/controlled' })).status, 200);
   assert.deepEqual(opened, [[expected, 'folder']]);
   assert.equal((await post('/api/jobs/missing/open', { action: 'folder' })).status, 404);

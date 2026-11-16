@@ -1,7 +1,7 @@
 import { access, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { createServer } from 'node:net';
+import { portAvailable } from '../platform/ports.mjs';
 import { hasNodeBackend, validateOptions } from './catalog.mjs';
 import { run, npm as runNpm, throwIfCancelled } from '../platform/process.mjs';
 import { gitIdentity, githubAccount } from '../platform/git.mjs';
@@ -11,14 +11,6 @@ const help = {
   java: 'https://adoptium.net/temurin/releases/?version=21', docker: 'https://docs.docker.com/desktop/',
   github: 'https://cli.github.com/'
 };
-
-export async function portAvailable(port) {
-  return new Promise(resolve => {
-    const probe = createServer();
-    probe.once('error', () => resolve(false));
-    probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(true)));
-  });
-}
 
 export async function checkEnvironment(input, services = {}) {
   const options = validateOptions(input);

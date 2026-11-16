@@ -1,3 +1,5 @@
+import { lstat } from 'node:fs/promises';
+
 export const cloneFolderChanged = 'The folder could not be verified as the original StackForge clone.';
 
 export function directoryIdentity(info) {
@@ -15,4 +17,9 @@ export function recordedIdentity(value) {
 export function sameDirectory(info, expected) {
   const current = directoryIdentity(info);
   return current && expected && current.dev === expected.dev && current.ino === expected.ino && current.birth === expected.birth;
+}
+
+export async function assertDirectoryIdentity(path, expected, message) {
+  const info = await lstat(path, { bigint: true }).catch(() => null);
+  if (!info || !sameDirectory(info, expected)) throw new Error(message);
 }

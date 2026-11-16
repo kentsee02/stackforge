@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkEnvironment } from '../../src/generation/environment.mjs';
@@ -8,6 +8,7 @@ import { validateOptions } from '../../src/generation/catalog.mjs';
 import { generateProject } from '../../src/generation/generator.mjs';
 import { publishProject } from '../../src/platform/git.mjs';
 import { run } from '../../src/platform/process.mjs';
+import { assertDirectoryIdentity, directoryIdentity } from '../../src/platform/project-identity.mjs';
 import { createApp } from '../../src/http/server.mjs';
 import { normalizeTemplate, parseTemplateFile } from '../../public/create/template-store.js';
 
@@ -124,6 +125,27 @@ test('publication retry reuses only its recorded remote, verifies account, and n
   assert.equal(pushes, 2);
 });
 
+test('publication refuses to write repository metadata or push after the project folder is replaced', async t => {
+  const parent = await mkdtemp(join(tmpdir(), 'stackforge-publish-swap-'));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const path = join(parent, base.name);
+  await mkdir(join(path, '.git'), { recursive: true });
+  const identity = directoryIdentity(await lstat(path, { bigint: true }));
+  const verify = () => assertDirectoryIdentity(path, identity, 'Project folder was replaced.');
+  const options = validateOptions({ ...base, parentDir: parent, commit: true, publish: true });
+  const command = async (program, args) => {
+    if (program === 'gh' && args.includes('user')) return 'test-owner';
+    if (program === 'gh' && args.includes('user/repos')) {
+      await rename(path, join(parent, 'original'));
+      await mkdir(join(path, '.git'), { recursive: true });
+      return JSON.stringify({ id: 42, full_name: 'test-owner/test-project', private: true });
+    }
+    assert.fail('No command may run against the replacement.');
+  };
+  await assert.rejects(publishProject(path, options, () => {}, command, verify), /folder was replaced/);
+  assert.deepEqual(await readdir(join(path, '.git')), []);
+});
+
 test('a remote publication failure preserves the complete local project', async t => {
   const parent = await mkdtemp(join(tmpdir(), 'stackforge-remote-fail-'));
   t.after(() => rm(parent, { recursive: true, force: true }));
@@ -136,8 +158,22 @@ test('a remote publication failure preserves the complete local project', async 
 });
 
 test('HTTP checks protect writes, block generation on errors and retry publication against the saved job path', async t => {
+  const parentDir = await mkdtemp(join(tmpdir(), 'stackforge-publish-http-'));
+  t.after(() => rm(parentDir, { recursive: true, force: true }));
+  const path = join(parentDir, base.name);
   let canCreate = false, generated = 0, pushedPath;
-  const server = createApp({ stateDir: false, check: async () => ({ canCreate, checks: [] }), generate: async () => { generated++; return { path: 'trusted/job/path', commands: [], remote: { status: 'failed', error: 'offline' } }; }, publish: async path => { pushedPath = path; return { status: 'published', url: 'https://github.com/test-owner/test-project' }; } });
+  const server = createApp({ stateDir: false, check: async () => ({ canCreate, checks: [] }),
+    generate: async (_options, _report, { checkpoint }) => {
+      generated++;
+      await mkdir(path);
+      checkpoint.folderIdentity = directoryIdentity(await lstat(path, { bigint: true }));
+      return { path, commands: [], remote: { status: 'failed', error: 'offline' } };
+    },
+    publish: async (path, _options, _report, { verifyProject }) => {
+      await verifyProject();
+      pushedPath = path;
+      return { status: 'published', url: 'https://github.com/test-owner/test-project' };
+    } });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -152,11 +188,11 @@ test('HTTP checks protect writes, block generation on errors and retry publicati
   assert.equal((await (await fetch(origin + '/api/jobs/' + blockedId)).json()).status, 'failed');
   assert.equal(generated, 0);
   canCreate = true;
-  const accepted = await post('/api/projects', { ...base, commit: true, publish: true });
+  const accepted = await post('/api/projects', { ...base, parentDir, commit: true, publish: true });
   const { id } = await accepted.json();
-  await new Promise(resolve => setImmediate(resolve));
+  await server.jobs.executions.get(id);
   assert.equal((await post(`/api/jobs/${id}/publish`, { path: '/untrusted/input' })).status, 202);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(pushedPath, 'trusted/job/path');
+  await server.jobs.executions.get(id);
+  assert.equal(pushedPath, path);
   assert.equal((await post(`/api/jobs/${id}/publish`, {})).status, 400);
 });
