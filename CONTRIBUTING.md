@@ -12,4 +12,4 @@ Describe the problem, resulting behavior, and validation in English when submitt
 
 Run **Prepare release draft** from the repository's Actions tab on `main` when a version is ready. Enter the version tag, such as `v0.32.3`. The workflow uses the selected `main` commit by default. To release a previously tested commit, enter its full SHA. The workflow checks the version in both package files and the CI result for that exact commit on `main`.
 
-An optional English summary goes before the generated release notes. Open the draft from the workflow summary, review the changes and installation instructions, then publish it from GitHub Releases.
+An optional English summary goes before the generated release notes. Open Releases from the workflow summary while signed in with repository write access. Find the version marked **Draft**, choose **Edit**, and review the changes and installation instructions before publishing.
