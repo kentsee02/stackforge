@@ -26,4 +26,7 @@ Use this map to locate the current implementation and its checks. The [architect
 
 Local task history, registered projects, settings, and database bindings are stored under `.stackforge/` at the repository root. Generated and imported projects live in their own directories.
 
+- `npm run test:browser` imports a local folder and clones a test Git repository through the Projects page. It saves startup settings, starts both fixtures, follows their ready links, checks logs, and stops the processes. The test uses an isolated Git transport.
+- `npm run test:secret-service` runs on Linux with D-Bus, `gnome-keyring-daemon`, `gdbus`, and `secret-tool` installed. It launches a private session bus and keyring with temporary storage, then tests profile storage, retrieval, lock handling, and removal through the normal HTTP routes.
+
 See the [database checklist](DATABASE-ROADMAP.md), [product context](PRODUCT.md), and [design notes](DESIGN.md) for feature details.
