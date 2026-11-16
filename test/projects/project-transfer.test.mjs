@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { access, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../../src/http/server.mjs';
 import { cloneGithub } from '../../src/projects/project-clone.mjs';
 import { ProjectOperations } from '../../src/projects/project-operations.mjs';
 import { ProjectConfig } from '../../src/projects/project-config.mjs';
+import { createProjectRegistry } from '../../src/projects/project-registry.mjs';
+import { createProjectRemoval } from '../../src/projects/project-removal.mjs';
+import { createProjectWorkflows } from '../../src/projects/project-workflows.mjs';
 import { detectFrameworks } from '../../src/projects/detection/project-services.mjs';
 import { createDesktop } from '../../src/platform/desktop.mjs';
 import { run } from '../../src/platform/process.mjs';
@@ -217,6 +220,86 @@ test('stale clone records can be replaced by a new clone or removed without touc
   const local = await imported.json();
   assert.equal(local.cloned, undefined);
   assert.equal((await get('/api/projects/' + local.id + '/startup-suggestions')).groups[0].choices[0].command, 'npm run dev');
+});
+
+test('relocation keeps the project and its settings when database bindings need a separate retry', async t => {
+  const state = await mkdtemp(join(tmpdir(), 'stackforge-relocation-state-'));
+  t.after(() => rm(state, { recursive: true, force: true }));
+  const { directory, get, post } = await fixture(t, { stateDir: join(state, 'jobs') });
+  const original = join(directory, 'original');
+  const moved = join(directory, 'moved');
+  await mkdir(original);
+  const env = name => 'DATABASE_URL=postgresql://operator@127.0.0.1:5432/' + name;
+  await writeFile(join(original, '.env'), env('before_move'));
+  const first = await post('/api/projects/import', { path: original });
+  assert.equal(first.status, 201);
+  const { id } = await first.json();
+  const route = '/api/projects/' + id;
+  assert.equal((await post(route + '/startup', { services: [{ name: 'API', directory: '.', command: 'node dev.mjs' }] })).status, 200);
+  assert.equal((await post(route + '/check-config', { commands: [{ name: 'test', directory: '.', command: 'node --test' }] })).status, 200);
+  await rename(original, moved);
+  await writeFile(join(moved, '.env'), env('after_move'));
+
+  const catalog = join(state, 'databases.json');
+  const backup = join(state, 'saved-catalog');
+  await rename(catalog, backup);
+  await mkdir(catalog);
+  const relocated = await post('/api/projects/import', { path: moved });
+  assert.equal(relocated.status, 201);
+  const result = await relocated.json();
+  assert.equal(result.id, id);
+  assert.equal(result.path, moved);
+  assert.equal(result.relocated, true);
+  assert.equal(result.databaseRefreshPending, true);
+
+  const { projects: [project] } = await get('/api/projects?logs=' + id);
+  assert.equal(project.path, moved);
+  assert.equal(project.startupServices[0].command, 'node dev.mjs');
+  assert.equal((await get(route + '/checks')).customChecks[0].command, 'node --test');
+  await rmdir(catalog);
+  await rename(backup, catalog);
+  const discovery = await get(route + '/database-discovery');
+  assert.ok(discovery.bindings.some(binding => binding.instance.name === 'after_move'));
+  assert.equal(discovery.bindings.some(binding => binding.instance.name === 'before_move'), false);
+});
+
+test('relocation prevents removal and settings writes from racing with the path change', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-relocation-lock-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const original = join(root, 'original'), destination = join(root, 'destination');
+  await mkdir(original);
+  const projectConfig = new ProjectConfig(false);
+  const configWrites = new Map();
+  const removals = new Map();
+  const isProjectBusy = project => configWrites.has(project.path);
+  const isProjectRunning = () => false;
+  const syncing = Promise.withResolvers(), release = Promise.withResolvers();
+  const projects = createProjectRegistry({ projectConfig, configWrites, generatedProjects: () => [], isProjectBusy, isProjectRunning,
+    discoverDatabases: async () => ({}),
+    async syncDatabaseBindings(project) {
+      if (project.path === destination) { syncing.resolve(project); await release.promise; }
+    }
+  });
+  const removeProject = createProjectRemoval({ projectConfig, removals, isProjectBusy, isProjectRunning,
+    isRegistered: project => projects.list().some(current => current.id === project.id && current.path === project.path),
+    removeDatabaseProfiles: () => assert.fail('Project removal reached credential cleanup during relocation.')
+  });
+  const execute = createProjectWorkflows({ projectConfig, removals, configWrites, databaseBusy: () => false, removeProject });
+  const previous = await projects.register(original);
+  await rename(original, destination);
+  const relocation = projects.register(destination);
+  try {
+    const moved = await Promise.race([syncing.promise, relocation.then(() => assert.fail('Relocation did not wait for binding refresh.'))]);
+    assert.ok(configWrites.has(original));
+    await assert.rejects(removeProject(previous, { action: 'remove', confirmName: previous.name }), /registration has changed/);
+    await assert.rejects(removeProject(moved, { action: 'remove', confirmName: moved.name }), /current project operation/);
+    await assert.rejects(execute(moved, 'check-config', { commands: [] }), /project settings to finish saving/);
+  } finally {
+    release.resolve();
+    await relocation;
+  }
+  assert.equal(configWrites.size, 0);
+  assert.equal(projects.list()[0].path, destination);
 });
 
 test('unrecognized directories can be imported and old external records acquire detected frameworks', async t => {

@@ -13,7 +13,7 @@ import { defaultProjectsDirectory } from '../platform/paths.mjs';
 import { Settings } from '../platform/settings.mjs';
 import { createDesktop } from '../platform/desktop.mjs';
 import { ProjectRuntime } from '../projects/project-runtime.mjs';
-import { ProjectConfig } from '../projects/project-config.mjs';
+import { ProjectConfig, projectPathKey } from '../projects/project-config.mjs';
 import { ProjectOperations } from '../projects/project-operations.mjs';
 import { cloneGithub } from '../projects/project-clone.mjs';
 import { createProjectRegistry } from '../projects/project-registry.mjs';
@@ -52,9 +52,11 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     database.blocksProjectAction(project) || Boolean(operations.active(project));
   const isProjectRunning = project => ['starting', 'running', 'stopping'].includes(runtime.status(project).status);
   const projects = createProjectRegistry({ projectConfig, generatedProjects: () => jobs.projects(), isProjectBusy, isProjectRunning,
-    discoverDatabases, syncDatabaseBindings: database.scan, removeDatabaseRegistration: database.removeRegistration });
+    discoverDatabases, syncDatabaseBindings: database.scan, cleanupReplacedClone: database.cleanupReplacedClone, configWrites });
+  void projects.retryCloneCleanup();
   const removeProject = createProjectRemoval({ projectConfig, removals, isProjectBusy, isProjectRunning,
     trashProject: (...args) => desktop.trashProject(...args), isCreatingProject: () => jobs.busy,
+    isRegistered: project => managedProjects().some(item => item.id === project.id && projectPathKey(item.path) === projectPathKey(project.path)),
     removeDatabaseProfiles: database.removeProfiles, removeDatabaseRegistration: database.removeRegistration,
     recordProfileCleanup: project => database.record(project, 'database-profile-cleanup') });
 
@@ -128,7 +130,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     desktop.shutdown();
     const clone = projectRoutes.shutdown();
     await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), operations.shutdown(),
-      clone, ...Array.from(removals.values(), removal => removal.done), ...configWrites.values(), database.shutdown()]);
+      clone, projects.pendingCleanup, ...Array.from(removals.values(), removal => removal.done), ...configWrites.values(), database.shutdown()]);
   };
   server.jobs = jobs;
   return server;

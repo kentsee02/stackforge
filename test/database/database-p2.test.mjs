@@ -1,29 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { createApp } from '../../src/http/server.mjs';
 import { archiveBackup, inspectArchive } from '../../src/database/backup/archive.mjs';
 import { run } from '../../src/platform/process.mjs';
 import { databaseVault } from '../../src/database/security/vault.mjs';
+import { cloneGithub } from '../../src/projects/project-clone.mjs';
 
-async function fixture(t, adapters) {
+async function fixture(t, adapters, options) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-p2-')));
   const project = join(root, 'project');
   await mkdir(project);
-  const app = createApp({ stateDir: join(root, 'state', 'jobs'), databaseAdapters: adapters }).listen(0, '127.0.0.1');
-  await once(app, 'listening');
-  t.after(async () => {
+  let app, base, token;
+  async function stop() {
     await app.shutdownTasks();
     await new Promise(resolve => app.close(resolve));
+  }
+  async function restart() {
+    if (app) await stop();
+    app = createApp({ stateDir: join(root, 'state', 'jobs'), databaseAdapters: adapters, ...options }).listen(0, '127.0.0.1');
+    await once(app, 'listening');
+    base = 'http://127.0.0.1:' + app.address().port;
+    ({ token } = await (await fetch(base + '/api/state')).json());
+  }
+  await restart();
+  t.after(async () => {
+    await stop();
     await rm(root, { recursive: true, force: true });
   });
-  const base = 'http://127.0.0.1:' + app.address().port;
-  const { token } = await (await fetch(base + '/api/state')).json();
   const request = (path, data, headers = {}) => fetch(base + path, data === undefined ? undefined : {
     method: 'POST', headers: { 'Content-Type': Buffer.isBuffer(data) ? 'application/octet-stream' : 'application/json',
       'X-StackForge-Token': token, ...headers },
@@ -34,7 +44,7 @@ async function fixture(t, adapters) {
     assert.equal(imported.status, 201);
     return '/api/projects/' + (await imported.json()).id;
   };
-  return { root, project, request, register };
+  return { root, project, request, register, restart };
 }
 
 test('archives reject changes, incorrect engines and incompatible versions', () => {
@@ -235,6 +245,65 @@ test('unregistering a project blocks concurrent writes and can retry a failed cr
   assert.equal(attempts, 2);
   assert.equal((await request(route + '/database-discovery')).status, 404);
   assert.equal(await readFile(join(project, '.env'), 'utf8'), env);
+});
+
+test('a replaced clone keeps failed credential cleanup until restart and preserves other profiles', async t => {
+  const credentials = new Map();
+  let keyringAvailable = false;
+  const vault = {
+    async save(secret) { const id = randomUUID(); credentials.set(id, secret); return id; },
+    async read(id) { return credentials.get(id); },
+    async remove(id) {
+      if (!keyringAvailable) throw new Error('Credential store is temporarily unavailable.');
+      credentials.delete(id);
+    }
+  };
+  const env = 'DATABASE_URL=postgresql://operator@db.example.net:5432/app';
+  const git = async (_command, args) => {
+    const checkout = args.at(-1);
+    await mkdir(join(checkout, '.git'), { recursive: true });
+    await writeFile(join(checkout, '.env'), env);
+  };
+  const options = { clone: (repo, parent, settings) => cloneGithub(repo, parent, { ...settings, command: git }) };
+  const { root, project, request, register, restart } = await fixture(t, {
+    vault, command: async () => '17.4\tapp\tt\tt\tt\t123456789\tf\tt\tt\t16384\n'
+  }, options);
+  const ca = join(root, 'ca.pem');
+  await writeFile(ca, 'test fixture');
+  await writeFile(join(project, '.env'), env);
+  const clone = async () => {
+    const response = await request('/api/projects/clone', { repository: 'https://github.com/owner/demo', parentDir: root });
+    assert.equal(response.status, 201);
+    return response.json();
+  };
+  const save = async (route, password) => {
+    const { bindings: [binding] } = await (await request(route + '/database-discovery')).json();
+    const response = await request(route + '/database-remote-profile', { mode: 'save', bindingId: binding.id, ca, user: 'operator', password });
+    assert.equal(response.status, 200);
+  };
+  const first = await clone();
+  const other = await register();
+  await save('/api/projects/' + first.id, 'old-clone-secret');
+  await save(other, 'shared-project-secret');
+  const parked = join(root, 'original-clone');
+  await rename(first.path, parked);
+  const replacement = await clone();
+  assert.notEqual(replacement.id, first.id);
+  assert.equal(replacement.cloneCleanupPending, true);
+  await save('/api/projects/' + replacement.id, 'replacement-secret');
+  const readState = async name => JSON.parse(await readFile(join(root, 'state', name + '.json'), 'utf8'));
+  assert.deepEqual((await readState('projects')).replacedClones, [first.id]);
+  assert.equal(credentials.size, 3);
+  keyringAvailable = true;
+  await restart();
+  for (let attempt = 0; attempt < 100 && (await readState('projects')).replacedClones.length; attempt++) await sleep(20);
+  assert.deepEqual((await readState('projects')).replacedClones, []);
+  assert.deepEqual([...credentials.values()].sort(), ['replacement-secret', 'shared-project-secret']);
+  const state = await readState('databases');
+  assert.equal(state.requirements[first.id], undefined);
+  assert.equal(Object.values(state.profiles).some(profile => profile.projectId === first.id), false);
+  assert.equal(Object.values(state.bindings).filter(binding => binding.projectId === first.id).length, 0);
+  assert.equal(await readFile(join(parked, '.env'), 'utf8'), env);
 });
 
 test('Windows saves and reads a real user-bound DPAPI credential', { skip: process.platform !== 'win32' }, async t => {

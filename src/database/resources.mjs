@@ -57,6 +57,7 @@ export function databaseResources({ registry, vault, directory, operations, comm
   }
 
   async function removeProfiles(project) {
+    await registry.ready;
     const saved = Object.values(registry.value.profiles).filter(item => item.projectId === project.id);
     for (const profile of saved) {
       await vault.remove(profile.credentialRef);

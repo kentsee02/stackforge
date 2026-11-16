@@ -9,6 +9,7 @@ import { recordedIdentity } from '../platform/project-identity.mjs';
 import { validateCustomChecks, validateStartup } from './project-startup.mjs';
 
 export const projectPathKey = path => process.platform === 'win32' ? path.toLowerCase() : path;
+const projectId = /^[a-f0-9-]{36}$/;
 
 export function importedProject(id, path, source) {
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid project record.');
@@ -65,7 +66,7 @@ export function validatePorts(project, input) {
 export class ProjectConfig {
   constructor(file) {
     this.file = file;
-    this.value = { ports: {}, checks: {}, imports: [], locations: {}, hiddenWhenMissing: {} };
+    this.value = { ports: {}, checks: {}, imports: [], locations: {}, hiddenWhenMissing: {}, replacedClones: [] };
     this.pending = Promise.resolve();
     this.ready = this.load();
   }
@@ -75,6 +76,9 @@ export class ProjectConfig {
     try {
       const saved = JSON.parse(await readFile(this.file, 'utf8'));
       if (saved.version !== 1) return;
+      if (Array.isArray(saved.replacedClones)) {
+        this.value.replacedClones = [...new Set(saved.replacedClones.filter(id => typeof id === 'string' && projectId.test(id)))];
+      }
       if (saved.ports && typeof saved.ports === 'object') this.value.ports = saved.ports;
       this.value.hiddenWhenMissing = Object.fromEntries(Object.entries(saved.hiddenWhenMissing ?? {}).filter(([id, hidden]) => /^[a-f0-9-]{36}$/.test(id) && hidden === true));
       for (const [id, path] of Object.entries(saved.locations ?? {})) {
@@ -135,7 +139,8 @@ export class ProjectConfig {
       // A successful clone claims an unused destination before registering it.
       if (previous && !(project.cloneId && previous.cloneId)) throw new Error('This folder is already in Projects.');
       const next = previous ? withoutImport(value, previous.id) : value;
-      return { ...next, imports: [project, ...next.imports] };
+      return { ...next, imports: [project, ...next.imports],
+        replacedClones: previous ? [...next.replacedClones, previous.id] : next.replacedClones };
     });
   }
 
@@ -143,14 +148,25 @@ export class ProjectConfig {
     return this.update(value => withoutImport(value, id));
   }
 
+  finishCloneCleanup(id) {
+    return this.update(value => ({ ...value, replacedClones: value.replacedClones.filter(item => item !== id) }));
+  }
+
   hideMissingProject(id) {
     return this.update(value => ({ ...value, hiddenWhenMissing: { ...value.hiddenWhenMissing, [id]: true } }));
   }
 
   relocate(project, path) {
-    return this.update(value => project.imported ?
-      { ...value, imports: value.imports.map(item => item.id === project.id ? { ...item, path } : item) } :
-      { ...value, locations: { ...value.locations, [project.id]: path } });
+    return this.update(value => {
+      const current = project.imported ? value.imports.find(item => item.id === project.id)?.path :
+        value.locations[project.id] ?? project.path;
+      if (current !== project.path || value.imports.some(item => item.id !== project.id && projectPathKey(item.path) === projectPathKey(path))) {
+        throw new Error('Choose the original project folder at its new location.');
+      }
+      return project.imported ?
+        { ...value, imports: value.imports.map(item => item.id === project.id ? { ...item, path } : item) } :
+        { ...value, locations: { ...value.locations, [project.id]: path } };
+    });
   }
 
   update(change) {

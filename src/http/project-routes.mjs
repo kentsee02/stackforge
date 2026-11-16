@@ -62,6 +62,9 @@ export function createProjectRoutes({ projects, queries, databaseRoutes, removal
     const project = projects.list().find(item => item.id === id);
     if (!project) return send(res, 404, { error: 'This project was not found in StackForge.' });
     if (await databaseRoutes.action(res, project, action, payload)) return;
+    if (!projects.list().some(item => item.id === id && item.path === project.path)) {
+      return send(res, 409, { error: 'The project registration has changed. Refresh Projects and try again.' });
+    }
     try { return send(res, savedActions.has(action) ? 200 : 202, await execute(project, action, payload)); }
     catch (error) {
       if (!(error instanceof ProjectActionError)) throw error;

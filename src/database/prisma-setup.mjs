@@ -118,13 +118,30 @@ async function schemaStatus(session, target, schema) {
     failed: rows.some(([, finished, rolledBack]) => finished === 'f' && rolledBack === 'f') };
 }
 
+function placeholderEdit(requirement, connection) {
+  if (requirement?.status === 'placeholder' && !connection?.environmentConflict && connection?.environmentSources?.length === 1) {
+    return requirement.environmentEdit;
+  }
+}
+
 export async function postgresSetup({ project, payload, command = run, installation = {}, prismaCommand = run, verifyTarget, signal }) {
   if (!['probe', 'inspect', 'create', 'save', 'migrate'].includes(payload.mode)) throw new Error(changed);
   const { root, identity, requirements, connections } = await discoverDatabases(project, { includeConnections: true });
   const requirement = requirements.find(item => item.id === payload.requirementId && item.guidedSetup);
-  if (!requirement || !['missing', 'configured'].includes(requirement.status)) throw new Error('Choose a detected Prisma PostgreSQL configuration.');
+  if (!requirement || !['missing', 'configured', 'placeholder'].includes(requirement.status)) throw new Error('Choose a detected Prisma PostgreSQL configuration.');
   const connection = connections.get(requirement.id);
-  if (connection.environmentConflict) return { status: 'environment-conflict' };
+  const edit = placeholderEdit(requirement, connection);
+  if (payload.revision !== undefined && payload.revision !== edit?.revision) throw new Error(changed);
+  if (connection.environmentConflict || (requirement.status === 'placeholder' && !edit)) {
+    return { status: 'environment-conflict', sources: connection.environmentSources };
+  }
+  async function verifyEdit() {
+    if (!edit) return;
+    const latest = await discoverDatabases(project, { includeConnections: true });
+    const current = placeholderEdit(latest.requirements.find(item => item.id === requirement.id), latest.connections.get(requirement.id));
+    if (payload.revision !== edit.revision || current?.revision !== edit.revision ||
+        databaseKey(latest.identity) !== databaseKey(identity)) throw new Error(changed);
+  }
   const configured = requirement.status === 'configured';
   const selected = setupTarget(project, requirement, connection, payload);
   if (!selected) return { status: 'remote' };
@@ -134,7 +151,8 @@ export async function postgresSetup({ project, payload, command = run, installat
     if (!address) return { status: 'loopback-ambiguous' };
     target.host = address;
   }
-  const envPath = requirement.directory === '.' ? '.env' : `${requirement.directory}/.env`;
+  const envFile = edit?.file ?? '.env';
+  const envPath = requirement.directory === '.' ? envFile : `${requirement.directory}/${envFile}`;
   const summary = { host: target.host, port: target.port, name: target.name, schema, variable: requirement.environmentVariable, envPath };
   const respond = (status, fields) => ({ status, target: summary, ...fields });
   if (payload.mode === 'probe' || !configured && !payload.user) {
@@ -158,14 +176,15 @@ export async function postgresSetup({ project, payload, command = run, installat
     if (payload.mode === 'create') {
       if (!planId) throw new Error(changed);
       await executeInitialization({ ...options, id: payload.planId, confirmName: payload.confirmName,
-        revalidate: () => verifyTarget(target), recordMigration: async () => {} });
+        revalidate: async () => { await verifyTarget(target); await verifyEdit(); }, recordMigration: async () => {} });
       return respond(configured ? 'check' : 'configure');
     }
     return respond('database', { planId });
   }
   if (!configured) {
     if (payload.mode !== 'save') return respond('configure');
-    await saveDatabaseEnvironment(project, { requirementId: requirement.id, value }, signal);
+    await verifyEdit();
+    await saveDatabaseEnvironment(project, { requirementId: requirement.id, value, revision: edit?.revision }, signal);
     return respond('check');
   }
 

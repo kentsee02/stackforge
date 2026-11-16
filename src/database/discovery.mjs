@@ -79,7 +79,7 @@ async function projectText(folder, file) {
   return await realpath(path).catch(() => '') === path ? localText(folder, file) : '';
 }
 
-async function prismaConnection(folder, files, runtimeEnv, dotenvEnv) {
+async function prismaConnection(folder, directory, files, runtimeEnv, dotenvEnv, environmentEntries) {
   if (!files.some(file => /^prisma\.config\./.test(file)) && !await lstat(join(folder, '.config')).then(info => info.isDirectory(), () => false)) return;
   const sources = (await Promise.all(prismaConfigs.map(async file => ({ file, text: await projectText(folder, file) }))))
     .filter(source => source.text.trim());
@@ -104,7 +104,12 @@ async function prismaConnection(folder, files, runtimeEnv, dotenvEnv) {
   const value = inherited ? process.env[variable] : source[variable];
   const environmentConflict = !loadsDefaultDotenv || Boolean(process.env.DOTENV_CONFIG_PATH) ||
     (runtimeEnv[variable] !== undefined && runtimeEnv[variable] !== value);
-  return { file, schema: schemaPath, migrations, variable, value, environmentConflict,
+  const environmentSources = environmentEntries.filter(([name, values]) => !name.endsWith('.env.example') && Object.hasOwn(values, variable))
+    .map(([name]) => name);
+  if (inherited) environmentSources.push('Process environment');
+  if (process.env.DOTENV_CONFIG_PATH) environmentSources.push('DOTENV_CONFIG_PATH');
+  if (!loadsDefaultDotenv) environmentSources.push(directory === '.' ? file : directory + '/' + file);
+  return { file, schema: schemaPath, migrations, variable, value, environmentConflict, environmentSources,
     ...(loadsDefaultDotenv && { dotenvFile: '.env' }) };
 }
 
@@ -176,7 +181,9 @@ export async function discoverDatabases(project, { includeConnections = false } 
       }
     }
     const prisma = ['prisma/schema.prisma', 'schema.prisma'];
-    const prismaConfig = await prismaConnection(folder, files, runtimeEnv, env.get('.env'));
+    const localEntries = [...env].map(([name, values]) => [directory === '.' ? name : directory + '/' + name, values]);
+    const environmentEntries = directory === '.' ? localEntries : [...rootEnv, ...localEntries];
+    const prismaConfig = await prismaConnection(folder, directory, files, runtimeEnv, env.get('.env'), environmentEntries);
     if (prismaConfig?.schema?.endsWith('.prisma') && !prismaConfig.schema.startsWith('../') && !prisma.includes(prismaConfig.schema)) prisma.push(prismaConfig.schema);
     const configs = [...files.filter(file => /^(?:application(?:-[\w-]+)?\.(?:properties|ya?ml)|appsettings(?:\.[\w-]+)?\.json|settings\.py|database\.ya?ml|requirements\.txt|pyproject\.toml|Gemfile)$/i.test(file)).slice(0, 20),
       'src/main/resources/application.properties', 'src/main/resources/application.yml', 'src/main/resources/application.yaml', 'config/database.yml'];
@@ -198,6 +205,7 @@ export async function discoverDatabases(project, { includeConnections = false } 
               ...(engine === 'postgres' && { guidedSetup: true }) });
             if (includeConnections && id) connections.set(id, { value: prismaConfig.value,
               environmentConflict: prismaConfig.environmentConflict,
+              environmentSources: prismaConfig.environmentSources,
               schema: file, migrations: prismaConfig.migrations });
           }
         }

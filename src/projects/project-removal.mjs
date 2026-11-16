@@ -14,10 +14,11 @@ export class ProjectRemovalError extends Error {
 }
 
 export function createProjectRemoval({ projectConfig, removals, trashProject, isProjectBusy, isProjectRunning,
-  isCreatingProject, removeDatabaseProfiles, removeDatabaseRegistration, recordProfileCleanup }) {
+  isCreatingProject, isRegistered, removeDatabaseProfiles, removeDatabaseRegistration, recordProfileCleanup }) {
   return async function removeProject(project, { action, confirmName }) {
     if (confirmName !== project.name) throw new ProjectRemovalError('invalid-request', 'Enter the exact project name to confirm deletion.');
     const offline = !await locationExists(project.path);
+    if (!isRegistered(project)) throw new ProjectRemovalError('conflict', 'The project registration has changed. Refresh Projects and try again.');
     if (isProjectBusy(project)) throw new ProjectRemovalError('conflict', 'Wait for the current project operation to finish.');
     if (action === 'remove' && !project.imported && !offline) {
       throw new ProjectRemovalError('conflict', 'Only imported projects can be removed from the list.');

@@ -9,7 +9,7 @@ import { localInstallation, validateLocalTarget } from './adapters/local.mjs';
 import { executeInitialization, initializationPlan, publicInitializationPlan } from './initialization.mjs';
 import { saveDatabaseEnvironment } from './environment.mjs';
 import { postgresSetup } from './prisma-setup.mjs';
-import { defaultPorts } from '../projects/project-config.mjs';
+import { defaultPorts, projectPathKey } from '../projects/project-config.mjs';
 import { locationExists } from '../platform/paths.mjs';
 import { commandDiagnostic } from '../projects/project-diagnostics.mjs';
 import { discoverDatabases } from './discovery.mjs';
@@ -29,7 +29,11 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
   async function scanDatabases(project, discovery, activeIds) {
     const { requirements, limited } = discovery ?? await discoverDatabases(project);
     const recorded = requirements.map(({ environmentEdit, ...item }) => item);
-    await databaseRegistry.sync(project, recorded, projectConfig.ports(project).database ?? defaultPorts(project).database);
+    await databaseRegistry.sync(project, recorded, projectConfig.ports(project).database ?? defaultPorts(project).database, () => {
+      if (!managedProjects().some(item => item.id === project.id && projectPathKey(item.path) === projectPathKey(project.path))) {
+        throw new Error('The project registration has changed. Refresh Projects and try again.');
+      }
+    });
     return { ...databaseRegistry.view(project, activeIds), requirements, limited };
   }
 
@@ -320,8 +324,21 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     return Boolean(operation(project)) || (action === 'database-delete' && databaseWrites.size > 0);
   }
 
+  async function cleanupReplacedClone(id) {
+    const project = { id };
+    const record = databaseLog.begin(project, 'database-profile-cleanup');
+    try {
+      await resources.removeProfiles(project);
+      await databaseRegistry.remove(id);
+      await record('succeeded');
+    } catch (error) {
+      await record('failed');
+      throw error;
+    }
+  }
+
   return { inspect, resourceAction, localAction, startArchive, startLegacyBackup, transferBlocked, stagingRoot,
     redact: redactDatabase.text, shutdown, scan: scanDatabases, verifyDeletion: verifyDatabaseDeletion, selectedCompose,
-    operation, blocksProjectAction, removeProfiles: resources.removeProfiles,
+    operation, blocksProjectAction, cleanupReplacedClone, removeProfiles: resources.removeProfiles,
     removeRegistration: id => databaseRegistry.remove(id), record: databaseLog.begin };
 }

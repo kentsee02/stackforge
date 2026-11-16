@@ -17,6 +17,7 @@ try {
   }));
   await writeFile(join(project, 'prisma', 'schema.prisma'), 'datasource db { provider = "postgresql" }');
   await writeFile(join(project, 'prisma.config.ts'), 'import "dotenv/config";\nexport default { datasource: { url: env("DATABASE_URL") } };');
+  await writeFile(join(project, '.env'), 'DATABASE_URL=postgresql://demo:changeme@127.0.0.1:5432/example\n');
   app = createApp({ stateDir: false, localDatabase: { probe: async () => false, command: async () => { throw new Error('ENOENT'); } } });
   app.listen(0, '127.0.0.1');
   await once(app, 'listening');
@@ -74,6 +75,12 @@ try {
   assert.ok(box && box.x >= 0 && box.x + box.width <= 391);
   await page.keyboard.press('Escape');
   await page.locator('#language').selectOption('en');
+  await writeFile(join(project, '.env.local'), 'DATABASE_URL=postgresql://other@127.0.0.1:5432/other\n');
+  await page.locator('#database-discovery-refresh').click();
+  await page.getByRole('button', { name: 'Set up PostgreSQL' }).click();
+  await contains('#postgres-setup-status', 'Review .env, .env.local and rescan database configuration.');
+  assert.equal(await page.locator('#postgres-setup-next').isVisible(), false);
+  await page.keyboard.press('Escape');
   await page.locator('#project-delete').click();
   await contains('#project-trash-title', 'Remove project from Projects?');
   await page.locator('#project-trash-name').fill('Portal');

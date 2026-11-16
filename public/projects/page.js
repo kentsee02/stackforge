@@ -338,7 +338,11 @@ async function importAction(browse, clone = false) {
       showImport(false);
       setText(message, '');
       $('project-feedback').dataset.status = 'ok';
-      setText($('project-feedback'), 'Project added to Projects.');
+      const feedback = project.databaseRefreshPending ? 'Project moved. Open Database discovery and refresh its bindings.' :
+        project.relocated ? 'Project moved to its verified location.' :
+          project.cloneCleanupPending ? 'Clone added. StackForge will retry old database credential cleanup when it restarts.' :
+            'Project added to Projects.';
+      setText($('project-feedback'), feedback);
       render();
       $('project-feedback').focus();
       refresh();

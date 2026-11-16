@@ -30,13 +30,14 @@ export function createPostgresSetup({ $, post, request, state, renderPage, reloa
 
   function render() {
     const mode = result?.status === 'configure' ? 'save' : result?.planId && (result.status === 'database' ? 'create' : 'migrate');
+    const conflict = result?.status === 'environment-conflict';
     el('guide').hidden = !['server', 'stopped', 'client'].includes(result?.status);
     el('edit').hidden = busy || !current?.requirement.environmentEdit ||
       !['server', 'authentication', 'permission', 'tls', 'connection', 'remote', 'loopback-ambiguous'].includes(result?.status);
     el('dependencies').hidden = busy || result?.status !== 'prisma-client';
-    el('fields').hidden = current?.configured;
-    el('fields').disabled = busy || Boolean(current?.configured);
-    el('check').hidden = ['ready', 'remote'].includes(result?.status);
+    el('fields').hidden = conflict || current?.configured;
+    el('fields').disabled = busy || conflict || Boolean(current?.configured);
+    el('check').hidden = conflict || ['ready', 'remote'].includes(result?.status);
     el('check').disabled = busy;
     el('close').disabled = busy;
     el('next').hidden = !mode;
@@ -54,6 +55,7 @@ export function createPostgresSetup({ $, post, request, state, renderPage, reloa
     const address = next.target?.host.includes(':') ? `[${next.target.host}]` : next.target?.host;
     el('target').textContent = next.target ? `${address}:${next.target.port}/${next.target.name} · ${next.target.variable} · ${next.target.envPath}` : '';
     setText(el('status'), [messages[next.status], next.code, typeof next.tables === 'number' && `${next.tables} database tables`,
+      next.sources?.length && `Review ${next.sources.join(', ')} and rescan database configuration.`,
       next.status === 'database' && !next.planId && 'Use an account with permission to create databases.']);
     el('migrations').replaceChildren(...(next.pending ?? []).map(name => {
       const item = document.createElement('li');
@@ -66,6 +68,9 @@ export function createPostgresSetup({ $, post, request, state, renderPage, reloa
   async function send(mode) {
     if (busy || state.pending || !current) return;
     const payload = { mode, requirementId: current.requirement.id, planId: result?.planId, confirmName: el('confirm').value };
+    if (['create', 'save'].includes(mode) && current.requirement.status === 'placeholder') {
+      payload.revision = current.requirement.environmentEdit?.revision;
+    }
     if (!current.configured) Object.assign(payload, { name: el('name').value.trim(), host: el('host').value,
       port: el('port').valueAsNumber, user: el('user').value.trim(), password: el('password').value });
     busy = true;

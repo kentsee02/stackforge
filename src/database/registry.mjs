@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { hostname, networkInterfaces } from 'node:os';
@@ -47,16 +47,22 @@ export class DatabaseRegistry {
       if (this.file) {
         const temporary = `${this.file}.${randomUUID()}.tmp`;
         await mkdir(dirname(this.file), { recursive: true });
-        await writeFile(temporary, JSON.stringify({ version: 1, ...next }), { mode: 0o600 });
-        await rename(temporary, this.file);
+        try {
+          await writeFile(temporary, JSON.stringify({ version: 1, ...next }), { mode: 0o600 });
+          await rename(temporary, this.file);
+        } catch (error) {
+          await unlink(temporary).catch(() => {});
+          throw error;
+        }
       }
       this.value = next;
     });
     return this.pending;
   }
 
-  sync(project, requirements, port) {
+  sync(project, requirements, port, verifyRegistration) {
     return this.update(value => {
+      verifyRegistration?.();
       const next = { ...value, requirements: { ...value.requirements, [project.id]: requirements },
         servers: { ...value.servers }, instances: { ...value.instances }, bindings: { ...value.bindings } };
       for (const binding of Object.values(next.bindings)) if (binding.projectId === project.id) delete next.bindings[binding.id];

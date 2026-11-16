@@ -220,7 +220,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
         const label = document.createElement('span');
         setText(label, status);
         row.append(label);
-        if (item.guidedSetup && ['missing', 'configured'].includes(item.status)) {
+        if (item.guidedSetup && ['missing', 'configured', 'placeholder'].includes(item.status)) {
           const setup = document.createElement('button');
           setup.type = 'button';
           setup.className = 'text-button database-connection-action';
