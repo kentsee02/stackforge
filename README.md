@@ -87,7 +87,7 @@ StackForge starts verified containers and permits standard database commands and
 
 MySQL full backup requires global `SELECT` to export routines and database-level `SHOW VIEW`, `TRIGGER`, and `EVENT`. Use a separate account scoped to the target database when restoring.
 
-For a direct local PostgreSQL or MySQL URL, choose its target under **Database discovery** and select **Check local connection** to see backup and restore permissions. MongoDB, Redis and SQL Server support read-only connection checks on recognized local targets with their native client tools. Their backup, restore and server controls require separate tooling.
+For a direct local PostgreSQL or MySQL URL, choose its target under **Database discovery** and select **Check local connection** to see backup and restore permissions. A URL matching the project's verified dedicated PostgreSQL instance uses the container's bundled clients for checks and transfers. PostgreSQL restore requires an empty target and a non-superuser account with schema `CREATE` and permission to read `pg_control_system()` for server identification. MongoDB, Redis and SQL Server support read-only connection checks on recognized local targets with their native client tools. Their backup, restore and server controls require separate tooling.
 
 For a detected project-relative SQLite path, select **Inspect SQLite file** to see its schema. Use **Create SQLite file** for a missing file under an existing directory. Backups take a SQLite snapshot that includes committed WAL data. Restore creates a missing file after checking the database integrity. Active or leftover SQLite journal files block creation and restore at that path.
 

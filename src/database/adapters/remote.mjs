@@ -7,7 +7,8 @@ import { backupLimit, databaseObjects, mysqlCanBackUp, mysqlRestoreIsScoped, mys
 import { backupInput, isBackupFile, postgresBackupLimit } from '../backup/payload.mjs';
 
 const unsupported = 'Remote connections support PostgreSQL and MySQL profiles.';
-const failed = 'The remote database operation failed. Check the client, TLS certificate, database permissions, and connectivity.';
+const remoteFailed = 'The remote database operation failed. Check the client, TLS certificate, database permissions, and connectivity.';
+const localFailed = 'The local database operation failed. Check the client, database permissions, and connectivity.';
 const hostName = /^(?=.{1,253}$)[a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?$/i;
 const versionText = output => /\b\d+\.\d+(?:\.\d+)?\b/.exec(output)?.[0];
 const remoteEmpty = {
@@ -40,8 +41,9 @@ export async function remoteProfile(server, instance, { user, ca }) {
 
 export function remoteSession(profile, password, { command = run, signal, loopback = false } = {}) {
   if (typeof password !== 'string' || (!loopback && !password) || password.length > 1024 || /[\0\r\n]/.test(password)) {
-    throw new Error('Enter a valid remote database password.');
+    throw new Error(loopback ? 'Enter a valid database user and password.' : 'Enter a valid remote database password.');
   }
+  const failed = loopback ? localFailed : remoteFailed;
   const { engine, host, port, name, user, ca, sslmode } = profile;
   const postgres = engine === 'postgres';
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PG|MYSQL|MARIADB)/i.test(key)));
@@ -53,7 +55,11 @@ export function remoteSession(profile, password, { command = run, signal, loopba
       '--host=' + host, '--port=' + port, '--user=' + user];
   async function invoke(program, args, options) {
     try { return await command(program, args, { env, signal, timeout: 30000, ...options }); }
-    catch (error) { if (error.name === 'AbortError' || error.code === 'OUTPUT_LIMIT') throw error; throw new Error(failed); }
+    catch (error) {
+      if (error.name === 'AbortError' || error.code === 'OUTPUT_LIMIT') throw error;
+      const detail = loopback && localFailure(program, error.message);
+      throw new Error(detail || failed);
+    }
   }
   const query = async sql => (await invoke(postgres ? 'psql' : 'mysql', postgres ?
     ['-X', '-qAt', '-F', '\t', '-v', 'ON_ERROR_STOP=1', ...endpoint] :
@@ -77,9 +83,13 @@ export function remoteSession(profile, password, { command = run, signal, loopba
       const version = versionText(rawVersion);
       if (!version || database !== name) throw new Error(failed);
       const verifiedIdentity = /^\d+$/.test(identity ?? '') && /^\d+$/.test(databaseOid ?? '') ? databaseKey(host, port, identity, databaseOid) : undefined;
-      return { version, identity: verifiedIdentity,
-        capabilities: { connect: true, backup: read === 't', restore: Boolean(verifiedIdentity && empty === 't' &&
-          create === 't' && standby === 'f' && noForeignServer === 't' && limitedRole === 't') },
+      const restore = Boolean(verifiedIdentity && empty === 't' && create === 't' && standby === 'f' &&
+        noForeignServer === 't' && limitedRole === 't');
+      const restoreHint = loopback && !restore ? empty !== 't' ? 'Restore requires an empty database.' :
+        limitedRole !== 't' ? 'Restore requires a non-superuser account with permission on the target database.' :
+          'Could not verify permissions or identity for the local restore target.' : undefined;
+      return { version, identity: verifiedIdentity, ...(restoreHint && { restoreHint }),
+        capabilities: { connect: true, backup: read === 't', restore },
         providerPermissions: { start: false, stop: false, delete: false } };
     }
     const [header, ...grants] = (await query(`SELECT VERSION(), DATABASE(), ${remoteEmpty.mysql}, @@server_uuid, @@global.read_only;
@@ -96,7 +106,8 @@ export function remoteSession(profile, password, { command = run, signal, loopba
   }
   async function backup(backupFile) {
     const state = await test();
-    if (!state.capabilities.backup) throw new Error('The remote account does not have verified backup permissions.');
+    if (!state.capabilities.backup) throw new Error(loopback ? 'The local account does not have verified backup permissions.' :
+      'The remote account does not have verified backup permissions.');
     const data = await invoke(postgres ? 'pg_dump' : 'mysqldump', postgres ?
       [...endpoint, '--format=custom', '--no-owner', '--no-privileges'] :
       [...endpoint, '--single-transaction', '--no-tablespaces', '--set-gtid-purged=OFF', '--skip-add-drop-table', '--skip-add-locks', '--skip-column-statistics', '--routines', '--events', '--triggers', '--hex-blob', '--', name],
@@ -107,7 +118,8 @@ export function remoteSession(profile, password, { command = run, signal, loopba
   async function restore(data, expectedIdentity) {
     const state = await test();
     if (!state.capabilities.restore || !state.identity || state.identity !== expectedIdentity) {
-      throw new Error('The remote database is not a verified empty restore target.');
+      throw new Error(loopback ? state.restoreHint ?? 'The local database is not a verified empty restore target.' :
+        'The remote database is not a verified empty restore target.');
     }
     if (postgres) await invoke('pg_restore', [...endpoint, '--single-transaction', '--exit-on-error', '--no-owner', '--no-privileges'],
       { ...backupInput(data), timeout: isBackupFile(data) ? 360000 : 120000 });
@@ -116,4 +128,10 @@ export function remoteSession(profile, password, { command = run, signal, loopba
   }
   const inventory = async () => parseDatabaseInventory(await query(`SELECT ${postgres ? "current_setting('server_version')" : 'VERSION()'}; ${databaseObjects[engine]};`));
   return { test, backup, restore, inventory };
+}
+
+function localFailure(program, message) {
+  if (/\bENOENT\b|is not recognized/i.test(message)) return `Install ${program} and add it to PATH to check this database.`;
+  if (/password authentication failed|access denied for user|no password supplied/i.test(message)) return 'The local database rejected the saved credentials.';
+  if (/connection refused|could not connect|timed? out|timeout expired|执行超时/i.test(message)) return 'The local database did not respond. Check the configured address and port.';
 }

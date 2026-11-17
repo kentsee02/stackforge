@@ -47,9 +47,9 @@ async function dockerSession(command, signal) {
       { ...base, env })) : env.DOCKER_HOST;
     if (!localEndpoint(endpoint)) throw new Error();
     for (const key of Object.keys(env)) if (/^DOCKER_(CONTEXT|HOST|TLS|TLS_VERIFY|CERT_PATH)$/i.test(key)) delete env[key];
-    const cli = (args, { timeout = base.timeout, password, input, extraEnv, stdoutLimit = base.stdoutLimit } = {}) =>
+    const cli = (args, { password, extraEnv, ...options } = {}) =>
       command('docker', ['--host', endpoint, ...args], {
-        ...base, timeout, input, stdoutLimit, env: { ...env, ...extraEnv, ...(password !== undefined && { POSTGRES_PASSWORD: password }) }
+        ...base, ...options, env: { ...env, ...extraEnv, ...(password !== undefined && { POSTGRES_PASSWORD: password }) }
       });
     const [daemon, version, os] = JSON.parse(await cli(['info', '--format', '[{{json .ID}},{{json .ServerVersion}},{{json .OSType}}]']));
     if (!daemon || os !== 'linux' || Number(version?.split('.')[0]) < 28 || !/^\d+\./.test(version)) throw new Error();
@@ -189,14 +189,17 @@ export function developmentPostgres({ registry, verifyShared, command = run, pro
         const targetPort = args.indexOf('-p') + 1;
         const targetHost = args.indexOf('-h') + 1;
         const database = args[args.indexOf('-d') + 1];
-        if (program !== 'psql' || !targetPort || !targetHost || args[targetHost] !== host ||
-            args[targetPort] !== String(record.port) || !['postgres', record.name].includes(database)) throw new Error(changed);
+        if (!['psql', 'pg_dump', 'pg_restore'].includes(program) || !targetPort || !targetHost || args[targetHost] !== host ||
+            args[targetPort] !== String(record.port) || database !== record.name && (program !== 'psql' || database !== 'postgres')) {
+          throw new Error(changed);
+        }
         const localArgs = [...args];
         localArgs[targetPort] = '5432';
-        const extraEnv = Object.fromEntries(Object.entries(options.env).filter(([key]) =>
-          /^(?:PGPASSWORD|PGCONNECT_TIMEOUT|PGOPTIONS|PGSSLMODE|LC_ALL)$/.test(key)));
-        return cli(['exec', '-i', ...Object.keys(extraEnv).flatMap(key => ['-e', key]),
-          latest.container, 'psql', ...localArgs], { input: options.input, timeout: options.timeout, stdoutLimit: options.stdoutLimit, extraEnv });
+        const { env, signal: _signal, ...io } = options;
+        const extraEnv = Object.fromEntries(Object.entries(env).filter(([key]) =>
+          /^(?:PGPASSWORD|PGCONNECT_TIMEOUT|PGOPTIONS|PGSSLMODE|PGGSSENCMODE|LC_ALL)$/.test(key)));
+        return cli(['exec', ...(io.input || io.inputFile ? ['-i'] : []), ...Object.keys(extraEnv).flatMap(key => ['-e', key]),
+          latest.container, program, ...localArgs], { ...io, extraEnv });
       }
     };
   }

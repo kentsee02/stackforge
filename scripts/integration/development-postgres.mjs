@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -17,7 +18,8 @@ const docker = (args, options = {}) => run('docker', args, { stdoutOnly: true, t
 let app, origin, token, listener, id, movedContainer;
 
 async function startApp() {
-  app = createApp({ stateDir, localDatabase: { command: async () => { throw new Error('ENOENT'); } } });
+  const missingHostClient = async () => { throw new Error('ENOENT'); };
+  app = createApp({ stateDir, localDatabase: { command: missingHostClient }, databaseAdapters: { command: missingHostClient } });
   app.listen(0, '127.0.0.1');
   await once(app, 'listening');
   origin = 'http://127.0.0.1:' + app.address().port;
@@ -97,12 +99,46 @@ try {
   assert.equal(schema.status, 'migrations-unavailable');
   assert.equal(schema.tables, 1);
   assert.equal(JSON.stringify(schema).includes(password), false);
+
+  const transferStatus = (status = 200) => api(id + '/database-local-status', { bindingId: binding.id }, status);
+  const source = await transferStatus();
+  assert.deepEqual(source.capabilities, { connect: true, backup: true, restore: false });
+  assert.equal(source.restoreHint, 'Restore requires an empty database.');
+  assert.equal(JSON.stringify(source).includes(password), false);
+  const archive = (action = '', body = '{}', extra = {}) => fetch(origin + '/api/projects/' + id + '/database-archive' + action, {
+    method: 'POST', headers: { 'X-StackForge-Token': token, 'X-StackForge-Binding': binding.id,
+      'Content-Type': typeof body === 'string' ? 'application/json' : 'application/octet-stream', ...extra }, body
+  });
+  const downloaded = await archive();
+  assert.equal(downloaded.status, 200, downloaded.ok ? '' : await downloaded.text());
+  const backup = Buffer.from(await downloaded.arrayBuffer());
+  assert.equal(backup.subarray(0, 16).toString(), 'STACKFORGE-DB-1\n');
+  await query('DROP TABLE proof');
+  assert.equal((await transferStatus()).restoreHint, 'Restore requires a non-superuser account with permission on the target database.');
+  const restorePassword = randomBytes(24).toString('hex');
+  await query(`CREATE ROLE restore_user LOGIN PASSWORD '${restorePassword}';
+    GRANT CREATE ON SCHEMA public TO restore_user;
+    GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO restore_user;`);
+  await writeFile(join(path, '.env'), 'DATABASE_URL=postgresql://restore_user:' + restorePassword + '@127.0.0.1:' + port + '/portal\n');
+  try {
+    assert.equal((await transferStatus()).capabilities.restore, true);
+    const previewResponse = await archive('/preview', backup);
+    const preview = await previewResponse.json();
+    assert.equal(previewResponse.status, 200, preview.error);
+    const restoreResponse = await archive('/restore', backup, { 'X-StackForge-Preview': preview.id,
+      'X-StackForge-Target': Buffer.from(preview.name).toString('base64') });
+    assert.deepEqual(await restoreResponse.json(), { restored: true, objects: preview.objects, limited: false });
+    assert.equal((await query('SELECT value FROM proof')).trim(), '42');
+  } finally {
+    await writeFile(join(path, '.env'), stored);
+  }
   await action({ mode: 'delete', confirm: volume }, 409);
   assert.match((await api(id + '/remove', { confirmName: 'portal' }, 409)).error, /dedicated PostgreSQL volume/);
   await action({ mode: 'stop' });
   assert.equal((await read()).status, 'stopped');
   assert.deepEqual(await local(), { kind: 'project-docker', serviceStatus: 'stopped', portOpen: false });
   assert.equal((await prisma()).status, 'docker-stopped');
+  assert.match((await transferStatus(409)).error, /Open Project PostgreSQL/);
   await stopApp();
   await startApp();
   assert.equal((await read()).status, 'stopped');
@@ -123,6 +159,7 @@ try {
   try {
     replacement = (await docker(['container', 'create', '--name', container, '--label', 'stackforge.integration=' + key,
       'docker.io/library/postgres:17'])).trim();
+    assert.match((await transferStatus(409)).error, /could not be verified/);
     assert.match((await action({ mode: 'delete', confirm: volume }, 409)).error, /could not be verified/);
     await docker(['container', 'inspect', replacement]);
   } finally {
@@ -149,7 +186,7 @@ try {
   } finally { await docker(['volume', 'rm', secondVolume]); }
   await action({ mode: 'delete', confirm: secondVolume });
   await api(id + '/remove', { confirmName: 'portal' });
-  console.log('Verified dedicated PostgreSQL preview, loopback binding, safe URL write, persistence, shared use, replacement refusal and deletion against Docker.');
+  console.log('Verified dedicated PostgreSQL, including local connection checks, backup and scoped restore without host clients.');
 } finally {
   if (listener) await new Promise(resolve => listener.close(resolve));
   await stopApp();

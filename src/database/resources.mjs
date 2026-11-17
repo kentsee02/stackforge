@@ -13,7 +13,7 @@ import { verifyBackupImage, verifySqlRestore } from './backup/restore-check.mjs'
 const changed = 'The restore preview or confirmed database target has changed.';
 const missing = 'Choose an available database binding.';
 
-export function databaseResources({ registry, vault, directory, operations, command, verifyRestore = verifySqlRestore,
+export function databaseResources({ registry, vault, directory, operations, command, resolveLocalClient, verifyRestore = verifySqlRestore,
   preflight = verifyRestore === verifySqlRestore ? verifyBackupImage : undefined }) {
   const sqlite = sqliteAdapter(directory);
   const previews = new Map();
@@ -84,7 +84,7 @@ export function databaseResources({ registry, vault, directory, operations, comm
       };
     }
     if (provider === 'remote' || provider === 'local') {
-      const { session, credentialRef } = provider === 'local' ? await localTransferSession(project, binding, command, signal) :
+      const { session, credentialRef } = provider === 'local' ? await localTransferSession(project, binding, command, signal, resolveLocalClient) :
         await remote(project, binding, signal);
       const state = await session.test();
       const identity = state.identity && databaseKey(state.identity, credentialRef);
@@ -105,9 +105,9 @@ export function databaseResources({ registry, vault, directory, operations, comm
 
   async function testLocalConnection(project, binding, signal) {
     if (!['postgres', 'mysql'].includes(binding.instance.engine)) return inspectLocalConnection(project, binding, command, signal);
-    const { session } = await localTransferSession(project, binding, command, signal);
-    const { version, capabilities } = await session.test();
-    return { version, capabilities };
+    const { session } = await localTransferSession(project, binding, command, signal, resolveLocalClient);
+    const { version, capabilities, restoreHint } = await session.test();
+    return { version, capabilities, restoreHint };
   }
 
   async function backup(project, binding, ports, signal, backupFile) {

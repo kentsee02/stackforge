@@ -2,7 +2,7 @@ import { databaseConnectionValue, databaseKey, discoverDatabases, sqlName } from
 import { localhostEndpoint, validateLocalTarget } from './local.mjs';
 import { remoteSession } from './remote.mjs';
 
-export async function localTransferSession(project, binding, command, signal) {
+export async function localTransferSession(project, binding, command, signal, resolveClient) {
   const error = 'Configure a direct local PostgreSQL or MySQL URL before using database transfers.';
   const target = validateLocalTarget(binding.server, binding.instance);
   const { requirements, connections, identity } = await discoverDatabases(project, { includeConnections: true });
@@ -26,6 +26,10 @@ export async function localTransferSession(project, binding, command, signal) {
     if (!address) throw new Error('Both IPv4 and IPv6 are listening. Use an explicit loopback address in the database URL.');
     target.host = address;
   }
-  const session = remoteSession({ ...target, user, sslmode }, password, { command, signal, loopback: true });
+  const client = await resolveClient?.(project, target, signal);
+  if (client && !(await client.installation()).portOpen) {
+    throw new Error('Open Project PostgreSQL and verify that the container is running and its port is reachable.');
+  }
+  const session = remoteSession({ ...target, user, sslmode }, password, { command: client?.command ?? command, signal, loopback: true });
   return { session, credentialRef: databaseKey(identity, value) };
 }

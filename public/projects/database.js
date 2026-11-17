@@ -323,6 +323,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
           action === 'database-local-status' ? 'Local connection verified' : 'Remote connection verified', result.version,
           result.capabilities.backup ? 'Backup allowed' : 'Backup unavailable',
           result.capabilities.restore ? 'Restore allowed' : 'Restore unavailable',
+          result.restoreHint,
           action === 'database-remote-profile' && 'Provider management unavailable'
         ]);
       } else showMessage($('database-resource-message'), mode === 'remove' ? 'Remote connection profile removed.' :

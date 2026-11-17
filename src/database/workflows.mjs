@@ -21,9 +21,6 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
   const databaseLog = databaseOperationLog(stateDir ? join(dirname(stateDir), 'database-operations.jsonl') : false);
   const databaseRegistry = new DatabaseRegistry(stateDir ? join(dirname(stateDir), 'databases.json') : undefined);
   const stagingRoot = stateDir ? join(dirname(stateDir), 'stackforge-backup-work') : tmpdir();
-  const resources = databaseResources({ registry: databaseRegistry, operations,
-    directory: stagingRoot,
-    vault: databaseVault(stateDir ? join(dirname(stateDir), 'credentials') : undefined), ...databaseAdapters });
   const databaseWrites = new Map();
   const development = developmentPostgres({ registry: databaseRegistry, ...databaseAdapters.developmentPostgres,
     async verifyShared(project, endpoint) {
@@ -33,6 +30,9 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       }
     }
   });
+  const resources = databaseResources({ registry: databaseRegistry, operations, directory: stagingRoot,
+    vault: databaseVault(stateDir ? join(dirname(stateDir), 'credentials') : undefined), ...databaseAdapters,
+    resolveLocalClient: development.client });
   let transfer;
 
   async function scanDatabases(project, discovery, activeIds) {
