@@ -95,7 +95,8 @@ export async function cloneGithub(repository, parentDir, { signal, command = run
     try {
       await requireUnused(target);
       throwIfCancelled(signal);
-      onPromote?.();
+      if (onPromote) await onPromote(target);
+      throwIfCancelled(signal);
       await rename(checkout, target);
     } finally {
       await lock.close();
@@ -107,7 +108,7 @@ export async function cloneGithub(repository, parentDir, { signal, command = run
   }
 }
 
-export function createProjectClone({ clone, register }) {
+export function createProjectClone({ clone, register, beforePromotion }) {
   let current;
 
   function start({ requestId, repository, parentDir }) {
@@ -122,7 +123,11 @@ export function createProjectClone({ clone, register }) {
     const checkout = async () => {
       const { path, cloneId, cloneIdentity } = await clone(repository, parentDir, {
         signal: controller.signal,
-        onPromote: () => { cancellable = false; }
+        onPromote: async target => {
+          if (target) await beforePromotion?.(target);
+          throwIfCancelled(controller.signal);
+          cancellable = false;
+        }
       });
       throwIfCancelled(controller.signal);
       cancellable = false;

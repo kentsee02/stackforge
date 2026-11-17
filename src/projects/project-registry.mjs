@@ -8,12 +8,17 @@ import { importedProject, projectPathKey } from './project-config.mjs';
 import { developmentScript, inspectRecordedProject, projectDirectory, readProjectFolder } from './project-folder.mjs';
 
 export function createProjectRegistry({ projectConfig, generatedProjects, isProjectBusy, isProjectRunning,
-  discoverDatabases, syncDatabaseBindings, cleanupReplacedClone, configWrites }) {
+  discoverDatabases, syncDatabaseBindings, cleanupReplacedClone, guardDevelopmentRemoval, configWrites }) {
   let pendingCleanup = Promise.resolve();
   function list() {
     const created = generatedProjects().map(project => ({ ...project, path: projectConfig.value.locations[project.id] ?? project.path }));
     const paths = new Set(created.map(project => projectPathKey(project.path)));
     return [...projectConfig.value.imports.filter(project => !paths.has(projectPathKey(project.path))), ...created];
+  }
+
+  async function guardCloneReplacement(path) {
+    const previous = projectConfig.value.imports.find(item => item.cloneId && projectPathKey(item.path) === projectPathKey(path));
+    if (previous) await guardDevelopmentRemoval?.(previous);
   }
 
   async function withPathLocks(paths, work) {
@@ -89,6 +94,7 @@ export function createProjectRegistry({ projectConfig, generatedProjects, isProj
       throw new Error('Wait for the current project operation to finish.');
     }
     return withPathLocks([directory], async () => {
+      if (project.cloneId) await guardCloneReplacement(directory);
       const existing = await Promise.all(list().filter(item => !item.imported).map(item => realpath(item.path).catch(() => item.path)));
       if (existing.some(item => projectPathKey(item) === projectPathKey(project.path))) throw new Error('This folder is already in Projects.');
       await projectConfig.addProject(project);
@@ -100,5 +106,5 @@ export function createProjectRegistry({ projectConfig, generatedProjects, isProj
     });
   }
 
-  return { list, register, retryCloneCleanup, get pendingCleanup() { return pendingCleanup; } };
+  return { list, register, guardCloneReplacement, retryCloneCleanup, get pendingCleanup() { return pendingCleanup; } };
 }

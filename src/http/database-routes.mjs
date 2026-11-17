@@ -3,7 +3,7 @@ import { createDatabaseArchiveRoutes } from './database-archive-routes.mjs';
 import { send } from './response.mjs';
 
 const resourceActions = new Set(['database-connection-config', 'database-postgres-setup', 'database-local-status',
-  'database-remote-profile', 'database-sqlite-inspect', 'database-sqlite-create']);
+  'database-remote-profile', 'database-sqlite-inspect', 'database-sqlite-create', 'database-development']);
 const localActions = new Set(['database-local-check', 'database-initialization-plan', 'database-initialize']);
 
 export function createDatabaseRoutes({ database, managedProjects, runtime }) {

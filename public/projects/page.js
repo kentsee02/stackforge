@@ -4,6 +4,7 @@ import { createStartupPanel } from '/projects/startup.js';
 import { createPreflightPanel } from '/projects/preflight.js';
 import { createDependenciesPanel } from '/projects/dependencies.js';
 import { createProjectToolsPanel } from '/projects/tools.js';
+import { createDevelopmentPostgres } from '/projects/development-postgres.js';
 
 setupI18n();
 
@@ -167,7 +168,7 @@ function render() {
   $('project-empty').hidden = projects.length > 0;
   renderRows();
   const project = projects.find(item => item.id === selected);
-  if (!project) { preflight.render(); return; }
+  if (!project) { preflight.render(); developmentPostgres.render(); return; }
   $('project-detail').classList.toggle('project-offline', Boolean(project.offline));
   $('project-offline').hidden = !project.offline;
   for (const id of ['runtime-action', 'selected-project-state', 'project-runtime-log']) $(id).hidden = Boolean(project.unmanaged && !project.hasStartup);
@@ -184,6 +185,7 @@ function render() {
   renderPorts(project, busy || unavailable);
   dependencies.render(project, busy, unavailable, startupDirty);
   database.render(project, busy, unavailable);
+  developmentPostgres.render(project, busy || unavailable);
   tools.render(project, busy, unavailable);
   const action = $('runtime-action');
   action.dataset.action = running ? 'stop' : 'start';
@@ -441,8 +443,10 @@ const selectedProject = () => projects.find(project => project.id === selected);
 const startup = createStartupPanel({ $, request, showMessage, state, selectedId, selectedProject, renderPage: render, act });
 const dependencies = createDependenciesPanel({ $, request, showMessage, renderOutput, diagnosticMessages, state, selectedId, selectedProject, renderPage: render, act });
 const tools = createProjectToolsPanel({ $, request, showMessage, renderOutput, state, selectedId, renderPage: render, act });
+const developmentPostgres = createDevelopmentPostgres({ $, request, post, state, renderPage: render,
+  reloadDiscovery: () => database.reloadDiscovery() });
 const database = createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
-  selectedId, selectedProject, renderPage: render, refresh, act });
+  selectedId, selectedProject, renderPage: render, refresh, act, openDevelopment: developmentPostgres.open });
 const preflight = createPreflightPanel({ $, request, selectedProject, start: async id => {
   await act(id, 'start');
   if (selected === id && !$('runtime-action').disabled) $('runtime-action').focus({ preventScroll: true });

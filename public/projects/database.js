@@ -2,14 +2,15 @@ import { setText } from '/i18n.js';
 import { createPostgresSetup } from '/projects/postgres-setup.js';
 
 export function createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
-  selectedId, selectedProject, renderPage, refresh, act }) {
+  selectedId, selectedProject, renderPage, refresh, act, openDevelopment }) {
   let databaseView;
   let databaseDiscovery;
   let configuringDatabase;
   let restoring;
   let deletingDatabase;
   let transferMessage;
-  const openPostgresSetup = createPostgresSetup({ $, request, post, state, renderPage, reload: loadDatabaseDiscovery, edit: openDatabaseConnection });
+  const openPostgresSetup = createPostgresSetup({ $, request, post, state, renderPage, reload: loadDatabaseDiscovery, edit: openDatabaseConnection,
+    canDevelop: () => selectedProject()?.canDevelopPostgres, openDevelopment });
 
   function showParts(element, parts) {
     delete element.dataset.message;
@@ -596,6 +597,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       renderDatabaseDiscovery(project, busy || unavailable);
     },
     refresh: loadDatabase,
+    reloadDiscovery() { if ($('project-database-discovery').open) return loadDatabaseDiscovery(); },
     async openDetectedSetup(requirementId) {
       const project = selectedProject();
       if (!project) return;

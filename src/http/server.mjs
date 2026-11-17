@@ -52,13 +52,15 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     database.blocksProjectAction(project) || Boolean(operations.active(project));
   const isProjectRunning = project => ['starting', 'running', 'stopping'].includes(runtime.status(project).status);
   const projects = createProjectRegistry({ projectConfig, generatedProjects: () => jobs.projects(), isProjectBusy, isProjectRunning,
-    discoverDatabases, syncDatabaseBindings: database.scan, cleanupReplacedClone: database.cleanupReplacedClone, configWrites });
+    discoverDatabases, syncDatabaseBindings: database.scan, cleanupReplacedClone: database.cleanupReplacedClone,
+    guardDevelopmentRemoval: database.guardDevelopmentRemoval, configWrites });
   void projects.retryCloneCleanup();
   const removeProject = createProjectRemoval({ projectConfig, removals, isProjectBusy, isProjectRunning,
     trashProject: (...args) => desktop.trashProject(...args), isCreatingProject: () => jobs.busy,
     isRegistered: project => managedProjects().some(item => item.id === project.id && projectPathKey(item.path) === projectPathKey(project.path)),
     removeDatabaseProfiles: database.removeProfiles, removeDatabaseRegistration: database.removeRegistration,
-    recordProfileCleanup: project => database.record(project, 'database-profile-cleanup') });
+    recordProfileCleanup: project => database.record(project, 'database-profile-cleanup'),
+    guardDevelopmentRemoval: database.guardDevelopmentRemoval });
 
   const execute = createProjectWorkflows({ projectConfig, operations, runtime, removals, configWrites, removeProject,
     databaseBusy: database.blocksProjectAction, chooseDatabase: database.selectedCompose, recordDatabase: database.record,

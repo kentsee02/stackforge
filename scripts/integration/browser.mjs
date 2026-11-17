@@ -97,7 +97,26 @@ try {
   assert.equal(await page.locator('#project-startup').getAttribute('open'), '');
   await page.locator(check('database-missing')).getByRole('button', { name: 'Set up PostgreSQL' }).click();
   await contains('#postgres-setup-status', 'No server responded on this port.');
-  await page.keyboard.press('Escape');
+  const developmentRoute = '**/api/projects/*/database-development';
+  await page.route(developmentRoute, async route => {
+    if (route.request().method() === 'GET') return route.continue();
+    const { mode, name, port } = route.request().postDataJSON();
+    assert.equal(mode, 'preview');
+    assert.equal(name, 'app_portal');
+    await route.fulfill({ json: { plan: 'preview-only', name, port, host: '127.0.0.1', image: 'postgres:17' } });
+  });
+  await page.getByRole('button', { name: 'Open project PostgreSQL' }).click();
+  await page.locator('#development-postgres-preview').click();
+  await contains('#development-postgres-dialog-title', 'Create project PostgreSQL');
+  assert.equal(await page.locator('#development-postgres-apply').isDisabled(), true);
+  await page.locator('#development-postgres-confirm').fill('app_portal');
+  assert.equal(await page.locator('#development-postgres-apply').isEnabled(), true);
+  await page.locator('#development-postgres-cancel').click();
+  await page.unroute(developmentRoute);
+  await page.locator('#language').selectOption('zh-CN');
+  await contains('#project-development-postgres > summary', '项目专属 PostgreSQL');
+  await contains('#development-postgres-preview', '预览 PostgreSQL 实例');
+  await page.locator('#language').selectOption('en');
   await assert.rejects(stat(join(project, '.env')), { code: 'ENOENT' });
   await writeFile(join(project, '.env'), 'DATABASE_URL=postgresql://demo:changeme@127.0.0.1:5432/example\n');
   await runPreflight('database-placeholder');

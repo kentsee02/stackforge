@@ -24,7 +24,7 @@ const messages = {
   'environment-conflict': 'StackForge could not verify that Prisma and the project use the same database URL. Check the environment configuration.'
 };
 
-export function createPostgresSetup({ $, post, request, state, renderPage, reload, edit }) {
+export function createPostgresSetup({ $, post, request, state, renderPage, reload, edit, canDevelop, openDevelopment }) {
   const el = suffix => $('postgres-setup-' + suffix);
   let current, result, busy = false;
 
@@ -32,6 +32,7 @@ export function createPostgresSetup({ $, post, request, state, renderPage, reloa
     const mode = result?.status === 'configure' ? 'save' : result?.planId && (result.status === 'database' ? 'create' : 'migrate');
     const conflict = result?.status === 'environment-conflict';
     el('guide').hidden = !['server', 'stopped', 'client'].includes(result?.status);
+    el('development').hidden = busy || current?.configured || !canDevelop();
     el('edit').hidden = busy || !current?.requirement.environmentEdit ||
       !['server', 'authentication', 'permission', 'tls', 'connection', 'remote', 'loopback-ambiguous'].includes(result?.status);
     el('dependencies').hidden = busy || result?.status !== 'prisma-client';
@@ -112,6 +113,11 @@ export function createPostgresSetup({ $, post, request, state, renderPage, reloa
   el('dependencies').addEventListener('click', () => {
     el('dialog').close();
     $('install-dependencies').focus();
+  });
+  el('development').addEventListener('click', () => {
+    const requirement = current?.requirement.id;
+    el('dialog').close();
+    openDevelopment(requirement);
   });
   el('dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
   el('dialog').addEventListener('close', () => { el('form').reset(); current = result = undefined; });

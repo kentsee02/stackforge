@@ -1,13 +1,25 @@
 # StackForge product backlog
 
-Develop these candidates in priority order. v0.33.0 completes the first item. The v0.32.3 stability work is recorded in the [refactor checklist](REFACTOR-CHECKLIST.md) and the published release.
+Develop these candidates in priority order. v0.33.0 completed startup preflight. v0.34.0 covers project-scoped PostgreSQL for imports and clones.
 
-1. **Project startup preflight.** Check a locally imported or cloned project before starting it and point users to the relevant setup action.
-2. **Project-scoped development databases.** Start with a managed PostgreSQL instance in Docker for a single project. Define ownership and cleanup before exposing creation.
-3. **Additional migration adapters.** Choose one from a real imported project. Start with target checks and a preview before supporting execution.
-4. **Project activity history and overview.** Begin with a project's installation, checks, and database outcomes. Evaluate a global task view and dashboard after that.
-5. **Environment, integrations, and settings.** Evaluate dedicated tools and settings views once project-level flows establish what users need to manage.
-6. **Extended database management.** Evaluate backup and lifecycle operations for MongoDB, Redis, and SQL Server, then provider-specific cloud lifecycle workflows.
+1. **Project startup preflight** (completed). Check a locally imported or cloned project and point users to the relevant setup action.
+2. **Project-scoped development databases** (completed for Docker PostgreSQL). Imports and clones can create and manage one dedicated instance.
+3. **Additional migration adapters.** Evaluate Drizzle Kit, Alembic, EF Core Migrations, Flyway, and Liquibase against real imports. Start with target checks and a preview before supporting execution.
+4. **Project activity history.** Record installation, check, and database outcomes per project.
+5. **Global task history and queue.** Evaluate a cross-project task view and queue after the individual workflows expose compatible state.
+6. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases, and Tasks.
+7. **Standalone environment view.** Consolidate tool availability, versions, executable paths, and prerequisite guidance.
+8. **Standalone integrations view.** Consolidate Git, GitHub, Docker, and desktop integration status. Evaluate broader integration preferences here.
+9. **App-wide settings.** Evaluate theme, notifications, and other app-wide preferences independently of project configuration.
+10. **Additional local database operations.** Evaluate backup, restore, and lifecycle controls for MongoDB, Redis, and SQL Server individually.
+11. **Native PostgreSQL and MySQL provisioning.** Evaluate setup for supported local operating systems with their existing server and permissions model.
+12. **Cloud database lifecycle.** Evaluate provider-specific provisioning, lifecycle, and deletion with separate provider permissions.
+
+## v0.34.0 project-scoped PostgreSQL
+
+- [x] Preview and confirm one PostgreSQL instance per verified external import or clone. Use a dedicated, verified Docker container and volume with a loopback port.
+- [x] Start, stop, and inspect its readiness. Write a selected missing or placeholder connection variable through the existing environment-file safety checks.
+- [x] Preserve data on stop and verify exact-target confirmation, ownership, and shared use before removing resources. `npm run test:development-postgres` covers real Docker and replaced containers and volumes. `npm run test:browser` covers the guide, preview, and localization.
 
 ## v0.33.0 startup preflight
 

@@ -10,6 +10,7 @@ import { startupPreflight } from './project-preflight.mjs';
 function projectDetails(project) {
   const { cloneId, cloneIdentity, folderIdentity, startup, ...details } = project;
   return { ...details, ...(cloneId && { cloned: true }), ...(removeOnly(project) && { removeOnly: true }),
+    ...(project.imported && project.unmanaged && folderIdentity && { canDevelopPostgres: true }),
     ...(project.unmanaged && { external: !project.frameworks.length,
       hasStartup: Boolean(startup?.services.some(service => service.command)),
       hasInstallCommands: Boolean(startup?.services.some(service => service.installCommand)) }) };

@@ -14,7 +14,7 @@ export class ProjectRemovalError extends Error {
 }
 
 export function createProjectRemoval({ projectConfig, removals, trashProject, isProjectBusy, isProjectRunning,
-  isCreatingProject, isRegistered, removeDatabaseProfiles, removeDatabaseRegistration, recordProfileCleanup }) {
+  isCreatingProject, isRegistered, removeDatabaseProfiles, removeDatabaseRegistration, recordProfileCleanup, guardDevelopmentRemoval }) {
   return async function removeProject(project, { action, confirmName }) {
     if (confirmName !== project.name) throw new ProjectRemovalError('invalid-request', 'Enter the exact project name to confirm deletion.');
     const offline = !await locationExists(project.path);
@@ -28,6 +28,8 @@ export function createProjectRemoval({ projectConfig, removals, trashProject, is
 
     const moving = action !== 'remove' && !offline && !removeOnly(project);
     const done = (async () => {
+      try { await guardDevelopmentRemoval?.(project); }
+      catch (error) { throw new ProjectRemovalError('conflict', error.message); }
       if (moving) {
         const { directory } = await inspectRecordedProject(project);
         if (project.cloneId) {

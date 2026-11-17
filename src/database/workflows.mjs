@@ -13,6 +13,7 @@ import { defaultPorts, projectPathKey } from '../projects/project-config.mjs';
 import { locationExists } from '../platform/paths.mjs';
 import { commandDiagnostic } from '../projects/project-diagnostics.mjs';
 import { discoverDatabases } from './discovery.mjs';
+import { developmentPostgres } from './docker/development-postgres.mjs';
 
 export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
   runtime, removals, configWrites, localDatabase, isClosing }) {
@@ -24,6 +25,14 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     directory: stagingRoot,
     vault: databaseVault(stateDir ? join(dirname(stateDir), 'credentials') : undefined), ...databaseAdapters });
   const databaseWrites = new Map();
+  const development = developmentPostgres({ registry: databaseRegistry, ...databaseAdapters.developmentPostgres,
+    async verifyShared(project, endpoint) {
+      const activeIds = await refreshDatabaseBindings(project.id, true);
+      if (databaseRegistry.usesEndpoint(project.id, endpoint, activeIds)) {
+        throw new Error('Another project uses this database. Shared databases cannot be deleted from StackForge.');
+      }
+    }
+  });
   let transfer;
 
   async function scanDatabases(project, discovery, activeIds) {
@@ -99,6 +108,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
   }
 
   async function inspect(project, view, { includeCapabilities, logs, requested }) {
+    if (view === 'database-development') return development.inspect(project);
     if (view === 'database-discovery') {
       const activeIds = await refreshDatabaseBindings(project.id);
       const discovery = await scanDatabases(project, undefined, activeIds);
@@ -218,10 +228,25 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       throw new Error('Stop the project before initializing its database.');
     }
     const setupWrites = action === 'database-postgres-setup' && ['create', 'save', 'migrate'].includes(payload.mode);
-    if ((action === 'database-connection-config' || setupWrites) && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
-      throw new Error('Stop the project before saving its database connection.');
+    const developmentWrite = action === 'database-development' && payload.mode !== 'preview';
+    if (action === 'database-development' && !developmentWrite) return development.action(project, payload, controller.signal);
+    if ((action === 'database-connection-config' || setupWrites || developmentWrite) &&
+        ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
+      throw new Error(developmentWrite ? 'Stop the project before changing its dedicated PostgreSQL instance.' :
+        'Stop the project before saving its database connection.');
     }
     const done = (async () => {
+      if (action === 'database-development') {
+        const record = developmentWrite ? databaseLog.begin(project, 'database-development-' + payload.mode) : undefined;
+        try {
+          const result = await development.action(project, payload, controller.signal);
+          await record?.('succeeded');
+          return result;
+        } catch (error) {
+          await record?.(controller.signal.aborted ? 'cancelled' : 'failed');
+          throw error;
+        }
+      }
       if (action === 'database-connection-config') return saveDatabaseEnvironment(project, payload, controller.signal);
       if (action === 'database-postgres-setup') {
         const verifyTarget = async target => {
@@ -340,5 +365,6 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
   return { inspect, resourceAction, localAction, startArchive, startLegacyBackup, transferBlocked, stagingRoot,
     redact: redactDatabase.text, shutdown, scan: scanDatabases, verifyDeletion: verifyDatabaseDeletion, selectedCompose,
     operation, blocksProjectAction, cleanupReplacedClone, removeProfiles: resources.removeProfiles,
-    removeRegistration: id => databaseRegistry.remove(id), record: databaseLog.begin };
+    removeRegistration: id => databaseRegistry.remove(id), record: databaseLog.begin,
+    guardDevelopmentRemoval: development.guardRemoval };
 }

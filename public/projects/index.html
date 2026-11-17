@@ -155,6 +155,29 @@
             <p id="runtime-log-empty" data-i18n="启动项目后，输出会显示在这里。">Output will appear here after you start the project.</p>
             <pre id="runtime-output" aria-labelledby="runtime-log-title" tabindex="0" hidden></pre>
           </div>
+          <details id="project-development-postgres" class="project-ports" hidden>
+            <summary data-i18n="项目专属 PostgreSQL">Project PostgreSQL</summary>
+            <p id="development-postgres-status" class="hint" role="status"></p>
+            <p id="development-postgres-target" class="hint" hidden></p>
+            <form id="development-postgres-create" hidden>
+              <p class="hint" data-i18n="在本机 Docker 中为此项目创建独立的 PostgreSQL 17 实例。">Create a dedicated PostgreSQL 17 instance for this project in local Docker.</p>
+              <div class="port-fields">
+                <label class="inline-field"><span data-i18n="数据库名称">Database name</span><input id="development-postgres-name" pattern="[a-z][a-z0-9_]{0,62}" maxlength="63" required></label>
+                <label class="inline-field"><span data-i18n="端口">Port</span><input id="development-postgres-port" type="number" min="1024" max="65535" required></label>
+              </div>
+              <button id="development-postgres-preview" type="submit" class="secondary" data-i18n="预览 PostgreSQL 实例">Preview PostgreSQL instance</button>
+            </form>
+            <div id="development-postgres-controls" class="project-operation-actions" hidden>
+              <button id="development-postgres-start" class="secondary" type="button" data-i18n="启动 PostgreSQL">Start PostgreSQL</button>
+              <button id="development-postgres-stop" class="secondary" type="button" data-i18n="停止 PostgreSQL">Stop PostgreSQL</button>
+              <button id="development-postgres-delete" class="secondary danger" type="button" data-i18n="删除 PostgreSQL 数据卷">Delete PostgreSQL volume</button>
+            </div>
+            <form id="development-postgres-connect" hidden>
+              <label class="inline-field"><span data-i18n="要配置的连接变量">Connection variable to configure</span><select id="development-postgres-requirement" required></select></label>
+              <button id="development-postgres-save" type="submit" class="secondary" data-i18n="保存数据库 URL">Save database URL</button>
+            </form>
+            <button id="development-postgres-refresh" type="button" class="text-button" data-i18n="刷新 PostgreSQL 状态">Refresh PostgreSQL status</button>
+          </details>
           <details id="project-database-discovery" class="project-ports">
             <summary data-i18n="数据库发现与初始化">Database discovery and initialization</summary>
             <p id="database-discovery-message" class="hint" role="status"></p>
@@ -337,7 +360,7 @@
       </div>
       <div id="postgres-setup-guide" hidden>
         <p class="hint" data-i18n="可安装 PostgreSQL，或用 Docker 运行官方镜像。Docker 可将本机端口映射到容器的 5432 端口。StackForge 需要本机 psql 客户端。">Install PostgreSQL or run the official image with Docker. Docker can map your local port to port 5432 in the container. StackForge needs the local psql client.</p>
-        <div class="project-operation-actions"><a href="https://www.postgresql.org/download/" target="_blank" rel="noreferrer" data-i18n="安装 PostgreSQL">Install PostgreSQL</a><a href="https://hub.docker.com/_/postgres" target="_blank" rel="noreferrer" data-i18n="PostgreSQL Docker 指南">PostgreSQL Docker guide</a></div>
+        <div class="project-operation-actions"><button id="postgres-setup-development" type="button" class="secondary" data-i18n="打开项目专属 PostgreSQL" hidden>Open project PostgreSQL</button><a href="https://www.postgresql.org/download/" target="_blank" rel="noreferrer" data-i18n="安装 PostgreSQL">Install PostgreSQL</a><a href="https://hub.docker.com/_/postgres" target="_blank" rel="noreferrer" data-i18n="PostgreSQL Docker 指南">PostgreSQL Docker guide</a></div>
       </div>
       <ul id="postgres-setup-migrations" class="check-list"></ul>
       <label class="inline-field project-trash-field" id="postgres-setup-confirm-field" hidden>
@@ -348,6 +371,21 @@
         <button id="postgres-setup-close" type="button" class="secondary" data-i18n="关闭">Close</button>
         <button id="postgres-setup-check" type="submit" class="secondary" data-i18n="检查数据库">Check database</button>
         <button id="postgres-setup-next" type="button" class="secondary" hidden></button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="development-postgres-dialog" class="project-trash-dialog postgres-setup-dialog" aria-labelledby="development-postgres-dialog-title">
+    <h2 id="development-postgres-dialog-title"></h2>
+    <p class="hint" id="development-postgres-dialog-target"></p>
+    <form id="development-postgres-confirm-form">
+      <label class="inline-field project-trash-field">
+        <span id="development-postgres-confirm-hint"></span>
+        <strong id="development-postgres-confirm-target"></strong>
+        <input id="development-postgres-confirm" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+      </label>
+      <div class="project-trash-actions">
+        <button id="development-postgres-cancel" type="button" class="secondary" data-i18n="取消">Cancel</button>
+        <button id="development-postgres-apply" type="submit"></button>
       </div>
     </form>
   </dialog>

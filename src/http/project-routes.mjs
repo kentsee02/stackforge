@@ -5,18 +5,19 @@ import { send } from './response.mjs';
 const savedActions = new Set(['ports', 'check-config', 'startup', 'trash', 'remove']);
 
 export function matchProjectAction(pathname) {
-  return /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|database-connection-config|database-postgres-setup|database-local-status|database-remote-profile|database-sqlite-inspect|database-sqlite-create|run-check|check-cancel|check-config)$/.exec(pathname);
+  return /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|database-connection-config|database-postgres-setup|database-development|database-local-status|database-remote-profile|database-sqlite-inspect|database-sqlite-create|run-check|check-cancel|check-config)$/.exec(pathname);
 }
 
 export function createProjectRoutes({ projects, queries, databaseRoutes, removals, isCreatingProject, clone, execute }) {
-  const clones = createProjectClone({ clone, register: async (path, cloneInfo) => queries.describe(await projects.register(path, cloneInfo)) });
+  const clones = createProjectClone({ clone, beforePromotion: projects.guardCloneReplacement,
+    register: async (path, cloneInfo) => queries.describe(await projects.register(path, cloneInfo)) });
 
   async function get(res, url) {
     const reply = (status, value) => { send(res, status, value); return true; };
     if (url.pathname === '/api/projects') {
       return reply(200, { projects: await queries.list(url.searchParams.get('logs')) });
     }
-    const projectView = /^\/api\/projects\/([^/]+)\/(database|database-discovery|database-delete|checks|git|dependencies|startup-suggestions|startup-preflight)$/.exec(url.pathname);
+    const projectView = /^\/api\/projects\/([^/]+)\/(database|database-discovery|database-delete|database-development|checks|git|dependencies|startup-suggestions|startup-preflight)$/.exec(url.pathname);
     if (projectView) {
       const [, id, view] = projectView;
       const project = projects.list().find(item => item.id === id);

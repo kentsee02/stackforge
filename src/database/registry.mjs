@@ -28,7 +28,7 @@ export function databaseResource(project, requirement, port) {
 export class DatabaseRegistry {
   constructor(file) {
     this.file = file;
-    this.value = { requirements: {}, servers: {}, instances: {}, bindings: {}, migrations: [], profiles: {}, backups: [] };
+    this.value = { requirements: {}, servers: {}, instances: {}, bindings: {}, migrations: [], profiles: {}, backups: [], development: {} };
     this.pending = Promise.resolve();
     this.ready = file ? readFile(file, 'utf8').then(text => {
       const data = JSON.parse(text);
@@ -58,6 +58,15 @@ export class DatabaseRegistry {
       this.value = next;
     });
     return this.pending;
+  }
+
+  saveDevelopment(projectId, record) {
+    return this.update(value => {
+      const development = { ...value.development };
+      if (record) development[projectId] = record;
+      else delete development[projectId];
+      return { ...value, development };
+    });
   }
 
   sync(project, requirements, port, verifyRegistration) {
