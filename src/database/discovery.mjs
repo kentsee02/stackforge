@@ -6,6 +6,7 @@ import { isIP } from 'node:net';
 import { localText } from '../projects/detection/project-detection.mjs';
 import { scanProjectServices } from '../projects/detection/project-services.mjs';
 import { resolveStartup } from '../projects/project-startup.mjs';
+import { drizzleConfig } from './migrations/drizzle-config.mjs';
 
 export const databaseKey = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 export const sqlName = /^[a-zA-Z][a-zA-Z0-9_]{0,62}$/;
@@ -183,6 +184,24 @@ export async function discoverDatabases(project, { includeConnections = false } 
     const prisma = ['prisma/schema.prisma', 'schema.prisma'];
     const localEntries = [...env].map(([name, values]) => [directory === '.' ? name : directory + '/' + name, values]);
     const environmentEntries = directory === '.' ? localEntries : [...rootEnv, ...localEntries];
+    if (typeof dependencies['drizzle-kit'] === 'string') {
+      const drizzle = await drizzleConfig(folder, files, projectText);
+      if (drizzle) {
+        const { file, variable } = drizzle;
+        const defined = environmentEntries.filter(([name, values]) => !name.endsWith('.env.example') && Object.hasOwn(values, variable))
+          .map(([name, values]) => [name, values[variable]]);
+        if (Object.hasOwn(process.env, variable)) defined.push(['Process environment', process.env[variable]]);
+        const environmentConflict = new Set(defined.map(([, value]) => value)).size > 1 ||
+          Boolean(process.env.DOTENV_CONFIG_PATH);
+        const value = defined[0]?.[1];
+        const parsed = connection(value, 'postgres');
+        const state = environmentConflict || parsed.engine !== 'postgres' ? { engine: 'postgres', status: 'ambiguous' } : parsed;
+        const id = add(directory, file, variable, { ...state, orm: 'Drizzle',
+          environmentVariable: variable, migrationAdapter: 'drizzle' });
+        if (includeConnections && id) connections.set(id, { ...drizzle, value, environmentConflict,
+          environmentSources: [...defined.map(([name]) => name), ...(process.env.DOTENV_CONFIG_PATH ? ['DOTENV_CONFIG_PATH'] : [])] });
+      }
+    }
     const prismaConfig = await prismaConnection(folder, directory, files, runtimeEnv, env.get('.env'), environmentEntries);
     if (prismaConfig?.schema?.endsWith('.prisma') && !prismaConfig.schema.startsWith('../') && !prisma.includes(prismaConfig.schema)) prisma.push(prismaConfig.schema);
     const configs = [...files.filter(file => /^(?:application(?:-[\w-]+)?\.(?:properties|ya?ml)|appsettings(?:\.[\w-]+)?\.json|settings\.py|database\.ya?ml|requirements\.txt|pyproject\.toml|Gemfile)$/i.test(file)).slice(0, 20),

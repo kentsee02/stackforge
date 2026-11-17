@@ -14,6 +14,7 @@ import { locationExists } from '../platform/paths.mjs';
 import { commandDiagnostic } from '../projects/project-diagnostics.mjs';
 import { discoverDatabases } from './discovery.mjs';
 import { developmentPostgres } from './docker/development-postgres.mjs';
+import { previewDrizzle } from './migrations/drizzle-preview.mjs';
 
 export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
   runtime, removals, configWrites, localDatabase, isClosing }) {
@@ -223,6 +224,11 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
   async function resourceAction(project, action, payload, controller) {
     if (databaseWrites.size || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
       throw new Error('Wait for the current project operation to finish.');
+    }
+    if (action === 'database-drizzle-preview') {
+      const { signal } = controller;
+      return previewDrizzle({ project, requirementId: payload.requirementId, command: localDatabase.command,
+        resolveClient: target => development.client(project, target, signal), probe: localDatabase.probe, signal });
     }
     if (action === 'database-sqlite-create' && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
       throw new Error('Stop the project before initializing its database.');

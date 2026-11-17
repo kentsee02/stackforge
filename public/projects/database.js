@@ -1,5 +1,6 @@
 import { setText } from '/i18n.js';
 import { createPostgresSetup } from '/projects/postgres-setup.js';
+import { drizzlePreview } from '/projects/drizzle-preview.js';
 
 export function createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
   selectedId, selectedProject, renderPage, refresh, act, openDevelopment }) {
@@ -242,6 +243,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
           action.addEventListener('click', () => openDatabaseConnection(view.id, item));
           row.append(action);
         }
+        if (item.migrationAdapter === 'drizzle') row.append(drizzlePreview(view.id, item, { request, post }));
         return row;
       });
       $('database-requirements').replaceChildren(...requirements);

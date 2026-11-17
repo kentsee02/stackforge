@@ -57,10 +57,17 @@ try {
   await writeFile(join(project, 'server.mjs'), fixtureServer('Imported portal'));
   await mkdir(fixtureRepo);
   await writeFile(join(fixtureRepo, 'server.mjs'), fixtureServer('Cloned portal'));
-  await writeFile(join(fixtureRepo, 'package.json'), JSON.stringify({ name: 'cloned-portal', dependencies: { express: '5.0.0' } }));
+  await writeFile(join(fixtureRepo, 'package.json'), JSON.stringify({ name: 'cloned-portal', dependencies: { express: '5.0.0' },
+    devDependencies: { 'drizzle-kit': '^0.31.1' } }));
+  await writeFile(join(fixtureRepo, 'drizzle.config.ts'), `import type { Config } from 'drizzle-kit';
+    export default { dialect: 'postgresql', dbCredentials: { url: process.env.STACKFORGE_BROWSER_DRIZZLE_URL! } } satisfies Config;`);
+  await mkdir(join(fixtureRepo, 'drizzle/meta'), { recursive: true });
+  await writeFile(join(fixtureRepo, 'drizzle/meta/_journal.json'), JSON.stringify({ version: '7', dialect: 'postgresql',
+    entries: [{ idx: 0, version: '7', when: 1726443359662, tag: '0000_create', breakpoints: true }] }));
+  await writeFile(join(fixtureRepo, 'drizzle/0000_create.sql'), 'CREATE TABLE sample (id integer);');
   const gitOptions = { cwd: fixtureRepo, timeout: 15000 };
   await run('git', ['init', '-b', 'main'], gitOptions);
-  await run('git', ['add', 'package.json', 'server.mjs'], gitOptions);
+  await run('git', ['add', 'package.json', 'server.mjs', 'drizzle.config.ts', 'drizzle'], gitOptions);
   await run('git', ['-c', 'user.name=StackForge Test', '-c', 'user.email=stackforge-test@example.invalid',
     '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=' + join(root, 'disabled-hooks'), 'commit', '-m', 'Create isolated browser fixture'], gitOptions);
   app = createApp({ stateDir: false, clone: cloneFixture, localDatabase: { probe: async () => false, command: async () => { throw new Error('ENOENT'); } } });
@@ -253,6 +260,14 @@ try {
   const { projects: [cloned] } = await (await fetch(origin + '/api/projects')).json();
   assert.equal(cloned.cloned, true);
   assert.equal(cloned.path, join(checkoutParent, 'cloned-portal'));
+  const databaseDiscovery = page.locator('#project-database-discovery');
+  if (await databaseDiscovery.getAttribute('open') === null) await databaseDiscovery.locator(':scope > summary').click();
+  await page.getByText('Preview Drizzle migrations', { exact: true }).click();
+  await contains('.drizzle-preview [role="status"]', 'Save a supported direct PostgreSQL URL');
+  await contains('.drizzle-preview li', 'Unverified · drizzle/0000_create.sql');
+  await page.locator('#language').selectOption('zh-CN');
+  await contains('.drizzle-preview li', '未验证 · drizzle/0000_create.sql');
+  await page.locator('#language').selectOption('en');
   const startup = page.locator('#project-startup');
   if (await startup.getAttribute('open') === null) await startup.locator('summary').click();
   await page.locator('#project-startup-add').click();
@@ -262,7 +277,7 @@ try {
   await service.locator('[name="command"]').fill('node server.mjs');
   await exerciseRuntime('Cloned portal', 'api', true);
   assert.deepEqual(errors, []);
-  console.log('Verified bilingual preflight for Prisma setup, independent service folders, and launching a cloned project through its ready link.');
+  console.log('Verified bilingual startup preflight, Prisma setup, and the Drizzle migration preview in a cloned project.');
 } finally {
   try {
     await browser?.close();

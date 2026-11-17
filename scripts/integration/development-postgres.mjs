@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -43,10 +43,20 @@ async function api(path, body, expected = 200, authorized = true) {
 }
 
 const definition = 'import "dotenv/config";\nexport default { datasource: { url: env("DATABASE_URL") } };\n';
+const migrationSql = ['CREATE TABLE drizzle_first (id integer);\n', 'CREATE TABLE drizzle_second (id integer);\n'];
+const entries = migrationSql.map((_, idx) => ({ idx, version: '7', when: 1726443359662 + idx,
+  tag: '000' + idx + '_create', breakpoints: true }));
 try {
   await mkdir(join(path, 'prisma'), { recursive: true });
   await writeFile(join(path, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
   await writeFile(join(path, 'prisma.config.ts'), definition);
+  await mkdir(join(path, 'db/migrations/meta'), { recursive: true });
+  await writeFile(join(path, 'package.json'), JSON.stringify({ devDependencies: { 'drizzle-kit': '^0.31.1' } }));
+  await writeFile(join(path, 'drizzle.config.ts'), `import { defineConfig } from 'drizzle-kit';
+    export default defineConfig({ dialect: 'postgresql', out: './db/migrations', dbCredentials: { url: process.env.DATABASE_URL! },
+      migrations: { schema: 'project_history', table: 'migrations' } });`);
+  await writeFile(join(path, 'db/migrations/meta/_journal.json'), JSON.stringify({ version: '7', dialect: 'postgresql', entries }));
+  for (const { idx, tag } of entries) await writeFile(join(path, 'db/migrations', tag + '.sql'), migrationSql[idx]);
   await writeFile(join(path, '.gitignore'), '.env\n');
   await run('git', ['init'], { cwd: path });
   await startApp();
@@ -80,7 +90,6 @@ try {
   assert.equal(connections[0].variable, 'DATABASE_URL');
   const { key, container: identity } = JSON.parse(await readFile(stateFile, 'utf8')).development[id];
   const query = statement => docker(['exec', identity, 'psql', '-XAtw', '-U', 'stackforge', '-d', 'portal', '-c', statement]);
-  await query('CREATE TABLE proof (value integer); INSERT INTO proof VALUES (42)');
   const result = await action({ mode: 'save', requirementId: connections[0].id });
   assert.deepEqual(result, { saved: true, file: '.env' });
   const stored = await readFile(join(path, '.env'), 'utf8');
@@ -89,6 +98,27 @@ try {
   assert.equal(JSON.stringify(await read()).includes(password), false);
   assert.equal((await readFile(stateFile, 'utf8')).includes(password), false);
   const discovery = await api(id + '/database-discovery');
+  const drizzle = discovery.requirements.find(item => item.migrationAdapter === 'drizzle');
+  assert.equal(drizzle.status, 'configured');
+  const drizzlePreview = () => api(id + '/database-drizzle-preview', { requirementId: drizzle.id });
+  const pending = await drizzlePreview();
+  assert.equal(pending.status, 'pending');
+  assert.deepEqual(pending.migrations.map(item => item.state), ['pending', 'pending']);
+  assert.equal((await query("SELECT to_regclass('public.drizzle_first') IS NULL")).trim(), 't');
+  assert.equal(JSON.stringify(pending).includes(password), false);
+  await query('CREATE SCHEMA project_history; CREATE TABLE project_history.migrations (id serial PRIMARY KEY, hash text NOT NULL, created_at bigint);');
+  await query(`INSERT INTO project_history.migrations(hash, created_at) VALUES
+    ('${createHash('sha256').update(migrationSql[0]).digest('hex')}', ${entries[0].when});`);
+  assert.deepEqual((await drizzlePreview()).migrations.map(item => item.state), ['applied', 'pending']);
+  await query(`INSERT INTO project_history.migrations(hash, created_at) VALUES
+    ('${createHash('sha256').update(migrationSql[1]).digest('hex')}', ${entries[1].when});`);
+  assert.equal((await drizzlePreview()).status, 'current');
+  const altered = join(path, 'db/migrations', entries[0].tag + '.sql');
+  await writeFile(altered, migrationSql[0] + '-- changed after application\n');
+  assert.equal((await drizzlePreview()).status, 'history-conflict');
+  await writeFile(altered, migrationSql[0]);
+  await query('DROP SCHEMA project_history CASCADE; CREATE TABLE proof (value integer); INSERT INTO proof VALUES (42);');
+  assert.equal((await drizzlePreview()).status, 'history-conflict');
   const requirement = discovery.requirements.find(item => item.guidedSetup);
   const binding = discovery.bindings.find(item => item.requirementId === requirement.id);
   const local = () => api(id + '/database-local-check', { bindingId: binding.id }).then(result => result.installation);

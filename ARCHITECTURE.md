@@ -97,6 +97,8 @@ Database creation, connection configuration, schema initialization, and applying
 
 [Prisma CLI v7](https://www.prisma.io/docs/cli/v7/migrate/deploy) can attempt to create a missing database when running `prisma migrate deploy`. StackForge's PostgreSQL setup workflow requires an existing, verified target before applying migrations. For recognized local direct connections and an installed Prisma 7 CLI, present the committed migrations and exact target for confirmation. Revalidate the configuration, database identity, and files before execution. After applying migrations, verify the connection, migration history, and presence of tables. That readiness check does not establish full schema drift coverage.
 
+The Drizzle PostgreSQL adapter provides a read-only preview for recognized static configurations and PostgreSQL journal v7 files. It resolves a direct local PostgreSQL target from the configured environment variable, compares SQL file hashes and timestamps with the history table, and reports mismatches. Drizzle execution requires a separate workflow.
+
 Migration support is capability-based. Detecting an ORM or a migration tool does not authorize its execution. Applying migrations uses reviewed files and a confirmed target. Schema reset, schema replacement, and destructive SQL require separate explicit support and approval.
 
 #### 3.4.4 Backup and restore
@@ -136,7 +138,7 @@ Keep project-specific configuration separate from app-wide preferences. StackFor
 
 - A provider adapter reports actual capabilities for its engine and deployment type. Capability depends on current permissions, tool availability, verified target identity, and resource ownership.
 - ORM detection reads configuration and describes requirements. A migration adapter resolves the target, inspects status, produces a preview, and verifies a confirmed execution. Keep those responsibilities separate from database lifecycle and transport.
-- Additional adapters such as Drizzle Kit, Alembic, EF Core Migrations, Flyway, and Liquibase may be evaluated separately. The existence of a provider or ORM discovery rule does not establish migration support.
+- Evaluate Alembic, EF Core Migrations, Flyway, and Liquibase separately. The existence of a provider or ORM discovery rule does not establish migration support.
 - Document contracts at stable seams. Introduce a shared interface when callers need consistent operations and results. Keep capabilities optional where tools differ.
 
 ## 6. Dependencies and ownership

@@ -1,10 +1,10 @@
 # StackForge product backlog
 
-Develop these candidates in priority order. v0.33.0 completed startup preflight. v0.34.0 covers project-scoped PostgreSQL for imports and clones.
+Develop these candidates in priority order. v0.33.0 completed startup preflight, v0.34.0 added project-scoped PostgreSQL, and v0.35.0 added the first Drizzle PostgreSQL migration preview.
 
 1. **Project startup preflight** (completed). Check a locally imported or cloned project and point users to the relevant setup action.
 2. **Project-scoped development databases** (completed for Docker PostgreSQL). Imports and clones can create and manage one dedicated instance.
-3. **Additional migration adapters.** Evaluate Drizzle Kit, Alembic, EF Core Migrations, Flyway, and Liquibase against real imports. Start with target checks and a preview before supporting execution.
+3. **Additional migration adapters.** Drizzle PostgreSQL target checks and preview shipped in v0.35.0. Design confirmed, verified Drizzle execution separately. Evaluate Alembic, EF Core Migrations, Flyway, and Liquibase against real imports.
 4. **Project activity history.** Record installation, check, and database outcomes per project.
 5. **Global task history and queue.** Evaluate a cross-project task view and queue after the individual workflows expose compatible state.
 6. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases, and Tasks.
@@ -14,6 +14,12 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight.
 10. **Additional local database operations.** Evaluate backup, restore, and lifecycle controls for MongoDB, Redis, and SQL Server individually.
 11. **Native PostgreSQL and MySQL provisioning.** Evaluate setup for supported local operating systems with their existing server and permissions model.
 12. **Cloud database lifecycle.** Evaluate provider-specific provisioning, lifecycle, and deletion with separate provider permissions.
+
+## v0.35.0 Drizzle PostgreSQL migration preview
+
+- [x] Recognize a static Drizzle Kit configuration and its saved PostgreSQL URL variable. Check the target through a native client or the verified project container.
+- [x] Compare PostgreSQL journal v7 SQL checksums and timestamps against migration history. Show applied, pending, and unverified files without running project code.
+- [x] Validate a real clone of the [Next.js SaaS Starter](https://github.com/nextjs/saas-starter), plus missing URLs, conflicting settings, applied history, and changed files. Verify the Projects panel in English and Chinese.
 
 ## v0.34.0 project-scoped PostgreSQL
 
