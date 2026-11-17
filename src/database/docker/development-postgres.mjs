@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { run, throwIfCancelled } from '../../platform/process.mjs';
 import { portAvailable } from '../../platform/ports.mjs';
 import { resolveStartup } from '../../projects/project-startup.mjs';
+import { databasePortOpen } from '../adapters/local.mjs';
 import { databaseKey, discoverDatabases } from '../discovery.mjs';
 import { saveDatabaseEnvironment } from '../environment.mjs';
 
@@ -46,8 +47,10 @@ async function dockerSession(command, signal) {
       { ...base, env })) : env.DOCKER_HOST;
     if (!localEndpoint(endpoint)) throw new Error();
     for (const key of Object.keys(env)) if (/^DOCKER_(CONTEXT|HOST|TLS|TLS_VERIFY|CERT_PATH)$/i.test(key)) delete env[key];
-    const cli = (args, { timeout = base.timeout, password } = {}) => command('docker', ['--host', endpoint, ...args],
-      { ...base, timeout, env: password ? { ...env, POSTGRES_PASSWORD: password } : env });
+    const cli = (args, { timeout = base.timeout, password, input, extraEnv, stdoutLimit = base.stdoutLimit } = {}) =>
+      command('docker', ['--host', endpoint, ...args], {
+        ...base, timeout, input, stdoutLimit, env: { ...env, ...extraEnv, ...(password !== undefined && { POSTGRES_PASSWORD: password }) }
+      });
     const [daemon, version, os] = JSON.parse(await cli(['info', '--format', '[{{json .ID}},{{json .ServerVersion}},{{json .OSType}}]']));
     if (!daemon || os !== 'linux' || Number(version?.split('.')[0]) < 28 || !/^\d+\./.test(version)) throw new Error();
     return { cli, daemon };
@@ -76,10 +79,10 @@ async function owned(cli, record) {
       !volume.CreatedAt || record.created && record.created !== volume.CreatedAt)) throw new Error(changed);
   // Select only the required fields. Full container inspection includes credentials.
   const container = await inspectDocker(cli, 'container', nameOf(record), '[' +
-    ['.Id', '.Config.Labels', '.Config.Image', '.State.Status', '.Mounts', '.HostConfig.PortBindings', '.HostConfig.NetworkMode']
+    ['.Id', '.Config.Labels', '.Config.Image', '.State.Status', '.Mounts', '.HostConfig.PortBindings', '.HostConfig.NetworkMode', '.NetworkSettings.Ports']
       .map(field => '{{json ' + field + '}}').join(',') + ']');
   if (!container) return { volume };
-  const [identity, labels, configuredImage, status, mounts, bindings, network] = container;
+  const [identity, labels, configuredImage, status, mounts, bindings, network, published] = container;
   const [port] = bindings?.['5432/tcp'] ?? [];
   const [mount] = mounts ?? [];
   if (!volume || !containerId.test(identity) || record.container && record.container !== identity ||
@@ -87,7 +90,9 @@ async function owned(cli, record) {
       mounts?.length !== 1 || mount?.Type !== 'volume' || mount.Name !== volume.Name || mount.Destination !== data || !mount.RW ||
       Object.keys(bindings ?? {}).length !== 1 || bindings['5432/tcp'].length !== 1 || port.HostIp !== host ||
       port.HostPort !== String(record.port)) throw new Error(changed);
-  return { volume, container: identity, status };
+  const actual = published?.['5432/tcp'];
+  const publishedOnLoopback = actual?.length === 1 && actual[0].HostIp === host && actual[0].HostPort === String(record.port);
+  return { volume, container: identity, status, publishedOnLoopback };
 }
 
 async function ready(cli, record, target) {
@@ -150,6 +155,50 @@ export function developmentPostgres({ registry, verifyShared, command = run, pro
     const accepting = await ready(cli, record, target);
     const options = accepting ? await connections(project).catch(() => []) : [];
     return { ...summary(record, target, accepting), connections: options };
+  }
+
+  async function client(project, endpoint, signal) {
+    await registry.ready;
+    const record = current(project);
+    if (!record || endpoint.engine !== 'postgres' || endpoint.host !== host ||
+        endpoint.port !== record.port || endpoint.name !== record.name) return;
+    assertProject(project);
+    await resolveStartup(project, []);
+    const { cli, daemon } = await dockerSession(command, signal);
+    valid(record, project, daemon);
+    async function verify() {
+      if (!record.container || !record.created || current(project) !== record || record.deleting) throw new Error(changed);
+      const target = await owned(cli, record);
+      if (target.container !== record.container) throw new Error(changed);
+      return target;
+    }
+    const target = await verify();
+    return {
+      async installation(probe = databasePortOpen) {
+        const serviceStatus = target.status === 'running' ? 'running' : 'stopped';
+        const version = serviceStatus === 'running' ? await cli(['exec', target.container, 'psql', '--version']).catch(error => {
+          if (error.name === 'AbortError') throw error;
+          return '';
+        }) : '';
+        return { kind: 'project-docker', serviceStatus, clientVersion: /\b\d+\.\d+(?:\.\d+)?\b/.exec(version)?.[0],
+          portOpen: serviceStatus === 'running' && Boolean(target.publishedOnLoopback) && await probe(host, record.port) };
+      },
+      async command(program, args, options) {
+        const latest = await verify();
+        if (latest.status !== 'running' || !latest.publishedOnLoopback) throw new Error('connection refused');
+        const targetPort = args.indexOf('-p') + 1;
+        const targetHost = args.indexOf('-h') + 1;
+        const database = args[args.indexOf('-d') + 1];
+        if (program !== 'psql' || !targetPort || !targetHost || args[targetHost] !== host ||
+            args[targetPort] !== String(record.port) || !['postgres', record.name].includes(database)) throw new Error(changed);
+        const localArgs = [...args];
+        localArgs[targetPort] = '5432';
+        const extraEnv = Object.fromEntries(Object.entries(options.env).filter(([key]) =>
+          /^(?:PGPASSWORD|PGCONNECT_TIMEOUT|PGOPTIONS|PGSSLMODE|LC_ALL)$/.test(key)));
+        return cli(['exec', '-i', ...Object.keys(extraEnv).flatMap(key => ['-e', key]),
+          latest.container, 'psql', ...localArgs], { input: options.input, timeout: options.timeout, stdoutLimit: options.stdoutLimit, extraEnv });
+      }
+    };
   }
 
   async function action(project, payload, signal) {
@@ -234,7 +283,7 @@ export function developmentPostgres({ registry, verifyShared, command = run, pro
     return { changed: true };
   }
 
-  return { inspect, action, async guardRemoval(project) {
+  return { inspect, action, client, async guardRemoval(project) {
     await registry.ready;
     if (current(project)) throw new Error('Delete the dedicated PostgreSQL volume before removing this project.');
   } };

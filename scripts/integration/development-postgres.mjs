@@ -17,7 +17,7 @@ const docker = (args, options = {}) => run('docker', args, { stdoutOnly: true, t
 let app, origin, token, listener, id, movedContainer;
 
 async function startApp() {
-  app = createApp({ stateDir });
+  app = createApp({ stateDir, localDatabase: { command: async () => { throw new Error('ENOENT'); } } });
   app.listen(0, '127.0.0.1');
   await once(app, 'listening');
   origin = 'http://127.0.0.1:' + app.address().port;
@@ -86,10 +86,23 @@ try {
   assert.ok(password);
   assert.equal(JSON.stringify(await read()).includes(password), false);
   assert.equal((await readFile(stateFile, 'utf8')).includes(password), false);
+  const discovery = await api(id + '/database-discovery');
+  const requirement = discovery.requirements.find(item => item.guidedSetup);
+  const binding = discovery.bindings.find(item => item.requirementId === requirement.id);
+  const local = () => api(id + '/database-local-check', { bindingId: binding.id }).then(result => result.installation);
+  const prisma = () => api(id + '/database-postgres-setup', { mode: 'inspect', requirementId: requirement.id });
+  assert.deepEqual(await local(), { kind: 'project-docker', serviceStatus: 'running', portOpen: true,
+    clientVersion: (await docker(['exec', identity, 'psql', '--version'])).match(/\b17\.\d+\b/)[0] });
+  const schema = await prisma();
+  assert.equal(schema.status, 'migrations-unavailable');
+  assert.equal(schema.tables, 1);
+  assert.equal(JSON.stringify(schema).includes(password), false);
   await action({ mode: 'delete', confirm: volume }, 409);
   assert.match((await api(id + '/remove', { confirmName: 'portal' }, 409)).error, /dedicated PostgreSQL volume/);
   await action({ mode: 'stop' });
   assert.equal((await read()).status, 'stopped');
+  assert.deepEqual(await local(), { kind: 'project-docker', serviceStatus: 'stopped', portOpen: false });
+  assert.equal((await prisma()).status, 'docker-stopped');
   await stopApp();
   await startApp();
   assert.equal((await read()).status, 'stopped');

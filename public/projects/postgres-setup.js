@@ -3,6 +3,8 @@ import { setText } from '/i18n.js';
 const messages = {
   server: 'No server responded on this port. Start PostgreSQL and check again.',
   stopped: 'A local PostgreSQL service is installed and stopped. Start it and check again.',
+  'docker-stopped': 'Start the container in Project PostgreSQL and check again.',
+  'docker-unreachable': 'Open Project PostgreSQL and verify that the container is running and its port is reachable.',
   client: 'The port is open. Install psql to identify the server and check the database.',
   credentials: 'The port is open. Enter the PostgreSQL account to check the database.',
   check: 'Check the saved connection and migration status.',

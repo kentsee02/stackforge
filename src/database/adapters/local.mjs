@@ -45,7 +45,7 @@ export function validateLocalTarget(server, instance) {
   return { engine, host, port, name };
 }
 
-function listening(host, port) {
+export function databasePortOpen(host, port) {
   return new Promise(resolve => {
     const socket = connect({ host, port });
     const finish = value => { socket.destroy(); resolve(value); };
@@ -55,12 +55,12 @@ function listening(host, port) {
   });
 }
 
-export async function localhostEndpoint(port, probe = listening) {
+export async function localhostEndpoint(port, probe = databasePortOpen) {
   const [ipv4, ipv6] = await Promise.all([probe('127.0.0.1', port), probe('::1', port)]);
   return ipv4 && ipv6 ? null : ipv6 ? '::1' : '127.0.0.1';
 }
 
-export async function localInstallation(target, { command = run, platform = process.platform, probe = listening } = {}) {
+export async function localInstallation(target, { command = run, platform = process.platform, probe = databasePortOpen } = {}) {
   const { engine, host, port } = target;
   const { client, server, service, help } = engineConfig[engine];
   async function version(program) {

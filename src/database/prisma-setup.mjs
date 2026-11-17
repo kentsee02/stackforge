@@ -124,7 +124,7 @@ function placeholderEdit(requirement, connection) {
   }
 }
 
-export async function postgresSetup({ project, payload, command = run, installation = {}, prismaCommand = run, verifyTarget, signal }) {
+export async function postgresSetup({ project, payload, command = run, installation = {}, prismaCommand = run, verifyTarget, resolveClient, signal }) {
   if (!['probe', 'inspect', 'create', 'save', 'migrate'].includes(payload.mode)) throw new Error(changed);
   const { root, identity, requirements, connections } = await discoverDatabases(project, { includeConnections: true });
   const requirement = requirements.find(item => item.id === payload.requirementId && item.guidedSetup);
@@ -155,19 +155,23 @@ export async function postgresSetup({ project, payload, command = run, installat
   const envPath = requirement.directory === '.' ? envFile : `${requirement.directory}/${envFile}`;
   const summary = { host: target.host, port: target.port, name: target.name, schema, variable: requirement.environmentVariable, envPath };
   const respond = (status, fields) => ({ status, target: summary, ...fields });
+  const client = await resolveClient?.(target);
+  const container = client && await client.installation(installation.probe);
+  if (container && !container.portOpen) return respond(container.serviceStatus === 'stopped' ? 'docker-stopped' : 'docker-unreachable');
   if (payload.mode === 'probe' || !configured && !payload.user) {
-    const result = await localInstallation(target, installation);
+    const result = container ?? await localInstallation(target, installation);
     if (!result.portOpen) return respond(result.serviceStatus === 'stopped' ? 'stopped' : 'server');
     return respond(!result.clientVersion ? 'client' : configured ? 'check' : 'credentials');
   }
-  const session = localSession(target, credentials, command, signal);
+  const queryCommand = client?.command ?? command;
+  const session = localSession(target, credentials, queryCommand, signal);
   let state;
   try { state = await schemaStatus(session, target, schema); }
   catch (error) {
     if (error.name === 'AbortError') throw error;
     if (error.issue !== 'database') return respond(error.issue ?? 'connection');
     const binding = { instanceId: requirement.id };
-    const options = { project, binding, target, credentials, command, signal };
+    const options = { project, binding, target, credentials, command: queryCommand, signal };
     let plan;
     try { plan = await initializationPlan(options); }
     catch (failure) { if (failure.name === 'AbortError') throw failure; return respond(failure.issue ?? 'connection'); }

@@ -356,15 +356,18 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       const result = await post(`/api/projects/${view.id}/${action}`, token, data, 120000);
       if (view !== databaseDiscovery) return;
       if (result.installation) {
-        const { clientVersion, serverVersion, serviceStatus, portOpen, help } = result.installation;
+        const { kind, clientVersion, serverVersion, serviceStatus, portOpen, help } = result.installation;
+        const docker = kind === 'project-docker';
         showParts($('database-local-status'), [
-          clientVersion ? `Client version ${clientVersion}` : 'Database client unavailable',
+          clientVersion ? docker ? `Container client version ${clientVersion}` : `Client version ${clientVersion}` :
+            docker ? '' : 'Database client unavailable',
           serverVersion ? `Server version ${serverVersion}` : '',
-          { running: 'Local service running', stopped: 'Local service stopped', unknown: 'Local service status unknown' }[serviceStatus],
+          docker ? serviceStatus === 'running' ? 'Project PostgreSQL container running' : 'Project PostgreSQL container stopped' :
+            { running: 'Local service running', stopped: 'Local service stopped', unknown: 'Local service status unknown' }[serviceStatus],
           portOpen ? 'Port reachable' : 'Port unavailable'
         ]);
-        $('database-local-help').href = help;
-        $('database-local-help').hidden = Boolean(clientVersion && portOpen);
+        if (help) $('database-local-help').href = help;
+        $('database-local-help').hidden = !help || Boolean(clientVersion && portOpen);
       } else if (action === 'database-initialization-plan') {
         resetInitialization();
         view.plan = { id: result.id, name: binding.instance.name };

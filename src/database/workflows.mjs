@@ -258,6 +258,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
         const record = setupWrites ? databaseLog.begin(project, payload.mode === 'migrate' ? 'database-migrate' : 'database-initialize') : undefined;
         try {
           const result = await postgresSetup({ project, payload, command: localDatabase.command, prismaCommand: databaseAdapters.prismaCommand,
+            resolveClient: target => development.client(project, target, controller.signal),
             installation: { ...localDatabase, directory: stagingRoot },
             signal: controller.signal, verifyTarget });
           await record?.(['check', 'configure', 'ready'].includes(result.status) ? 'succeeded' : 'failed');
@@ -292,10 +293,12 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     const work = (async () => {
       const activeIds = await refreshDatabaseBindings(project.id);
       const { binding, target } = await localDatabaseTarget(project, payload.bindingId, activeIds);
-      if (action === 'database-local-check') return { installation: await localInstallation(target, localDatabase) };
+      const client = await development.client(project, target, controller.signal);
+      if (action === 'database-local-check') return { installation: client ? await client.installation(localDatabase.probe) :
+        await localInstallation(target, localDatabase) };
       const credentials = { user: payload.user, password: payload.password };
       const options = { project, binding, target, credentials, schema: payload.schema === true,
-        command: localDatabase.command, signal: controller.signal };
+        command: client?.command ?? localDatabase.command, signal: controller.signal };
       if (action === 'database-initialization-plan') {
         const inspected = await initializationPlan(options);
         if (inspected.state.fingerprint) await databaseRegistry.verify(binding.instanceId, inspected.state);
