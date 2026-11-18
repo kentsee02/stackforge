@@ -3,17 +3,26 @@
 Develop these candidates in priority order. v0.33.0 completed startup preflight, v0.34.0 added project-scoped PostgreSQL, and v0.35.0 added the first Drizzle PostgreSQL migration preview.
 
 1. **Project startup preflight** (completed). Check a locally imported or cloned project and point users to the relevant setup action.
-2. **Project-scoped development databases** (completed for Docker PostgreSQL). Imports and clones can create and manage one dedicated instance.
-3. **Additional migration adapters.** Drizzle PostgreSQL preview and confirmed execution for supported schema additions shipped in v0.35.0 and v0.36.0. Alembic file preview and read-only PostgreSQL history checks ship in v0.37.0 and v0.38.0. Evaluate EF Core Migrations, Flyway, and Liquibase against real imports.
-4. **Project activity history.** Record installation, check, and database outcomes per project.
-5. **Global task history and queue.** Evaluate a cross-project task view and queue after the individual workflows expose compatible state.
-6. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases, and Tasks.
-7. **Standalone environment view.** Consolidate tool availability, versions, executable paths, and prerequisite guidance.
-8. **Standalone integrations view.** Consolidate Git, GitHub, Docker, and desktop integration status. Evaluate broader integration preferences here.
-9. **App-wide settings.** Evaluate theme, notifications, and other app-wide preferences independently of project configuration.
-10. **Additional local database operations.** Evaluate backup, restore, and lifecycle controls for MongoDB, Redis, and SQL Server individually.
-11. **Native PostgreSQL and MySQL provisioning.** Evaluate setup for supported local operating systems with their existing server and permissions model.
-12. **Cloud database lifecycle.** Evaluate provider-specific provisioning, lifecycle, and deletion with separate provider permissions.
+2. **Engine-aware development database setup.** Replace the PostgreSQL-specific entry point with a project development database workflow. Use service-level discovery to recommend an engine and offer the existing connection or Compose controls when eligible. Confirm the service, engine, and evidence again on the server before creating a dedicated instance.
+3. **FastAPI startup detection for imports and clones.** Recognize common multi-name imports and named ASGI application objects, including a typed object initialized by a local factory. Preserve the service working directory and saved custom commands.
+4. **Project-scoped MySQL.** Dedicated Docker PostgreSQL shipped in v0.34.0. Once engine-aware setup is in place, add dedicated Docker MySQL with verified lifecycle, connection settings, backup, restore, and volume ownership.
+5. **Additional migration adapters.** Drizzle PostgreSQL preview and confirmed execution for supported schema additions shipped in v0.35.0 and v0.36.0. Alembic file preview and read-only PostgreSQL history checks ship in v0.37.0 and v0.38.0. Evaluate EF Core Migrations, Flyway, and Liquibase against real imports.
+6. **Project activity history.** Record installation, check, and database outcomes per project.
+7. **Global task history and queue.** Evaluate a cross-project task view and queue after the individual workflows expose compatible state.
+8. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases, and Tasks.
+9. **Standalone environment view.** Consolidate tool availability, versions, executable paths, and prerequisite guidance.
+10. **Standalone integrations view.** Consolidate Git, GitHub, Docker, and desktop integration status. Evaluate broader integration preferences here.
+11. **App-wide settings.** Evaluate theme, notifications, and other app-wide preferences independently of project configuration.
+12. **Additional local database operations.** Evaluate backup, restore, and lifecycle controls for MongoDB, Redis, and SQL Server individually.
+13. **Native PostgreSQL and MySQL provisioning.** Evaluate setup for supported local operating systems with their existing server and permissions model.
+14. **Cloud database lifecycle.** Evaluate provider-specific provisioning, lifecycle, and deletion with separate provider permissions.
+
+## Development database setup and FastAPI acceptance cases
+
+- A service with a MySQL provider or a supported SQLAlchemy `mysql+pymysql://` setting gets MySQL guidance. A database driver dependency alone calls for user confirmation. Distinct services can select distinct engines. Conflicting settings in one service require resolution before a creation plan is issued.
+- A matching saved connection or manageable Compose service offers its existing action. A creation preview identifies the target service, engine, version, endpoint, volume, and proposed configuration edit. The server rejects a changed or mismatched plan. Existing dedicated instances show management controls based on their recorded engine and verified ownership.
+- A FastAPI clone with `from fastapi import Depends, FastAPI` and `app = FastAPI(...)` in `app/main.py` offers `app.main:app` from the repository root. A clone with an initialized `backend_app` in `backend/src/main.py` offers `src.main:backend_app` from `backend/`.
+- Startup suggestions use static project evidence and expose ambiguous targets for manual review. Validate both FastAPI layouts through import and clone, including the rendered command and working directory.
 
 ## v0.38.0 Alembic PostgreSQL history checks
 
