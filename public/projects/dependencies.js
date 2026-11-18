@@ -3,12 +3,24 @@ import { setText } from '/i18n.js';
 export function createDependenciesPanel({ $, request, showMessage, renderOutput, diagnosticMessages, state, selectedId, selectedProject, renderPage: render, act }) {
   let dependencyPlanView;
 
+  function retryPayload(project, plan) {
+    const task = project?.dependencies;
+    if (task?.status !== 'failed' || !task.buildApproval) return;
+    if (task.phase === 'detected' && plan &&
+        JSON.stringify(plan.steps.map(({ directory, command }) => ({ directory, command }))) === JSON.stringify(task.buildApproval.steps)) {
+      return { mode: 'detected', planId: plan.id };
+    }
+    if (task.phase === 'custom' && project.hasInstallCommands) return {};
+  }
+
   function renderDependencies(project, busy, unavailable, startupDirty) {
     const task = project.dependencies;
     const installing = project.operation === 'dependencies' || (state.pending?.id === project.id && state.pending.action === 'install');
     const view = dependencyPlanView?.id === project.id ? dependencyPlanView : undefined;
     const automatic = Boolean(view?.data?.steps.length);
     const canInstall = !project.unmanaged || automatic || project.hasInstallCommands;
+    const approval = !installing && task?.status === 'failed' ? task.buildApproval : undefined;
+    const retry = retryPayload(project, view?.data);
     renderDependencyPlan(project, view);
     const hint = $('dependency-config-hint');
     hint.hidden = !project.unmanaged || (automatic && !startupDirty && !project.hasInstallCommands);
@@ -21,11 +33,12 @@ export function createDependenciesPanel({ $, request, showMessage, renderOutput,
     if (installing) status = task?.status === 'cancelling' ? 'Cancelling installation…' : phases[task?.phase] ?? 'Preparing installation…';
     showMessage($('dependency-status'), status);
     const install = $('install-dependencies');
-    showMessage(install, automatic ? 'Install detected dependencies' : project.unmanaged ? 'Run custom install' : 'Install dependencies');
+    showMessage(install, retry ? 'Retry dependency installation' :
+      automatic ? 'Install detected dependencies' : project.unmanaged ? 'Run custom install' : 'Install dependencies');
     install.hidden = installing || !canInstall;
-    install.disabled = busy || unavailable || startupDirty;
+    install.disabled = busy || unavailable || startupDirty || Boolean(view?.loading);
     const custom = $('install-custom-dependencies');
-    custom.hidden = !project.unmanaged || !automatic || !project.hasInstallCommands || installing;
+    custom.hidden = !project.unmanaged || !automatic || !project.hasInstallCommands || installing || (retry && task.phase === 'custom');
     custom.disabled = install.disabled;
     $('refresh-dependencies').hidden = !project.unmanaged || installing;
     $('refresh-dependencies').disabled = Boolean(view?.loading);
@@ -34,14 +47,36 @@ export function createDependenciesPanel({ $, request, showMessage, renderOutput,
     const installError = state.actionError?.id === project.id && state.actionError.action?.startsWith('install') ? state.actionError : undefined;
     const issue = installError ? installError.diagnostic : task?.diagnostic;
     const hintText = issue === 'dependencies' ? 'An installation script could not find a dependency. Check the failing script and package in the installation log.' : diagnosticMessages[issue];
-    const error = hintText ?? installError?.message ?? task?.error;
+    const error = installError ? hintText ?? installError.message : approval ? undefined : hintText ?? task?.error;
     showMessage($('dependency-error'), error);
     $('dependency-error').hidden = !error;
+    renderBuildApproval(approval, busy || unavailable || startupDirty);
     const details = $('dependency-log');
     if (details.dataset.project !== project.id) details.open = false;
     details.dataset.project = project.id;
     details.hidden = !task?.log;
     renderOutput($('dependency-output'), project.id, task?.log);
+  }
+
+  function renderBuildApproval(approval, locked) {
+    $('dependency-approval').hidden = !approval;
+    if (!approval) return;
+    const list = $('dependency-approval-packages');
+    const key = JSON.stringify(approval.packages);
+    if (list.dataset.packages !== key) {
+      list.dataset.packages = key;
+      list.replaceChildren(...approval.packages.map(name => {
+        const item = document.createElement('li');
+        item.textContent = name;
+        return item;
+      }));
+    }
+    list.hidden = !approval.packages.length;
+    const directory = $('dependency-approval-directory');
+    if (approval.directory === '.') setText(directory, 'Project root');
+    else setText(directory, 'Install folder ' + approval.directory);
+    $('dependency-approval-command').textContent = approval.command;
+    $('dependency-approval-terminal').disabled = locked;
   }
 
   function renderDependencyPlan(project, view) {
@@ -102,15 +137,27 @@ export function createDependenciesPanel({ $, request, showMessage, renderOutput,
     }
   }
 
-  function installDependencies(detected) {
-    const plan = dependencyPlanView?.id === selectedId() ? dependencyPlanView.data : undefined;
+  async function installDependencies(detected) {
+    const project = selectedProject();
+    if (!project) return;
+    let plan = dependencyPlanView?.id === project.id ? dependencyPlanView.data : undefined;
+    let retry = detected && retryPayload(project, plan);
+    if (retry?.mode === 'detected') {
+      // Approval may create pnpm-workspace.yaml, changing plan evidence and its ID.
+      await loadDependencyPlan(true);
+      if (selectedId() !== project.id || dependencyPlanView?.id !== project.id) return;
+      plan = dependencyPlanView.data;
+      retry = retryPayload(selectedProject(), plan);
+      if (!retry) return;
+    }
     $('dependency-log').open = true;
-    act(selectedId(), 'install', detected && plan?.steps.length ? { mode: 'detected', planId: plan.id } : {});
+    await act(project.id, 'install', retry || (detected && plan?.steps.length ? { mode: 'detected', planId: plan.id } : {}));
   }
   $('install-dependencies').addEventListener('click', () => installDependencies(true));
   $('install-custom-dependencies').addEventListener('click', () => installDependencies(false));
   $('refresh-dependencies').addEventListener('click', () => loadDependencyPlan(true));
   $('cancel-install').addEventListener('click', () => act(selectedId(), 'install-cancel'));
+  $('dependency-approval-terminal').addEventListener('click', () => act(selectedId(), 'install-terminal'));
 
   return { render: renderDependencies, load: loadDependencyPlan };
 }

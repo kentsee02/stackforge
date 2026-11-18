@@ -94,6 +94,13 @@
               <button id="cancel-install" type="button" class="secondary" data-i18n="取消安装" hidden>Cancel installation</button>
             </div>
             <p id="dependency-error" class="hint project-operation-error" role="status" hidden></p>
+            <div id="dependency-approval" hidden>
+              <strong data-i18n="pnpm 构建脚本需要审核">pnpm build scripts need review</strong>
+              <ul id="dependency-approval-packages" class="dependency-plan-list" hidden></ul>
+              <p class="hint" data-i18n="在下方目录运行命令，审核构建脚本后再重试安装。">Run the command in the folder below, review the build scripts, then retry installation.</p>
+              <p><span id="dependency-approval-directory"></span> · <code id="dependency-approval-command"></code></p>
+              <button id="dependency-approval-terminal" type="button" class="secondary" data-i18n="打开安装目录的终端">Open terminal in install folder</button>
+            </div>
             <details id="dependency-log" hidden><summary data-i18n="安装日志">Installation log</summary><pre id="dependency-output" tabindex="0" aria-label="Installation log" data-i18n-aria-label="安装日志"></pre></details>
           </section>
           <details id="project-startup" class="project-ports" hidden>

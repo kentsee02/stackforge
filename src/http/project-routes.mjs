@@ -2,10 +2,10 @@ import { createProjectClone } from '../projects/project-clone.mjs';
 import { ProjectActionError } from '../projects/project-workflows.mjs';
 import { send } from './response.mjs';
 
-const savedActions = new Set(['ports', 'check-config', 'startup', 'trash', 'remove']);
+const savedActions = new Set(['ports', 'check-config', 'startup', 'trash', 'remove', 'install-terminal']);
 
 export function matchProjectAction(pathname) {
-  return /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|database-connection-config|database-postgres-setup|database-development|database-drizzle-preview|database-drizzle-apply|database-local-status|database-remote-profile|database-sqlite-inspect|database-sqlite-create|run-check|check-cancel|check-config)$/.exec(pathname);
+  return /^\/api\/projects\/([^/]+)\/(start|stop|startup|trash|remove|ports|install|install-cancel|install-terminal|database-start|database-stop|database-delete|database-local-check|database-initialization-plan|database-initialize|database-connection-config|database-postgres-setup|database-development|database-drizzle-preview|database-drizzle-apply|database-local-status|database-remote-profile|database-sqlite-inspect|database-sqlite-create|run-check|check-cancel|check-config)$/.exec(pathname);
 }
 
 export function createProjectRoutes({ projects, queries, databaseRoutes, removals, isCreatingProject, clone, execute }) {

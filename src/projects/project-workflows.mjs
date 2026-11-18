@@ -5,9 +5,10 @@ import { ProjectRemovalError } from './project-removal.mjs';
 import { commandDiagnostic } from './project-diagnostics.mjs';
 import { inspectRecordedProject } from './project-folder.mjs';
 import { resolveStartup, validateCustomChecks, validateStartup } from './project-startup.mjs';
+import { assertDirectoryIdentity } from '../platform/project-identity.mjs';
 
 const externalActions = new Set(['start', 'stop', 'startup', 'install', 'install-cancel', 'run-check',
-  'check-cancel', 'check-config', 'trash', 'remove', 'database-start', 'database-stop']);
+  'check-cancel', 'check-config', 'trash', 'remove', 'database-start', 'database-stop', 'install-terminal']);
 const busy = 'Wait for the current project operation to finish.';
 const launcherOnly = 'This project uses the StackForge launcher.';
 const active = status => ['starting', 'running', 'stopping'].includes(status);
@@ -21,7 +22,7 @@ export class ProjectActionError extends Error {
 }
 
 export function createProjectWorkflows({ projectConfig, operations, runtime, removals, configWrites, removeProject,
-  databaseBusy, chooseDatabase, recordDatabase, verifyDeletion, syncDatabaseBindings }) {
+  databaseBusy, chooseDatabase, recordDatabase, verifyDeletion, syncDatabaseBindings, openProject }) {
   async function saveSettings(project, work) {
     const saving = work();
     configWrites.set(project.path, saving);
@@ -119,6 +120,23 @@ export function createProjectWorkflows({ projectConfig, operations, runtime, rem
     }
   }
 
+  async function openBuildApprovalTerminal(project) {
+    const target = operations.buildApprovalTarget(project);
+    if (!target) throw new ProjectActionError('Run dependency installation to get the current build approval request.');
+    const changed = 'The installation directory changed. Run dependency installation again.';
+    const verify = async () => {
+      if (removals.has(project.path) || operations.buildApprovalTarget(project) !== target) throw new Error(changed);
+      const { commands: [resolved] } = await resolveStartup(project, [target]);
+      if (resolved.cwd !== target.cwd) throw new Error(changed);
+      await assertDirectoryIdentity(resolved.cwd, target.identity, changed);
+    };
+    try {
+      await verify();
+      await openProject(target.cwd, 'terminal', verify);
+      return { opened: true };
+    } catch (error) { throw new ProjectActionError(error.message); }
+  }
+
   return async function execute(project, action, payload) {
     if (databaseBusy(project, action)) throw new ProjectActionError(busy);
     if (project.unmanaged && !externalActions.has(action)) throw new ProjectActionError('This action requires a StackForge project.');
@@ -140,6 +158,7 @@ export function createProjectWorkflows({ projectConfig, operations, runtime, rem
       return operations.status(project, true);
     }
     if (action !== 'stop' && operations.active(project)) throw new ProjectActionError(busy);
+    if (action === 'install-terminal') return openBuildApprovalTerminal(project);
     if (action === 'install' || action === 'run-check' || action.startsWith('database-')) return startOperation(project, action, payload, detectedInstall);
     if (action === 'ports') return changePorts(project, payload.ports);
     if (action === 'check-config') return changeChecks(project, payload.commands);

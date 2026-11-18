@@ -78,6 +78,8 @@ Windows PowerShell：`$env:PORT=4311; npm start`。
 
 导入和克隆的项目会在「依赖安装」面板预览检测到的命令及其工作目录。支持 npm、pnpm、Yarn 和 Bun 的声明或锁文件、Maven Wrapper、带 `uv.lock` 的 uv 项目，以及已有本地 `.venv` 的 `requirements.txt`。识别到 JavaScript 工作区时，从工作区根目录安装。核对后点击「安装检测到的依赖」。有歧义的项目会显示原因并跳过，也可以点击「执行自定义安装」运行「启动配置」里保存的命令。
 
+pnpm 要求审核构建脚本时，依赖安装区会显示被拦截的依赖，并提供打开失败目录终端的入口。在终端运行页面显示的审核命令，完成选择后回到 StackForge 重试。
+
 安装预览还支持可识别 JVM 项目的 Gradle Wrapper `classes`、目标明确的 .NET 项目或解决方案的 `dotnet restore`、`go mod download`、`cargo fetch`、Composer 和 Bundler。Gradle 准备依赖时会编译主源码，可能生成构建产物。执行命令需要本机已有对应的 SDK 或包管理器。
 
 「数据库管理」会显示 Docker Compose 数据库的状态和最近 100 行容器日志，并遮盖已知的环境变量凭据、支持的 `*_FILE` 文件凭据和常见数据库连接串。容器启动后，配置的数据库须能响应 SQL 查询，页面才会显示「运行中」。面板使用项目已保存的数据库端口，可以单独启动和停止数据库。停止数据库会保留数据卷。本机的 `.stackforge/database-operations.jsonl` 会记录操作 ID、项目 ID、动作、时间和结果。

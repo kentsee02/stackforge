@@ -8,6 +8,8 @@ import { chromium } from 'playwright';
 import { createApp } from '../../src/http/server.mjs';
 import { run } from '../../src/platform/process.mjs';
 import { cloneGithub } from '../../src/projects/project-clone.mjs';
+import { ProjectOperations } from '../../src/projects/project-operations.mjs';
+import { createDesktop } from '../../src/platform/desktop.mjs';
 
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-browser-')));
 const project = join(root, 'portal');
@@ -59,6 +61,9 @@ try {
   await writeFile(join(fixtureRepo, 'server.mjs'), fixtureServer('Cloned portal'));
   await writeFile(join(fixtureRepo, 'package.json'), JSON.stringify({ name: 'cloned-portal', dependencies: { express: '5.0.0' },
     devDependencies: { 'drizzle-kit': '^0.31.1' } }));
+  await mkdir(join(fixtureRepo, 'frontend'));
+  await writeFile(join(fixtureRepo, 'frontend/package.json'), '{"name":"approval-fixture","packageManager":"pnpm@11.17.0"}');
+  await writeFile(join(fixtureRepo, 'frontend/pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
   await writeFile(join(fixtureRepo, 'drizzle.config.ts'), `import type { Config } from 'drizzle-kit';
     export default { dialect: 'postgresql', dbCredentials: { url: process.env.STACKFORGE_BROWSER_DRIZZLE_URL! } } satisfies Config;`);
   await mkdir(join(fixtureRepo, 'drizzle/meta'), { recursive: true });
@@ -67,10 +72,26 @@ try {
   await writeFile(join(fixtureRepo, 'drizzle/0000_create.sql'), 'CREATE TABLE sample (id integer);');
   const gitOptions = { cwd: fixtureRepo, timeout: 15000 };
   await run('git', ['init', '-b', 'main'], gitOptions);
-  await run('git', ['add', 'package.json', 'server.mjs', 'drizzle.config.ts', 'drizzle'], gitOptions);
+  await run('git', ['add', 'package.json', 'server.mjs', 'drizzle.config.ts', 'drizzle', 'frontend'], gitOptions);
   await run('git', ['-c', 'user.name=StackForge Test', '-c', 'user.email=stackforge-test@example.invalid',
     '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=' + join(root, 'disabled-hooks'), 'commit', '-m', 'Create isolated browser fixture'], gitOptions);
-  app = createApp({ stateDir: false, clone: cloneFixture, localDatabase: { probe: async () => false, command: async () => { throw new Error('ENOENT'); } } });
+  const terminals = [];
+  const installCommands = [];
+  const workspace = cwd => join(cwd, 'pnpm-workspace.yaml');
+  const operations = new ProjectOperations({ install: async () => {}, async command(program, args, config) {
+    if (!program.startsWith('pnpm install ')) return;
+    installCommands.push([program, args, config.cwd]);
+    if (!(await readFile(workspace(config.cwd), 'utf8').catch(() => '')).includes('esbuild@0.25.4')) {
+      await writeFile(workspace(config.cwd), 'allowBuilds:\n  esbuild: set this to true or false\n');
+      config.log('[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: @tailwindcss/oxide@4.1.7, esbuild@0.25.4, INVALID URL');
+      throw new Error('pnpm exited with code 1');
+    }
+  } });
+  const desktop = { ...createDesktop(), async openProject(folder, action, verify) {
+    await verify();
+    terminals.push({ folder, action });
+  } };
+  app = createApp({ stateDir: false, clone: cloneFixture, operations, desktop, localDatabase: { probe: async () => false, command: async () => { throw new Error('ENOENT'); } } });
   app.listen(0, '127.0.0.1');
   await once(app, 'listening');
   const origin = 'http://127.0.0.1:' + app.address().port;
@@ -260,6 +281,25 @@ try {
   const { projects: [cloned] } = await (await fetch(origin + '/api/projects')).json();
   assert.equal(cloned.cloned, true);
   assert.equal(cloned.path, join(checkoutParent, 'cloned-portal'));
+  await page.getByRole('button', { name: 'Install detected dependencies' }).click();
+  await page.locator('#dependency-approval').waitFor();
+  await contains('#dependency-approval', 'pnpm build scripts need review');
+  assert.deepEqual(await page.locator('#dependency-approval-packages li').allTextContents(), ['@tailwindcss/oxide@4.1.7', 'esbuild@0.25.4']);
+  await contains('#dependency-approval-directory', 'Install folder frontend');
+  await page.locator('#language').selectOption('zh-CN');
+  await contains('#dependency-approval', 'pnpm 构建脚本需要审核');
+  await page.getByRole('button', { name: '打开安装目录的终端' }).click();
+  await contains('#project-feedback', '项目终端已打开。');
+  const frontend = join(cloned.path, 'frontend');
+  assert.deepEqual(terminals, [{ folder: frontend, action: 'terminal' }]);
+  // Simulate reviewing the requested packages in the terminal. This fixture
+  // uses a stub installer so CI does not run third-party build scripts.
+  await writeFile(workspace(frontend), "allowBuilds:\n  'esbuild@0.25.4': true\n");
+  await page.getByRole('button', { name: '重试安装依赖' }).click();
+  await contains('#dependency-status', '依赖已安装。');
+  assert.equal(await page.locator('#dependency-approval').isVisible(), false);
+  assert.deepEqual(installCommands, Array(2).fill(['pnpm install --frozen-lockfile', [], frontend]));
+  await page.locator('#language').selectOption('en');
   const databaseDiscovery = page.locator('#project-database-discovery');
   if (await databaseDiscovery.getAttribute('open') === null) await databaseDiscovery.locator(':scope > summary').click();
   await page.getByText('Preview Drizzle migrations', { exact: true }).click();
@@ -277,7 +317,7 @@ try {
   await service.locator('[name="command"]').fill('node server.mjs');
   await exerciseRuntime('Cloned portal', 'api', true);
   assert.deepEqual(errors, []);
-  console.log('Verified bilingual startup preflight, Prisma setup, and the Drizzle migration preview in a cloned project.');
+  console.log('Verified bilingual startup preflight, pnpm build approval and retry, Prisma setup, and the Drizzle migration preview in a cloned project.');
 } finally {
   try {
     await browser?.close();

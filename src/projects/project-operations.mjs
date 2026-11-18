@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { hasNodeBackend } from '../generation/catalog.mjs';
 import { installMavenDependencies, installNodeDependencies, maven, npm, run, throwIfCancelled } from '../platform/process.mjs';
 import { projectPathKey } from './project-config.mjs';
-import { commandDiagnostic } from './project-diagnostics.mjs';
+import { commandDiagnostic, pnpmBuildPackages } from './project-diagnostics.mjs';
+import { directoryIdentity } from '../platform/project-identity.mjs';
 import { inspectRecordedProject } from './project-folder.mjs';
 import { projectChecks, projectGitStatus } from './project-tools.mjs';
 import { addProjectLogSecrets, databaseRedactor, redactedProcessOutput } from '../database/security/secrets.mjs';
@@ -32,9 +33,15 @@ export class ProjectOperations {
     const result = { operation: entry.active?.kind };
     if (includeLogs) for (const kind of ['dependencies', 'databaseTask', 'checkTask']) {
       const task = entry[kind];
-      if (task) result[kind] = { status: task.status, phase: task.phase, log: task.log, error: task.error, diagnostic: task.diagnostic };
+      if (task) result[kind] = { status: task.status, phase: task.phase, log: task.log, error: task.error, diagnostic: task.diagnostic,
+        ...(task.buildApproval && { buildApproval: task.buildApproval }) };
     }
     return result;
+  }
+
+  buildApprovalTarget(project) {
+    const task = this.projects.get(projectPathKey(project.path))?.dependencies;
+    if (task?.status === 'failed' && task.projectId === project.id && task.buildApproval) return task.installTarget;
   }
 
   start(project, action, ports, { checkId, installPlanId, confirmVolume, chooseDatabase, record, verifyDeletion } = {}) {
@@ -47,7 +54,7 @@ export class ProjectOperations {
       throw new Error('Choose an available project check.');
     }
     const controller = new AbortController();
-    const task = { kind, phase: kind === 'checkTask' ? checkId : action, status: 'running', controller, log: '' };
+    const task = { kind, phase: kind === 'checkTask' ? checkId : action, status: 'running', controller, log: '', projectId: project.id };
     entry.active = entry[kind] = task;
     this.projects.set(key, entry);
     const append = chunk => { task.log = (task.log + chunk).slice(-logLimit); };
@@ -73,7 +80,15 @@ export class ProjectOperations {
           task.error = kind === 'checkTask' && Number.isInteger(error.exitCode)
             ? `Check command exited with code ${error.exitCode}.`
             : message.split('\n')[0].trim();
-          task.diagnostic = commandDiagnostic(`${message}\n${task.log.slice(-12000)}`);
+          output.flush();
+          const diagnosis = commandDiagnostic(message + '\n' + task.log.slice(-12000));
+          task.diagnostic = diagnosis;
+          if (kind === 'dependencies' && diagnosis === 'pnpmBuildApproval' && task.installTarget) {
+            const packages = pnpmBuildPackages(message);
+            task.buildApproval = { directory: task.installTarget.directory,
+              packages: packages.length ? packages : pnpmBuildPackages(task.log.slice(-12000)), steps: task.installPlan,
+              command: process.platform === 'win32' ? 'pnpm.cmd approve-builds' : 'pnpm approve-builds' };
+          }
         }
       })
       .finally(async () => {
@@ -144,9 +159,10 @@ export class ProjectOperations {
     const { commands } = await resolveStartup(project, services, project.startup.identity);
     task.phase = 'custom';
     await Promise.all(commands.map(({ cwd }) => options.loadLogSecrets(cwd)));
-    for (const { name, cwd, installCommand } of commands) {
+    for (const { name, directory, cwd, installCommand } of commands) {
       throwIfCancelled(options.signal);
       options.log(`[${name}]\n`);
+      task.installTarget = { directory, cwd, identity: directoryIdentity(await lstat(cwd, { bigint: true })) };
       await this.command(installCommand, [], { ...options, cwd, shell: true });
     }
   }
@@ -157,10 +173,12 @@ export class ProjectOperations {
     if (!plan.steps.length || plan.id !== reviewedId) throw new Error('The detected install plan changed. Refresh detection and review it again.');
     const { commands } = await resolveStartup(project, plan.steps, plan.identity);
     task.phase = 'detected';
+    task.installPlan = plan.steps.map(({ directory, command }) => ({ directory, command }));
     await Promise.all(commands.map(({ cwd }) => options.loadLogSecrets(cwd)));
     for (const { tool, command, args, directory, executable, wrapper, program, shell, cwd } of commands) {
       throwIfCancelled(options.signal);
       options.log(`[${directory}] ${command}\n`);
+      task.installTarget = { directory, cwd, identity: directoryIdentity(await lstat(cwd, { bigint: true })) };
       const config = { ...options, cwd };
       if (tool === 'npm') await this.install(args, config);
       else if (tool === 'Maven') await maven(args, config, this.command, wrapper);

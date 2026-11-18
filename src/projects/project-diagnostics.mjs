@@ -1,4 +1,15 @@
+const ignoredPnpmBuilds = /\bERR_PNPM_IGNORED_BUILDS\b/;
+
+export function pnpmBuildPackages(output) {
+  const pending = output.split(/\r?\n/)
+    .filter(line => ignoredPnpmBuilds.test(line))
+    .flatMap(line => /\bIgnored build scripts:\s*(.*)$/i.exec(line)?.[1].split(/,\s*/) ?? []);
+  const packageReference = /^(?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*(?:@\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?(?:\+[a-z0-9.-]+)?)?$/i;
+  return [...new Set(pending.map(value => value.trim()).filter(value => value.length <= 214 && packageReference.test(value)))].slice(0, 60);
+}
+
 export function commandDiagnostic(output) {
+  if (ignoredPnpmBuilds.test(output)) return 'pnpmBuildApproval';
   if (/EADDRINUSE|address already in use|port [^\r\n]{1,32}(?:already in use|already allocated)|ports are not available/i.test(output)) return 'port';
   if (/(?:cannot resolve environment variable|missing required environment variable|environment variable not found)\s*:\s*["']?DATABASE_URL\b|\bDATABASE_URL\b[^\r\n]{0,10}\b(?:is (?:not set|missing|required|undefined)|must be set)\b/i.test(output)) return 'databaseUrl';
   if (/\bP1001\s*:|can.t reach database server/i.test(output)) return 'databaseConnection';

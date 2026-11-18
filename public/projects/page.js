@@ -19,6 +19,7 @@ const diagnosticMessages = {
   databaseConnection: 'Prisma could not reach the database. Start the database and check the host and port in DATABASE_URL.',
   dotnetSdk: 'The .NET SDK is missing or incompatible. Check the project’s target framework and any global.json version pin.',
   lockfile: 'The dependency lockfile does not match the project. Update it with the project’s package manager, then retry.',
+  pnpmBuildApproval: 'pnpm blocked build scripts that need review. Check the Dependencies panel.',
   pythonDependencies: 'Python could not import a module. Check the service’s virtual environment and install its dependencies.',
   toolMissing: 'A required command was not found. Check the tool named in the log and make sure it is on PATH.',
   docker: 'Start Docker Desktop or the Docker Engine, wait until it is ready, then start the project again.',
@@ -255,11 +256,14 @@ async function act(id, action, body = {}) {
   render();
   try {
     const { token } = await request('/api/state');
-    const runtime = await post(`/api/projects/${id}/${action}`, token, body, action === 'trash' ? 180_000 : 5000);
+    const timeout = action === 'trash' ? 180_000 : action === 'install-terminal' ? 20_000 : 5000;
+    const runtime = await post(`/api/projects/${id}/${action}`, token, body, timeout);
     if (removing) {
       projects = projects.filter(item => item.id !== id);
       if (selected === id) selected = projects[0]?.id;
       setText($('project-feedback'), runtime.removed ? 'Project removed from Projects.' : 'Project moved to the system trash.');
+    } else if (action === 'install-terminal') {
+      setText($('project-feedback'), 'Project terminal opened.');
     } else if (action === 'ports') {
       const project = projects.find(item => item.id === id);
       if (project) project.ports = runtime.ports;

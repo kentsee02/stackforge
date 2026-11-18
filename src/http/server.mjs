@@ -64,7 +64,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
 
   const execute = createProjectWorkflows({ projectConfig, operations, runtime, removals, configWrites, removeProject,
     databaseBusy: database.blocksProjectAction, chooseDatabase: database.selectedCompose, recordDatabase: database.record,
-    verifyDeletion: database.verifyDeletion, syncDatabaseBindings: database.scan });
+    verifyDeletion: database.verifyDeletion, syncDatabaseBindings: database.scan,
+    openProject: (...args) => desktop.openProject(...args) });
   const queries = createProjectQueries({ projects, projectConfig, operations, runtime, removals, databaseOperation: database.operation });
   const projectRoutes = createProjectRoutes({ projects, queries, databaseRoutes, removals,
     isCreatingProject: () => jobs.busy, clone, execute });
