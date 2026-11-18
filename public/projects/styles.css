@@ -111,6 +111,7 @@
 .alembic-controls label { display: grid; flex: 1 1 18rem; gap: 4px; min-width: 0; }
 .alembic-controls select { width: 100%; min-height: 36px; }
 .alembic-preview p:empty { margin: 0; }
+.ef-core-preview section p > strong { display: inline; }
 .alembic-revision-state { color: var(--muted); }
 .drizzle-confirmation { display: grid; gap: 8px; margin: 10px 0; padding: 0; border: 0; min-inline-size: 0; }
 .drizzle-confirmation .inline-field { display: grid; gap: 4px; }

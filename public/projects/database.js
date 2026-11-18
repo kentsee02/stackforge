@@ -2,6 +2,7 @@ import { setText } from '/i18n.js';
 import { createPostgresSetup } from '/projects/postgres-setup.js';
 import { drizzlePreview } from '/projects/drizzle-preview.js';
 import { alembicPreview } from '/projects/alembic-preview.js';
+import { efCorePreview } from '/projects/ef-core-preview.js';
 
 export function createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
   selectedId, selectedProject, renderPage, refresh, act, openDevelopment, refreshDevelopment }) {
@@ -252,9 +253,11 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
         return row;
       });
       for (const source of data.migrationSources ?? []) {
-        if (source.adapter !== 'alembic') continue;
+        const preview = source.adapter === 'alembic' ? alembicPreview(view.id, source, data.alembicTargets ?? [], { request, post }) :
+          source.adapter === 'ef-core' ? efCorePreview(view.id, source, { request, post }) : undefined;
+        if (!preview) continue;
         const row = document.createElement('li');
-        row.append(alembicPreview(view.id, source, data.alembicTargets ?? [], { request, post }));
+        row.append(preview);
         requirements.push(row);
       }
       $('database-requirements').replaceChildren(...requirements);
@@ -288,6 +291,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       showMessage($('database-discovery-message'), savedRequirementId && localTarget ? 'Database connection saved. Check the target or preview initialization below.' :
         savedRequirementId && remoteTarget ? 'Database connection saved. Configure the remote connection below.' :
         savedRequirementId ? 'Database connection saved.' : data.limited ? 'The scan reached its file limit.' :
+        data.migrationScanLimited ? 'Some EF Core migration files need review.' :
         requirements.length ? '' : 'No database configuration was detected.');
       return data.requirements.find(item => item.id === savedRequirementId);
     } catch (error) {

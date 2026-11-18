@@ -67,6 +67,15 @@ try {
   await mkdir(join(fixtureRepo, 'services/api/alembic/versions'), { recursive: true });
   await writeFile(join(fixtureRepo, 'services/api/alembic.ini'), '[alembic]\nscript_location = %(here)s/alembic\n');
   await writeFile(join(fixtureRepo, 'services/api/alembic/versions/first.py'), "revision = 'start'\ndown_revision = None\n");
+  await mkdir(join(fixtureRepo, 'services/reporting/storage/db'), { recursive: true });
+  await writeFile(join(fixtureRepo, 'services/reporting/storage/Reports.csproj'), '<Project Sdk="Microsoft.NET.Sdk" />');
+  await writeFile(join(fixtureRepo, 'services/reporting/storage/db/Schema.cs'), `using Microsoft.EntityFrameworkCore.Migrations;
+    using Microsoft.EntityFrameworkCore.Infrastructure;
+    namespace Reports.Data;
+    [DbContext(typeof(ReportsContext))]
+    [Migration("20260102123456_CreateReports")]
+    public class CreateReports : Migration { }
+  `);
   await writeFile(join(fixtureRepo, 'drizzle.config.ts'), `import type { Config } from 'drizzle-kit';
     export default { dialect: 'postgresql', dbCredentials: { url: process.env.STACKFORGE_BROWSER_DRIZZLE_URL! } } satisfies Config;`);
   await mkdir(join(fixtureRepo, 'drizzle/meta'), { recursive: true });
@@ -319,6 +328,15 @@ try {
   const alembic = page.locator('.alembic-preview');
   const targetLabel = '127.0.0.1:5432/browser_alembic · .env · ALEMBIC_DATABASE_URL';
   await alembic.locator('option').filter({ hasText: targetLabel }).waitFor({ state: 'attached' });
+  const ef = page.locator('.ef-core-preview');
+  await ef.locator('summary').press('Enter');
+  await contains('.ef-core-preview [role="status"]', 'Database status is unverified.');
+  await contains('.ef-core-preview summary', 'services/reporting/storage/Reports.csproj');
+  await contains('.ef-core-preview li', '20260102123456_CreateReports · db/Schema.cs');
+  await page.locator('#language').selectOption('zh-CN');
+  await contains('.ef-core-preview summary', '预览 EF Core 迁移');
+  await contains('.ef-core-preview [role="status"]', '数据库状态未验证。');
+  await page.locator('#language').selectOption('en');
   await alembic.locator('summary').press('Enter');
   await contains('.alembic-preview [role="status"]', 'Database status is unverified.');
   await contains('.alembic-preview', 'Declared heads · start');
@@ -389,7 +407,7 @@ try {
   await page.locator('#development-postgres-cancel').click();
   await page.unroute(developmentRoute);
   assert.deepEqual(errors, []);
-  console.log('Verified bilingual startup preflight, pnpm build approval and retry, Prisma setup, Drizzle preview, and Alembic history selection in a cloned project.');
+  console.log('Verified bilingual startup, database setup, and Drizzle, Alembic, and EF Core migration previews in imported and cloned projects.');
 } finally {
   try {
     await browser?.close();

@@ -17,6 +17,7 @@ import { developmentDatabase } from './docker/development-database.mjs';
 import { previewDrizzle } from './migrations/drizzle-preview.mjs';
 import { previewAlembic } from './migrations/alembic-preview.mjs';
 import { alembicLocalTargets, compareAlembicHistory } from './migrations/alembic-history.mjs';
+import { scanEfCore } from './migrations/ef-core-preview.mjs';
 
 export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
   runtime, removals, configWrites, localDatabase, isClosing }) {
@@ -118,7 +119,10 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     if (view === 'database-development') return development.inspect(project);
     if (view === 'database-discovery') {
       const activeIds = await refreshDatabaseBindings(project.id);
-      const scanned = await discoverDatabases(project, { includeMigrations: true, includeConnections: true });
+      const [scanned, ef] = await Promise.all([
+        discoverDatabases(project, { includeMigrations: true, includeConnections: true }),
+        scanEfCore(project)
+      ]);
       const discovery = await scanDatabases(project, scanned, activeIds);
       const alembicTargets = [];
       if (scanned.migrationSources.length) {
@@ -126,7 +130,8 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
         if (container) alembicTargets.push(container);
         alembicTargets.push(...alembicLocalTargets(scanned).map(item => item.public));
       }
-      return { ...discovery, alembicTargets, bindings: discovery.bindings.map(item => ({
+      return { ...discovery, alembicTargets, migrationSources: [...scanned.migrationSources, ...ef.sources], migrationScanLimited: ef.limited,
+        bindings: discovery.bindings.map(item => ({
         ...item, ...(item.instance.provider === 'remote' && {
           profileSaved: Boolean(databaseRegistry.profile(project.id, item.instanceId))
         })
@@ -238,6 +243,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     if (databaseWrites.size || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
       throw new Error('Wait for the current project operation to finish.');
     }
+    if (action === 'database-ef-core-preview') return scanEfCore(project, { sourceId: payload.sourceId ?? null, signal: controller.signal });
     if (action === 'database-alembic-preview') {
       const { signal } = controller;
       const { sourceId, targetId } = payload;

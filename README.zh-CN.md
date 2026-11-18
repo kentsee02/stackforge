@@ -57,6 +57,8 @@ Windows PowerShell：`$env:PORT=4311; npm start`。
 
 「预览 Alembic 迁移」支持项目根目录和子服务中的标准 `alembic.ini`，显示本地迁移顺序和分支末端版本。选定项目专属 PostgreSQL 或已保存的本机 PostgreSQL 直连 URL，点击「检查数据库迁移历史」，即可只读比对 `public.alembic_version` 的记录和本地版本。自定义布局、实际表结构检查和执行迁移请使用项目的 Alembic 环境。
 
+「预览 EF Core 迁移」按 `.csproj` 和 `DbContext` 列出本地迁移 ID 与源文件。支持常见的 `partial` 类拆分、单文件声明和仓库内明确的编译文件引用。预览只读文件，数据库状态显示为未验证。自定义构建、数据库历史核验和执行迁移请使用项目的 EF Core 工具。
+
 支持的迁移批次可以在项目停止后执行。检查列出的 SQL 文件，再输入显示的数据库名称确认。可执行的形式包括创建表、schema、索引和枚举，以及新增列和约束。StackForge 会重新核对预览，在同一 PostgreSQL 事务内写入变更和迁移历史，并检查结果。其他 SQL 形式可以在预览中查看文件条目。
 
 「项目开发数据库」会按服务识别引擎，引导复用连接或 Compose 服务，也可为已验证的导入或克隆创建一个独立的 PostgreSQL 17 或 MySQL 8.4 实例。需要本机 Docker Engine 28 或更新版本及 Linux 容器模式。预览会显示引擎、服务、本机端口、数据卷和识别到的连接设置。输入数据库名确认创建后，可保存符合条件的 URL 或 SQLAlchemy MySQL 环境变量。MySQL 面板提供专属实例的备份和恢复。

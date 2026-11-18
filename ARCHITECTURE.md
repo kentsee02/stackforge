@@ -140,7 +140,8 @@ Keep project-specific configuration separate from app-wide preferences. StackFor
 
 - A provider adapter reports actual capabilities for its engine and deployment type. Capability depends on current permissions, tool availability, verified target identity, and resource ownership.
 - ORM detection reads configuration and describes requirements. A migration adapter resolves the target, inspects status, produces a preview, and verifies a confirmed execution. Keep those responsibilities separate from database lifecycle and transport.
-- Evaluate EF Core Migrations, Flyway, and Liquibase separately. Migration execution requires adapter-specific validation even when discovery identifies the provider or ORM.
+- EF Core file preview reads C# migration attributes, context declarations, and migration types under the corresponding `.csproj`. It accepts standard split partial classes, single-file migrations, and literal project-relative compile includes and removals within the repository. The preview describes source files. Runtime assembly selection, custom build evaluation, database history, and execution use the project's EF Core tooling.
+- Evaluate Flyway and Liquibase separately. Base discovery on each tool's documented configuration and metadata, and validate it with independent project layouts. Migration execution requires adapter-specific validation.
 - Document contracts at stable seams. Introduce a shared interface when callers need consistent operations and results. Keep capabilities optional where tools differ.
 
 ## 6. Dependencies and ownership
