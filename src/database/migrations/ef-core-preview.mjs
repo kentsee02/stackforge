@@ -1,11 +1,10 @@
 import { createHash } from 'node:crypto';
-import { opendir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { throwIfCancelled } from '../../platform/process.mjs';
+import { scanDotnetLayout } from '../../projects/detection/dotnet-layout.mjs';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { readMigrationFile } from './migration-files.mjs';
 
-const ignored = /^(?:\.|bin$|obj$|node_modules$|TestResults$|coverage$|vendor$|dist$)/i;
 const identifier = '[A-Za-z_][A-Za-z0-9_]*';
 const qualified = `(?:global::)?${identifier}(?:\\.${identifier})*`;
 const migrationId = /^\d{14}_[\p{L}\p{N}_.-]{1,128}$/u;
@@ -41,40 +40,17 @@ function migrationClasses(text, file, globalUsings) {
   });
 }
 
-async function projectFiles(root, signal) {
-  const projects = [];
-  const pending = [{ directory: '', depth: 0 }];
-  let count = 0, limited = false;
-  for (const { directory, depth, owner } of pending) {
-    throwIfCancelled(signal);
-    const folder = join(root, directory);
-    if (await realpath(folder).catch(() => '') !== folder) { limited = true; continue; }
-    const listing = await opendir(folder).catch(() => undefined);
-    if (!listing) { limited = true; continue; }
-    const entries = [];
-    for await (const entry of listing) {
-      if (++count > 4096) return { projects, limited: true };
-      if (!ignored.test(entry.name) && !/[\x00-\x1f\x7f]/.test(entry.name)) entries.push(entry);
-    }
-    const prefix = directory ? directory + '/' : '';
-    const manifests = entries.filter(entry => entry.isFile() && /\.csproj$/i.test(entry.name));
-    let target = owner;
-    if (manifests.length === 1) {
-      target = { source: prefix + manifests[0].name, files: [] };
-      projects.push(target);
-    } else if (manifests.length > 1) {
-      target = undefined;
-      limited = true;
-    }
-    for (const entry of entries) {
-      if (entry.isFile() && /\.cs$/i.test(entry.name) && target) target.files.push(prefix + entry.name);
-      if (entry.isDirectory()) {
-        if (depth < 7) pending.push({ directory: prefix + entry.name, depth: depth + 1, owner: target });
-        else limited = true;
-      }
-    }
+function decodeCSharp(bytes) {
+  const marker = bytes.subarray(0, 2).toString('hex');
+  let text;
+  if (marker === 'fffe' || marker === 'feff') {
+    text = new TextDecoder(marker === 'fffe' ? 'utf-16le' : 'utf-16be', { fatal: true }).decode(bytes);
+  } else {
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch { text = new TextDecoder('windows-1252').decode(bytes); }
   }
-  return { projects, limited };
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) throw new Error();
+  return { text, bytes: bytes.length };
 }
 
 async function compileFiles(root, source, files) {
@@ -110,8 +86,8 @@ async function inspectAssembly(root, { source, files }, budget, signal) {
     if (!budget.files || !budget.bytes) { limited = true; break; }
     budget.files--;
     try {
-      const content = await readMigrationFile(join(root, file), Math.min(512 * 1024, budget.bytes));
-      budget.bytes -= Buffer.byteLength(content);
+      const { text: content, bytes } = await readMigrationFile(join(root, file), Math.min(512 * 1024, budget.bytes), decodeCSharp);
+      budget.bytes -= bytes;
       if (/\bEntityFrameworkCore\b/.test(content) || /\b(?:Migration|DbContext)(?:Attribute)?\b/.test(content)) contents.push({ file, content });
     } catch { limited = true; }
   }
@@ -153,7 +129,7 @@ export async function scanEfCore(project, { sourceId, signal } = {}) {
   const invalid = 'Choose a detected EF Core migration project.';
   if (sourceId !== undefined && (typeof sourceId !== 'string' || !/^[a-f0-9]{64}$/.test(sourceId))) throw new Error(invalid);
   const { root, identity } = await resolveStartup(project, []);
-  const { projects, limited } = await projectFiles(root, signal);
+  const { projects, limited } = await scanDotnetLayout(root, { includeSources: true, signal });
   let partial = limited;
   const budget = { files: 1024, bytes: 24 * 1024 ** 2 };
   const sources = [];

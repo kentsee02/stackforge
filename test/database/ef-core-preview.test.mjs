@@ -51,6 +51,18 @@ test('EF Core discovers custom folders, linked source, and multiple projects and
   ]);
 });
 
+test('EF Core verifies migrations in projects with BOM-marked and legacy C# sources', async t => {
+  const { project, write } = await fixture(t);
+  await write('Data.csproj', '<Project Sdk="Microsoft.NET.Sdk" />');
+  const id = '20250101010000_Initial';
+  await write('Changes.cs', Buffer.from('\ufeff' + migration('Initial', id), 'utf16le'));
+  await write('Seed.cs', Buffer.from('// Caf\u00e9\ninternal class Seed { }', 'latin1'));
+  const { sources: [source] } = await scanEfCore(project);
+  const result = await scanEfCore(project, { sourceId: source.id });
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.groups[0].migrations.map(item => [item.id, item.verified]), [[id, true]]);
+});
+
 test('EF Core treats duplicate and incomplete declarations as unverified and ignores text and filenames', async t => {
   const { project, write, workspace } = await fixture(t);
   await write('Data.csproj', '<Project Sdk="Microsoft.NET.Sdk" />');

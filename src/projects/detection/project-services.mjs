@@ -1,9 +1,10 @@
 import { realpath } from 'node:fs/promises';
-import { isAbsolute, relative, sep } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { detectBackendLaunchers } from './backend-startup.mjs';
 import { inspectNode } from './node-project.mjs';
 import { detectManifestFrameworks, localText, mavenLauncher, npmManifest, validFrameworks, workspaceFolders, workspaceSegments } from './project-detection.mjs';
 import { resolveStartup } from '../project-startup.mjs';
+import { scanDotnetLayout } from './dotnet-layout.mjs';
 
 const serviceFolders = ['frontend', 'backend', 'client', 'server', 'web', 'api', 'apps/*', 'packages/*',
   'services/*', 'src/*', 'backend/*', 'server/*', 'cmd/*', 'backend/cmd/*', 'server/cmd/*', 'services/*/cmd/*', 'apps/*/cmd/*', '*'];
@@ -17,7 +18,8 @@ export async function scanProjectServices(project) {
   const saved = project.startup;
   const { root, identity } = await resolveStartup(project, []);
   const budget = { left: 2048 };
-  const pending = new Set([root, ...await workspaceFolders(root, serviceFolders, budget)]);
+  const [conventional, dotnet] = await Promise.all([workspaceFolders(root, serviceFolders, budget), scanDotnetLayout(root)]);
+  const pending = new Set([root, ...conventional, ...dotnet.projects.map(item => join(root, item.directory))]);
   for (const service of saved?.services ?? []) {
     const resolved = await resolveStartup(project, [service], identity).catch(() => null);
     if (resolved) pending.add(resolved.commands[0].cwd);
@@ -52,7 +54,8 @@ export async function scanProjectServices(project) {
     const mavenModules = await workspaceFolders(folder, modules.slice(0, 32).filter(path => !path.includes('*')), budget);
     for (const child of [...members, ...mavenModules]) if (!services.has(child)) pending.add(child);
   }
-  return { root, identity, services: [...services.values()], limited: pending.size > 0 || budget.left <= 0 };
+  return { root, identity, services: [...services.values()], limited: pending.size > 0 || budget.left <= 0 ||
+    dotnet.projects.length > 0 && dotnet.limited };
 }
 
 export async function detectFrameworks(project) {

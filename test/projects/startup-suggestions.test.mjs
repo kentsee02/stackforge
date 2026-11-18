@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { discoverDatabases } from '../../src/database/discovery.mjs';
 import { createApp } from '../../src/http/server.mjs';
 import { ProjectOperations } from '../../src/projects/project-operations.mjs';
 import { detectStartupSuggestions } from '../../src/projects/detection/startup-suggestions.mjs';
@@ -127,6 +128,31 @@ test('mixed Python, .NET, Go, Rust, PHP, and Ruby services use their own entry d
   const dotnet = groups.find(group => group.directory === 'Example.Api').choices[0];
   assert.equal(dotnet.port, 5110);
   assert.equal(dotnet.kind, 'api');
+});
+
+test('nested .NET hosts contribute startup suggestions and database settings from the same directories', async t => {
+  const first = 'services/retail/components/host';
+  const second = 'samples/edition/components/api';
+  const root = await fixture(t, {
+    [first + '/Web.csproj']: '<Project Sdk="Microsoft.NET.Sdk.Web" />',
+    [first + '/Properties/launchSettings.json']: { profiles: { Dev: { commandName: 'Project', applicationUrl: 'http://localhost:5104' } } },
+    [first + '/appsettings.Development.json']: { ConnectionStrings: { Default: 'Host=localhost;Database=inventory;Username=app' } },
+    [second + '/Api.fsproj']: '<Project Sdk="Microsoft.NET.Sdk.Web" />',
+    [second + '/appsettings.json']: { ConnectionStrings: { Default: 'Host=localhost;Database=catalog;Username=app' } },
+    'samples/edition/components/library/Library.csproj': '<Project Sdk="Microsoft.NET.Sdk" />',
+    'samples/edition/obj/generated/Ignored.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web" />'
+  });
+  const project = { id: 'nested-dotnet-fixture', path: root };
+  const [startup, databases] = await Promise.all([detectStartupSuggestions(project), discoverDatabases(project)]);
+  assert.deepEqual(Object.fromEntries(startup.groups.map(({ directory, choices: [choice] }) => [directory, choice.command])), {
+    [first]: 'dotnet run --project Web.csproj --launch-profile Dev',
+    [second]: 'dotnet run --project Api.fsproj --no-launch-profile'
+  });
+  assert.equal(startup.groups.find(group => group.directory === first).choices[0].port, 5104);
+  assert.deepEqual(databases.requirements.map(({ directory, source, engine, status }) => [directory, source, engine, status]).sort(), [
+    [second, second + '/appsettings.json', 'postgres', 'configured'],
+    [first, first + '/appsettings.Development.json', 'postgres', 'configured']
+  ]);
 });
 
 test('JVM suggestions require active plugins and prefer project wrappers', async t => {
