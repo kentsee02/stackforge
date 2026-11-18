@@ -92,7 +92,7 @@ export class Jobs {
   async cancel(id) {
     const record = this.records.get(id);
     const controller = this.controllers.get(id);
-    if (!record || !controller) throw new Error('这个任务没有在执行。');
+    if (!record || !controller || record.finalizing) throw new Error('这个任务没有在执行。');
     if (record.job.status === 'cancelling') return;
     if (record.job.status !== 'running') throw new Error('这个任务没有在执行。');
     record.job.status = 'cancelling'; record.job.step = '正在停止下载与安装进程…';
@@ -120,6 +120,7 @@ export class Jobs {
   async execute(record, controller, publicationOnly) {
     const { job, options, checkpoint } = record;
     const signal = controller.signal;
+    let outcome;
     const report = event => {
       if (event.type === 'step') { job.step = event.message; job.progress = event.progress; job.phase = event.phase; }
       job.logs.push(event.message.slice(-8000));
@@ -143,21 +144,25 @@ export class Jobs {
         job.result = await this.generate(options, report, { checkpoint, signal, onCheckpoint: () => this.persist(record) });
       }
       throwIfCancelled(signal);
-      job.status = 'complete'; job.progress = 100;
-      job.step = job.result?.remote?.status === 'failed' ? '本地项目已创建，GitHub 发布未完成' : '项目已创建';
+      outcome = { status: 'complete', progress: 100,
+        step: job.result?.remote?.status === 'failed' ? '本地项目已创建，GitHub 发布未完成' : '项目已创建' };
     } catch (error) {
       if (signal.aborted || error.name === 'AbortError') {
-        job.status = 'cancelled'; job.error = cancelled().message; job.step = '已取消，可继续未完成的步骤';
+        outcome = { status: 'cancelled', error: cancelled().message, step: '已取消，可继续未完成的步骤' };
       } else if (publicationOnly) {
         job.result.remote = { status: 'failed', error: error.message };
-        job.status = 'complete'; job.step = '本地项目已保留，GitHub 发布未完成';
+        outcome = { status: 'complete', step: '本地项目已保留，GitHub 发布未完成' };
       } else {
-        job.status = 'failed'; job.error = error.message; job.step = '创建未完成，可从失败步骤重试';
+        outcome = { status: 'failed', error: error.message, step: '创建未完成，可从失败步骤重试' };
       }
       if (!publicationOnly && checkpoint.result) job.result = checkpoint.result;
     } finally {
-      try { await this.persist(record); }
+      record.finalizing = true;
+      const terminal = { ...job, ...outcome };
+      try { await this.persist({ ...record, job: terminal }); }
       catch (error) { job.logs.push('无法保存任务记录：' + error.message); }
+      Object.assign(job, terminal);
+      record.finalizing = false;
       this.controllers.delete(job.id);
       this.executions.delete(job.id);
     }

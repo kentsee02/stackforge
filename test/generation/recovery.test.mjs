@@ -138,7 +138,7 @@ test('HTTP cancellation persists checkpoints, survives server restart and resume
   assert.equal(installs, 2);
 });
 
-test('a completed task stays complete while its final record is being saved', async () => {
+test('a task reports completion after its final record is saved and the creation lock is released', async () => {
   const jobs = new Jobs({ directory: false, check: async () => ({ canCreate: true }), generate: async () => ({ path: '/project' }) });
   await jobs.ready;
   let release, finalizing;
@@ -151,12 +151,14 @@ test('a completed task stays complete while its final record is being saved', as
   await finalRecord;
   try {
     await assert.rejects(jobs.cancel(id), /这个任务没有在执行/);
-    assert.equal(jobs.view(id).status, 'complete');
+    assert.equal(jobs.view(id).status, 'running');
+    assert.equal(jobs.busy, true);
   } finally {
     release();
     await jobs.shutdown();
   }
   assert.equal(jobs.view(id).status, 'complete');
+  assert.equal(jobs.busy, false);
 });
 
 test('shutdown waits for a starting task to finish saving its cancelled state', async () => {
