@@ -20,7 +20,10 @@ const engineOf = record => record.engine ?? 'postgres';
 const detailsOf = record => Object.hasOwn(engines, engineOf(record)) ? engines[engineOf(record)] : undefined;
 const changed = 'The development database container or volume could not be verified.';
 const stale = 'The development database plan changed. Preview it again.';
-const unavailable = 'Start a local Docker Engine 28 or newer in Linux container mode.';
+const localContext = 'Select a local Docker context to manage the development database.';
+const engineOffline = 'Could not reach the local Docker Engine. Start Docker Desktop or the Docker Engine, then retry.';
+const engineUnverified = 'Could not verify the local Docker Engine. Check its status and retry.';
+const linuxMode = 'Switch Docker to Linux containers, then retry.';
 const uuid = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i;
 const containerId = /^[a-f\d]{64}$/;
 const id = /^[a-f\d]{32}$/;
@@ -49,23 +52,40 @@ async function mutate(cli, args, options) {
 async function dockerSession(command, signal) {
   const base = { stdoutOnly: true, stdoutLimit: 32 * 1024, signal, timeout: 15000 };
   const env = { ...process.env, LC_ALL: 'C' };
-  try {
-    const context = env.DOCKER_CONTEXT || (!env.DOCKER_HOST && (await command('docker', ['context', 'show'], { ...base, env })).trim());
-    const endpoint = context ? JSON.parse(await command('docker', ['context', 'inspect', '--format', '{{json .Endpoints.docker.Host}}', '--', context],
-      { ...base, env })) : env.DOCKER_HOST;
-    if (!localEndpoint(endpoint)) throw new Error();
-    for (const key of Object.keys(env)) if (/^DOCKER_(CONTEXT|HOST|TLS|TLS_VERIFY|CERT_PATH)$/i.test(key)) delete env[key];
-    const cli = (args, { extraEnv, signal: operationSignal = signal, ...options } = {}) =>
-      command('docker', ['--host', endpoint, ...args], {
-        ...base, ...options, signal: operationSignal, env: { ...env, ...extraEnv }
-      });
-    const [daemon, version, os] = JSON.parse(await cli(['info', '--format', '[{{json .ID}},{{json .ServerVersion}},{{json .OSType}}]']));
-    if (!daemon || os !== 'linux' || Number(version?.split('.')[0]) < 28 || !/^\d+\./.test(version)) throw new Error();
-    return { cli, daemon };
-  } catch (error) {
-    if (error.name === 'AbortError') throw error;
-    throw new Error(unavailable);
+  async function probe(args, message) {
+    try { return await command('docker', args, { ...base, env }); }
+    catch (error) {
+      if (error.name === 'AbortError') throw error;
+      if (error.code === 'ENOENT' || /\bspawn docker(?:\.exe)? ENOENT\b/i.test(error.message)) {
+        throw new Error('Docker CLI was not found. Install Docker Desktop or Docker Engine first.');
+      }
+      throw new Error(message);
+    }
   }
+  const context = env.DOCKER_CONTEXT || (!env.DOCKER_HOST && (await probe(['context', 'show'], localContext)).trim());
+  let endpoint = env.DOCKER_HOST;
+  if (context) {
+    const output = await probe(['context', 'inspect', '--format', '{{json .Endpoints.docker.Host}}', '--', context], localContext);
+    try { endpoint = JSON.parse(output); } catch { throw new Error(localContext); }
+  }
+  if (process.platform === 'win32' && typeof endpoint === 'string' &&
+      /^npipe:\/\/\/\/\.\/pipe\/dockerDesktopWindowsEngine$/i.test(endpoint)) throw new Error(linuxMode);
+  if (!localEndpoint(endpoint)) throw new Error(localContext);
+  for (const key of Object.keys(env)) if (/^DOCKER_(CONTEXT|HOST|TLS|TLS_VERIFY|CERT_PATH)$/i.test(key)) delete env[key];
+  const output = await probe(['--host', endpoint, 'info', '--format', '[{{json .ID}},{{json .ServerVersion}},{{json .OSType}}]'], engineOffline);
+  let info;
+  try { info = JSON.parse(output); } catch { throw new Error(engineUnverified); }
+  if (!Array.isArray(info)) throw new Error(engineUnverified);
+  const [daemon, version, os] = info;
+  if (os === 'windows') throw new Error(linuxMode);
+  const major = typeof version === 'string' && /^(\d+)\./.exec(version);
+  if (typeof daemon !== 'string' || !daemon || os !== 'linux' || !major) throw new Error(engineUnverified);
+  if (Number(major[1]) < 28) throw new Error('Update the local Docker Engine to version 28 or newer, then retry.');
+  const cli = (args, { extraEnv, signal: operationSignal = signal, ...options } = {}) =>
+    command('docker', ['--host', endpoint, ...args], {
+      ...base, ...options, signal: operationSignal, env: { ...env, ...extraEnv }
+    });
+  return { cli, daemon };
 }
 
 const nameOf = record => detailsOf(record).prefix + record.key;
