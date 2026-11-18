@@ -1,7 +1,5 @@
-import { localSession, localhostEndpoint, validateLocalTarget } from '../adapters/local.mjs';
-import { databaseConnectionValue, databaseKey, sqlName } from '../discovery.mjs';
+import { readPostgresHistory } from './postgres-history.mjs';
 
-const localHosts = ['127.0.0.1', '::1', 'localhost'];
 const historyTable = `SELECT c.oid,
   c.relkind = 'r' AND NOT c.relrowsecurity AND NOT c.relhassubclass AND NOT c.relispartition
     AND EXISTS (SELECT FROM pg_catalog.pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0
@@ -39,52 +37,10 @@ SELECT current_database() AS sf_name,
 \\endif
 COMMIT;`;
 
-export function alembicLocalTargets({ requirements, connections }) {
-  const targets = [];
-  const seen = new Set();
-  for (const item of requirements) {
-    if (item.engine !== 'postgres' || item.status !== 'configured' || !localHosts.includes(item.host)) continue;
-    const connection = connections.get(item.id);
-    const value = databaseConnectionValue(connection?.value, 'postgres');
-    if (!value || connection.environmentConflict || seen.has(value)) continue;
-    const url = new URL(value);
-    const sslmode = url.searchParams.get('sslmode') ?? 'prefer';
-    if (!['disable', 'prefer', 'require'].includes(sslmode) || url.searchParams.size > 1 || [...url.searchParams.keys()].some(key => key !== 'sslmode')) continue;
-    try {
-      validateLocalTarget(item, item);
-      const user = decodeURIComponent(url.username);
-      const password = decodeURIComponent(url.password);
-      if (!sqlName.test(user) || password.length > 1024 || password.includes('\0')) continue;
-      const { host, port, name, source, environmentVariable: variable } = item;
-      targets.push({ public: { id: databaseKey('alembic-local', item.id, host, port, name), host, port, name, source, variable },
-        credentials: { user, password }, sslmode });
-      seen.add(value);
-    } catch { /* Invalid targets stay outside the selector. */ }
-  }
-  return targets;
-}
-
-export async function compareAlembicHistory({ revisions, selection, credentials, sslmode, command, probe, resolveClient, signal }) {
-  const { host, port, name } = selection;
-  const publicTarget = { host, port, name };
-  const respond = (status, fields) => ({ target: publicTarget, status, ...fields });
-  let snapshot;
-  try {
-    const address = host === 'localhost' ? await localhostEndpoint(port, probe) : host;
-    if (!address) return respond('loopback-ambiguous');
-    publicTarget.host = address;
-    const target = validateLocalTarget({ host: address, port }, { engine: 'postgres', name });
-    const client = await resolveClient(target);
-    if (selection.projectPostgres && !client) return respond('target-changed');
-    const auth = credentials ?? await client.credentials();
-    const session = localSession({ ...target, sslmode }, auth, client?.command ?? command, signal);
-    snapshot = JSON.parse(await session.query(readHistory, name));
-    if (snapshot?.name !== name) return respond('target-changed');
-  } catch (error) {
-    if (error.name === 'AbortError') throw error;
-    const issue = error.issue ?? error.code;
-    return respond(['client', 'authentication', 'permission', 'tls', 'server', 'database', 'container-stopped', 'target-changed'].includes(issue) ? issue : 'connection');
-  }
+export async function compareAlembicHistory({ revisions, ...options }) {
+  const { target, snapshot, status } = await readPostgresHistory(options, readHistory);
+  const respond = (status, fields) => ({ target, status, ...fields });
+  if (!snapshot) return respond(status);
   const { table, rows, hasObjects } = snapshot;
   if (table === 'unsupported' || !['readable', 'absent'].includes(table) || typeof hasObjects !== 'boolean' || !Array.isArray(rows)) {
     return respond('history-unavailable');

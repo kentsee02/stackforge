@@ -327,6 +327,12 @@ export async function discoverDatabases(project, { includeConnections = false, i
               connections.set(id, { sqlServerAuth: { user: fields['user id'] ?? fields.uid ?? fields.user,
                 password: fields.password ?? fields.pwd, integrated: /^(?:true|yes|sspi)$/i.test(fields['integrated security'] ?? fields.trusted_connection ?? '') } });
             }
+            if (includeConnections && id && engine === 'postgres' && status === 'configured' && fields.host?.toLowerCase() === host &&
+                Object.keys(fields).every(field => /^(?:host|port|database|username|password|ssl ?mode)$/.test(field)) &&
+                !(fields.sslmode && fields['ssl mode'])) {
+              connections.set(id, { postgresHistoryAuth: { user: fields.username, password: fields.password ?? '',
+                sslmode: (fields.sslmode ?? fields['ssl mode'] ?? 'prefer').toLowerCase() } });
+            }
           }
         }
         const urls = [...text.matchAll(/(?:jdbc:)?(?:postgres(?:ql)?|mysql|mariadb|sqlite|sqlserver|mongodb(?:\+srv)?|rediss?):\/\/[^\s"'<>]+/gi)].slice(0, 16);

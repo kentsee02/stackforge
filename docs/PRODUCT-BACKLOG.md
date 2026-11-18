@@ -6,7 +6,7 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 2. **Engine-aware development database setup** (completed in v0.39.0). Use service-level discovery to recommend PostgreSQL or MySQL and offer eligible connection and Compose controls. Recheck the service, engine, and connection settings when confirming creation.
 3. **FastAPI startup detection for imports and clones** (completed in v0.39.0). Recognize declared entrypoints, named application objects, and supported local factories through static service scans.
 4. **Project-scoped MySQL** (completed in v0.39.0). Manage a dedicated Docker MySQL database, configure eligible connection settings, and verify backup, restore, and volume ownership. Dedicated Docker PostgreSQL shipped in v0.34.0.
-5. **Additional migration adapters.** Drizzle and Alembic shipped in v0.35.0–v0.38.0. EF Core source preview ships in v0.40.0. Evaluate EF Core history verification, Flyway, and Liquibase against real imports, in that order.
+5. **Additional migration adapters.** Drizzle and Alembic shipped in v0.35.0–v0.38.0. EF Core source preview shipped in v0.40.0 and PostgreSQL history verification in v0.41.0. Evaluate Flyway and Liquibase against real imports, in that order.
 6. **Project activity history.** Record installation, check, and database outcomes per project.
 7. **Global task history and queue.** Evaluate a cross-project task view and queue after the individual workflows expose compatible state.
 8. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases, and Tasks.
@@ -16,6 +16,12 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 12. **Additional local database operations.** Evaluate backup, restore, and lifecycle controls for MongoDB, Redis, and SQL Server individually.
 13. **Native PostgreSQL and MySQL provisioning.** Evaluate setup for supported local operating systems with their existing server and permissions model.
 14. **Cloud database lifecycle.** Evaluate provider-specific provisioning, lifecycle, and deletion with separate provider permissions.
+
+## v0.41.0 EF Core PostgreSQL history verification
+
+- [x] Select a verified migration group and a project-owned PostgreSQL instance or a detected direct loopback connection.
+- [x] Compare the declared migration IDs with the default EF Core history table or a user-specified schema and table in a read-only transaction. Report applied and pending migrations, missing tables, conflicting history, and access errors.
+- [x] Exercise the workflow with the development PostgreSQL integration fixture, separate .NET project layouts, and the bilingual Projects panel.
 
 ## v0.40.0 EF Core source preview
 

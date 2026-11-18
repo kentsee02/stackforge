@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { scanEfCore } from '../../src/database/migrations/ef-core-preview.mjs';
+import { discoverDatabases } from '../../src/database/discovery.mjs';
+import { postgresHistoryTargets } from '../../src/database/migrations/postgres-history.mjs';
 import { resolveStartup } from '../../src/projects/project-startup.mjs';
 
 const using = 'using Microsoft.EntityFrameworkCore.Migrations;\nusing Microsoft.EntityFrameworkCore.Infrastructure;\n';
@@ -61,6 +63,22 @@ test('EF Core verifies migrations in projects with BOM-marked and legacy C# sour
   const result = await scanEfCore(project, { sourceId: source.id });
   assert.equal(result.status, 'ready');
   assert.deepEqual(result.groups[0].migrations.map(item => [item.id, item.verified]), [[id, true]]);
+});
+
+test('EF Core offers simple loopback PostgreSQL settings and keeps authentication private', async t => {
+  const { project, write } = await fixture(t);
+  await write('appsettings.json', JSON.stringify({ ConnectionStrings: {
+    metrics: 'Host=127.0.0.1;Port=5433;Database=metrics;Username=localreader;Password="private;fixture";Ssl Mode=Require',
+    external: 'Host=192.0.2.5;Database=external;Username=localreader',
+    routed: 'Host=localhost;Database=routed;Username=localreader;Search Path=private'
+  } }));
+  const discovery = await discoverDatabases(project, { includeConnections: true });
+  const [target, ...other] = postgresHistoryTargets(discovery, { efCore: true });
+  assert.deepEqual(other, []);
+  assert.deepEqual([target.public.name, target.public.port, target.sslmode], ['metrics', 5433, 'require']);
+  assert.equal(target.credentials.password, 'private;fixture');
+  assert.doesNotMatch(JSON.stringify(target.public), /fixture|localreader/);
+  assert.deepEqual(postgresHistoryTargets(discovery), []);
 });
 
 test('EF Core treats duplicate and incomplete declarations as unverified and ignores text and filenames', async t => {

@@ -1,6 +1,6 @@
 {
   "name": "stackforge-local",
-  "version": "0.40.4",
+  "version": "0.41.0",
   "description": "A local, open-source full-stack project generator",
   "type": "module",
   "private": true,

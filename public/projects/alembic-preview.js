@@ -8,12 +8,7 @@ const messages = {
   unverified: 'Some revisions could not be linked. Check for missing files, duplicate revisions, or dynamic declarations.'
 };
 
-const databaseMessages = {
-  current: 'The recorded revision history covers every local revision.',
-  pending: 'Some local revisions are pending on the selected database.',
-  'history-missing': 'This database has existing objects but no recorded Alembic revisions. Check the target and version table.',
-  'history-conflict': 'The recorded Alembic revisions do not match the local graph. Check the target and revision files.',
-  'history-unavailable': 'The default Alembic version table could not be verified. Check its structure or use the project’s configured table.',
+export const postgresHistoryMessages = {
   'target-changed': 'The PostgreSQL target could not be verified. Rescan database configuration and select it again.',
   'container-stopped': 'Start Project PostgreSQL and check the migration history again.',
   'loopback-ambiguous': 'Both IPv4 and IPv6 are listening. Use an explicit loopback address in the database URL.',
@@ -24,6 +19,15 @@ const databaseMessages = {
   tls: 'PostgreSQL could not establish the requested TLS connection.',
   client: 'Install psql and add it to PATH to check this database.',
   connection: 'Could not verify the PostgreSQL connection.'
+};
+
+const databaseMessages = {
+  ...postgresHistoryMessages,
+  current: 'The recorded revision history covers every local revision.',
+  pending: 'Some local revisions are pending on the selected database.',
+  'history-missing': 'This database has existing objects but no recorded Alembic revisions. Check the target and version table.',
+  'history-conflict': 'The recorded Alembic revisions do not match the local graph. Check the target and revision files.',
+  'history-unavailable': 'The default Alembic version table could not be verified. Check its structure or use the project’s configured table.'
 };
 
 const address = ({ host, port, name }) => `${host.includes(':') ? '[' + host + ']' : host}:${port}/${name}`;
@@ -67,7 +71,7 @@ export function alembicPreview(projectId, source, targets, { request, post }) {
   guide.className = databaseStatus.className = databaseTarget.className = databaseHeads.className = 'hint';
   guide.hidden = form.hidden = true;
   setText(guide, 'Set up Project PostgreSQL or save a direct local PostgreSQL URL, then rescan database configuration.');
-  controls.className = 'alembic-controls';
+  controls.className = 'migration-history-controls';
   check.className = 'secondary';
   check.type = 'submit';
   check.disabled = true;

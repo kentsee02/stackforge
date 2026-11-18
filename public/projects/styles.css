@@ -107,9 +107,11 @@
 .migration-preview ul:empty { display: none; }
 .migration-preview .check-list li { padding-top: 4px; }
 .migration-preview .check-list strong { display: inline; }
-.alembic-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; margin: 10px 0; padding: 0; border: 0; }
-.alembic-controls label { display: grid; flex: 1 1 18rem; gap: 4px; min-width: 0; }
-.alembic-controls select { width: 100%; min-height: 36px; }
+.migration-history-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; margin: 10px 0; padding: 0; border: 0; }
+.migration-history-controls label { display: grid; flex: 1 1 18rem; gap: 4px; min-width: 0; }
+.migration-history-controls :is(select, input) { width: 100%; min-height: 36px; }
+.migration-history-location { flex-basis: 100%; }
+.migration-history-location label { margin-block: 6px; max-inline-size: 22rem; }
 .alembic-preview p:empty { margin: 0; }
 .ef-core-preview section p > strong { display: inline; }
 .alembic-revision-state { color: var(--muted); }

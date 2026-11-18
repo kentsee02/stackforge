@@ -103,11 +103,19 @@ try {
     await verify();
     terminals.push({ folder, action });
   } };
-  let alembicChecks = 0;
+  let alembicChecks = 0, efChecks = 0;
   const localDatabase = { probe: async () => false, async command(program, args, options) {
-    if (program !== 'psql' || !options.input?.toString().includes('public.alembic_version')) throw new Error('ENOENT');
+    const sql = options.input?.toString();
+    if (program !== 'psql' || !sql) throw new Error('ENOENT');
+    if (sql.includes('"reporting"."ReportHistory"')) {
+      efChecks++;
+      assert.match(sql, /BEGIN READ ONLY/);
+      assert.equal(args[args.indexOf('-d') + 1], 'browser_alembic');
+      return JSON.stringify({ name: 'browser_alembic', table: 'readable', rows: ['20260102123456_CreateReports'] });
+    }
+    if (!sql.includes('public.alembic_version')) throw new Error('ENOENT');
     alembicChecks++;
-    assert.match(options.input.toString(), /BEGIN READ ONLY/);
+    assert.match(sql, /BEGIN READ ONLY/);
     assert.equal(args[args.indexOf('-d') + 1], 'browser_alembic');
     return JSON.stringify({ name: 'browser_alembic', table: 'readable', hasObjects: true, rows: ['start'] });
   } };
@@ -329,13 +337,29 @@ try {
   const targetLabel = '127.0.0.1:5432/browser_alembic · .env · ALEMBIC_DATABASE_URL';
   await alembic.locator('option').filter({ hasText: targetLabel }).waitFor({ state: 'attached' });
   const ef = page.locator('.ef-core-preview');
-  await ef.locator('summary').press('Enter');
+  await ef.locator(':scope > summary').press('Enter');
   await contains('.ef-core-preview [role="status"]', 'Database status is unverified.');
   await contains('.ef-core-preview summary', 'services/reporting/storage/Reports.csproj');
   await contains('.ef-core-preview li', '20260102123456_CreateReports · db/Schema.cs');
   await page.locator('#language').selectOption('zh-CN');
   await contains('.ef-core-preview summary', '预览 EF Core 迁移');
   await contains('.ef-core-preview [role="status"]', '数据库状态未验证。');
+  await page.locator('#language').selectOption('en');
+  const efTarget = ef.locator('select[name="targetId"]');
+  await efTarget.selectOption({ label: targetLabel });
+  await ef.getByText('History table', { exact: true }).click();
+  await ef.getByLabel('History schema').fill('reporting');
+  await ef.getByLabel('History table name').fill('ReportHistory');
+  await ef.getByRole('button', { name: 'Check database history' }).click();
+  await contains('.ef-core-preview', 'The selected history table records every local migration for this DbContext.');
+  await contains('.ef-core-preview li', 'CreateReports · db/Schema.cs · Applied');
+  assert.equal(efChecks, 1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#language').selectOption('zh-CN');
+  await contains('.ef-core-preview', '所选历史表包含此 DbContext 的全部本地迁移记录。');
+  await contains('.ef-core-preview li', 'CreateReports · db/Schema.cs · 已应用');
+  assert.equal(await ef.evaluate(panel => panel.scrollWidth <= panel.clientWidth), true);
+  await page.setViewportSize({ width: 1280, height: 820 });
   await page.locator('#language').selectOption('en');
   await alembic.locator('summary').press('Enter');
   await contains('.alembic-preview [role="status"]', 'Database status is unverified.');

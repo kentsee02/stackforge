@@ -51,6 +51,20 @@ try {
   await writeFile(join(path, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
   await writeFile(join(path, 'prisma.config.ts'), definition);
   await mkdir(join(path, 'backend/migrations/versions'), { recursive: true });
+  await mkdir(join(path, 'services/reports/data'), { recursive: true });
+  await writeFile(join(path, 'services/reports/data/Reports.csproj'), '<Project Sdk="Microsoft.NET.Sdk" />');
+  const efIds = ['20260102123456_CreateReports', '20260202123456_AddTags'];
+  for (const migration of efIds) {
+    const name = migration.split('_')[1];
+    await writeFile(join(path, 'services/reports/data', name + '.cs'), [
+      'using Microsoft.EntityFrameworkCore.Migrations;',
+      'using Microsoft.EntityFrameworkCore.Infrastructure;',
+      'namespace Reports.Data;',
+      '[DbContext(typeof(ReportsContext))]',
+      '[Migration("' + migration + '")]',
+      'public class ' + name + ' : Migration { }'
+    ].join('\n'));
+  }
   await writeFile(join(path, 'backend/alembic.ini'), '[alembic]\nscript_location = %(here)s/migrations\n');
   for (const [revision, parent, dependency] of [['base', 'None', 'None'], ['audit', "'base'", 'None'],
     ['views', "'base'", 'None'], ['tip', "'views'", "'audit'"]]) {
@@ -102,7 +116,33 @@ try {
   const { key, container: identity } = JSON.parse(await readFile(stateFile, 'utf8')).development[id];
   const query = statement => docker(['exec', identity, 'psql', '-XAtw', '-U', 'stackforge', '-d', 'portal', '-c', statement]);
   const initialDiscovery = await api(id + '/database-discovery');
-  const sourceId = initialDiscovery.migrationSources[0].id;
+  const sourceId = initialDiscovery.migrationSources.find(source => source.adapter === 'alembic').id;
+  const efSourceId = initialDiscovery.migrationSources.find(source => source.adapter === 'ef-core').id;
+  const efLocal = await api(id + '/database-ef-core-preview', { sourceId: efSourceId });
+  const { id: efTarget } = initialDiscovery.efCoreTargets.find(item => item.projectPostgres);
+  const readEf = (fields = {}, expected = 200) => api(id + '/database-ef-core-preview', {
+    sourceId: efSourceId, targetId: efTarget, groupId: efLocal.groups[0].id, ...fields
+  }, expected);
+  await readEf({ schema: "public';" }, 409);
+  await readEf({ groupId: 'a'.repeat(64) }, 409);
+  assert.equal((await readEf()).database.status, 'history-missing');
+  await query('CREATE TABLE public."__EFMigrationsHistory" ("MigrationId" varchar(150) PRIMARY KEY, "ProductVersion" varchar(32) NOT NULL)');
+  await query('INSERT INTO public."__EFMigrationsHistory" VALUES (\'' + efIds[0] + "', '9.0.0')");
+  assert.deepEqual((await readEf()).database.migrations, [{ id: efIds[0], state: 'applied' }, { id: efIds[1], state: 'pending' }]);
+  await query('INSERT INTO public."__EFMigrationsHistory" VALUES (\'' + efIds[1] + "', '9.0.0')");
+  assert.equal((await readEf()).database.status, 'current');
+  await query('ALTER TABLE public."__EFMigrationsHistory" ENABLE ROW LEVEL SECURITY');
+  assert.equal((await readEf()).database.status, 'history-unavailable');
+  await query('ALTER TABLE public."__EFMigrationsHistory" DISABLE ROW LEVEL SECURITY');
+  await query('CREATE SCHEMA reporting; ALTER TABLE public."__EFMigrationsHistory" SET SCHEMA reporting; ' +
+    'ALTER TABLE reporting."__EFMigrationsHistory" RENAME TO "ReportHistory"');
+  const custom = { schema: 'reporting', table: 'ReportHistory' };
+  assert.equal((await readEf(custom)).database.status, 'current');
+  await query('INSERT INTO reporting."ReportHistory" VALUES (\'private_unknown_migration\', \'9.0.0\')');
+  const divergentEf = await readEf(custom);
+  assert.equal(divergentEf.database.status, 'history-conflict');
+  assert.doesNotMatch(JSON.stringify(divergentEf), /private_unknown_migration/);
+  await query('DROP TABLE reporting."ReportHistory"; DROP SCHEMA reporting');
   const { id: alembicTarget } = initialDiscovery.alembicTargets.find(item => item.projectPostgres);
   const alembic = (target = alembicTarget, expected = 200) => api(id + '/database-alembic-preview', { sourceId, targetId: target }, expected);
   await alembic('a'.repeat(64), 409);
@@ -150,6 +190,12 @@ try {
   assert.equal((await alembic(reader.id)).database.status, 'permission');
   await query('GRANT SELECT ON alembic_version TO history_reader');
   assert.equal((await alembic(reader.id)).database.status, 'current');
+  const efReader = (await api(id + '/database-discovery')).efCoreTargets.find(item => item.variable === 'HISTORY_DATABASE_URL');
+  await query('CREATE TABLE public."__EFMigrationsHistory" ("MigrationId" varchar(150) PRIMARY KEY, "ProductVersion" varchar(32) NOT NULL)');
+  assert.equal((await readEf({ targetId: efReader.id })).database.status, 'permission');
+  await query('GRANT SELECT ON public."__EFMigrationsHistory" TO history_reader');
+  assert.equal((await readEf({ targetId: efReader.id })).database.status, 'pending');
+  await query('DROP TABLE public."__EFMigrationsHistory"');
   await writeFile(join(path, '.env'), stored);
   await query('DROP TABLE alembic_version, before_migrations');
   const drizzle = discovery.requirements.find(item => item.migrationAdapter === 'drizzle');

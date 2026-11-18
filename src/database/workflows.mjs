@@ -16,8 +16,10 @@ import { discoverDatabases } from './discovery.mjs';
 import { developmentDatabase } from './docker/development-database.mjs';
 import { previewDrizzle } from './migrations/drizzle-preview.mjs';
 import { previewAlembic } from './migrations/alembic-preview.mjs';
-import { alembicLocalTargets, compareAlembicHistory } from './migrations/alembic-history.mjs';
+import { compareAlembicHistory } from './migrations/alembic-history.mjs';
 import { scanEfCore } from './migrations/ef-core-preview.mjs';
+import { compareEfCoreHistory, efCoreHistoryTable } from './migrations/ef-core-history.mjs';
+import { postgresHistoryTargets } from './migrations/postgres-history.mjs';
 
 export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
   runtime, removals, configWrites, localDatabase, isClosing }) {
@@ -124,13 +126,19 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
         scanEfCore(project)
       ]);
       const discovery = await scanDatabases(project, scanned, activeIds);
-      const alembicTargets = [];
-      if (scanned.migrationSources.length) {
+      const alembicTargets = [], efCoreTargets = [];
+      if (scanned.migrationSources.length || ef.sources.length) {
         const container = await development.historyTarget(project).catch(() => undefined);
-        if (container) alembicTargets.push(container);
-        alembicTargets.push(...alembicLocalTargets(scanned).map(item => item.public));
+        if (scanned.migrationSources.length) {
+          if (container) alembicTargets.push(container);
+          alembicTargets.push(...postgresHistoryTargets(scanned).map(item => item.public));
+        }
+        if (ef.sources.length) {
+          if (container) efCoreTargets.push(container);
+          efCoreTargets.push(...postgresHistoryTargets(scanned, { efCore: true }).map(item => item.public));
+        }
       }
-      return { ...discovery, alembicTargets, migrationSources: [...scanned.migrationSources, ...ef.sources], migrationScanLimited: ef.limited,
+      return { ...discovery, alembicTargets, efCoreTargets, migrationSources: [...scanned.migrationSources, ...ef.sources], migrationScanLimited: ef.limited,
         bindings: discovery.bindings.map(item => ({
         ...item, ...(item.instance.provider === 'remote' && {
           profileSaved: Boolean(databaseRegistry.profile(project.id, item.instanceId))
@@ -243,7 +251,20 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     if (databaseWrites.size || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
       throw new Error('Wait for the current project operation to finish.');
     }
-    if (action === 'database-ef-core-preview') return scanEfCore(project, { sourceId: payload.sourceId ?? null, signal: controller.signal });
+    if (action === 'database-ef-core-preview') {
+      const { signal } = controller;
+      const { targetId, groupId, schema, table } = payload;
+      const preview = await scanEfCore(project, { sourceId: payload.sourceId ?? null, signal });
+      if (targetId === undefined || preview.status !== 'ready') return preview;
+      const group = preview.groups.find(item => item.id === groupId);
+      if (!group) throw new Error('Choose a verified EF Core DbContext and rescan if it changed.');
+      const history = efCoreHistoryTable(schema, table);
+      const invalid = 'Choose an available EF Core PostgreSQL target and rescan if it changed.';
+      const scanned = await discoverDatabases(project, { includeConnections: true });
+      const options = await historySelection(project, targetId, signal, scanned, invalid, { efCore: true });
+      const database = await compareEfCoreHistory({ group, history, ...options });
+      return { ...preview, database };
+    }
     if (action === 'database-alembic-preview') {
       const { signal } = controller;
       const { sourceId, targetId } = payload;
@@ -253,19 +274,8 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       const scanned = await discoverDatabases(project, { includeMigrations: true, includeConnections: true });
       const preview = await previewAlembic(project, sourceId, signal, scanned);
       if (preview.status !== 'ready') return preview;
-      const local = alembicLocalTargets(scanned).find(item => item.public.id === targetId);
-      const container = await development.historyTarget(project).catch(() => undefined);
-      const selection = local?.public ?? (container?.id === targetId ? container : undefined);
-      if (!selection) throw new Error(invalid);
-      const database = await compareAlembicHistory({ revisions: preview.revisions, selection, credentials: local?.credentials,
-        sslmode: local?.sslmode, command: localDatabase.command, probe: localDatabase.probe, signal,
-        async resolveClient(target) {
-          try { return await development.client(project, target, signal, selection.projectPostgres ? selection.id : undefined); }
-          catch (error) {
-            if (error.name === 'AbortError') throw error;
-            throw Object.assign(new Error(invalid), { code: 'target-changed' });
-          }
-        } });
+      const options = await historySelection(project, targetId, signal, scanned, invalid);
+      const database = await compareAlembicHistory({ revisions: preview.revisions, ...options });
       return { ...preview, database };
     }
     if (action === 'database-drizzle-preview' || action === 'database-drizzle-apply') {
@@ -351,6 +361,24 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       }
     })();
     return trackWrite(project, controller, done);
+  }
+
+  async function historySelection(project, targetId, signal, scanned, invalid, options) {
+    if (typeof targetId !== 'string' || !/^[a-f0-9]{64}$/.test(targetId)) throw new Error(invalid);
+    const local = postgresHistoryTargets(scanned, options).find(item => item.public.id === targetId);
+    const container = local ? undefined : await development.historyTarget(project).catch(() => undefined);
+    const selection = local?.public ?? (container?.id === targetId ? container : undefined);
+    if (!selection) throw new Error(invalid);
+    return { selection, credentials: local?.credentials, sslmode: local?.sslmode,
+      command: localDatabase.command, probe: localDatabase.probe, signal,
+      async resolveClient(target) {
+        try { return await development.client(project, target, signal, selection.projectPostgres ? selection.id : undefined); }
+        catch (error) {
+          if (error.name === 'AbortError') throw error;
+          throw Object.assign(new Error(invalid), { code: 'target-changed' });
+        }
+      }
+    };
   }
 
   async function localAction(project, action, payload, controller) {

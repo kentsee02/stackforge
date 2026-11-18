@@ -140,7 +140,9 @@ export async function scanEfCore(project, { sourceId, signal } = {}) {
     partial ||= result.limited;
     if (sourceId) {
       await resolveStartup(project, [], identity);
-      return { source: record.source, groups: result.groups, status: partial ? 'partial' : result.groups.length ? 'ready' : 'empty' };
+      const groups = result.groups.map(group => ({ ...group, id: createHash('sha256').update(
+        JSON.stringify([sourceId, group.context, group.namespace, group.migrations.map(item => item.id)])).digest('hex') }));
+      return { source: record.source, groups, status: partial ? 'partial' : groups.length ? 'ready' : 'empty' };
     }
     if (result.groups.length) sources.push(record);
   }

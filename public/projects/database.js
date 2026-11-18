@@ -179,7 +179,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       if ($('project-database-discovery').open) void loadDatabaseDiscovery();
     }
     const locked = busy || Boolean(databaseDiscovery.working);
-    for (const control of $('database-requirements').querySelectorAll('button:not(.drizzle-confirmation button, .alembic-controls button), .drizzle-confirmation, .alembic-controls')) control.disabled = locked;
+    for (const control of $('database-requirements').querySelectorAll('button:not(.drizzle-confirmation button, .migration-history-controls button), .drizzle-confirmation, .migration-history-controls')) control.disabled = locked;
     for (const control of ['database-local-check', 'database-local-preview', 'database-discovery-refresh']) $(control).disabled = locked;
     $('database-initialize-submit').disabled = locked || $('database-initialize-name').value !== databaseDiscovery.plan?.name;
     const binding = resourceBinding();
@@ -254,7 +254,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       });
       for (const source of data.migrationSources ?? []) {
         const preview = source.adapter === 'alembic' ? alembicPreview(view.id, source, data.alembicTargets ?? [], { request, post }) :
-          source.adapter === 'ef-core' ? efCorePreview(view.id, source, { request, post }) : undefined;
+          source.adapter === 'ef-core' ? efCorePreview(view.id, source, data.efCoreTargets ?? [], { request, post }) : undefined;
         if (!preview) continue;
         const row = document.createElement('li');
         row.append(preview);
