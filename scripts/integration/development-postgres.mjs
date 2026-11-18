@@ -75,13 +75,17 @@ try {
   listener = createServer().listen(0, '127.0.0.1');
   await once(listener, 'listening');
   const port = listener.address().port;
-  const options = { name: 'portal', port };
+  const target = (await read()).options.find(item => item.engine === 'postgres' && item.canCreate);
+  const options = { name: 'portal', port, targetId: target.id };
   await api(endpoint, { mode: 'preview', ...options }, 403, false);
   assert.match((await action({ mode: 'preview', ...options }, 409)).error, /free port/);
   await new Promise(resolve => listener.close(resolve));
   listener = undefined;
   const { plan } = await action({ mode: 'preview', ...options });
   assert.equal((await read()).status, 'absent');
+  await writeFile(join(path, '.env.example'), 'DATABASE_URL=mysql://example:example@localhost/app\n');
+  await action({ mode: 'create', plan, ...options, confirm: 'portal' }, 409);
+  await rm(join(path, '.env.example'));
   await action({ mode: 'create', plan, ...options, confirm: 'wrong' }, 409);
   await action({ mode: 'create', plan, ...options, confirm: 'portal' });
   let status;
@@ -237,7 +241,7 @@ try {
     await writeFile(join(path, '.env'), stored);
   }
   await action({ mode: 'delete', confirm: volume }, 409);
-  assert.match((await api(id + '/remove', { confirmName: 'portal' }, 409)).error, /dedicated PostgreSQL volume/);
+  assert.match((await api(id + '/remove', { confirmName: 'portal' }, 409)).error, /dedicated database volume/);
   await action({ mode: 'stop' });
   assert.equal((await read()).status, 'stopped');
   assert.equal((await alembic()).database.status, 'container-stopped');
@@ -278,6 +282,7 @@ try {
   await assert.rejects(docker(['volume', 'inspect', volume]), /no such volume/i);
   assert.ok((await readFile(join(path, '.env'), 'utf8')).includes(password));
 
+  options.targetId = (await read()).options.find(item => item.engine === 'postgres' && item.canCreate).id;
   const nextPlan = await action({ mode: 'preview', ...options });
   await action({ mode: 'create', plan: nextPlan.plan, ...options, confirm: 'portal' });
   await alembic(alembicTarget, 409);

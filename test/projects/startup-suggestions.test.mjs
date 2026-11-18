@@ -173,6 +173,37 @@ test('declared cross-framework commands work and ambiguous entries stay manual',
   assert.deepEqual(groups[1].choices.map(choice => choice.kind), ['web', 'api']);
 });
 
+test('FastAPI suggestions resolve multi-name imports and typed factory objects in their service directories', async t => {
+  const path = await fixture(t, {
+    'app/main.py': 'from fastapi import Depends, FastAPI\napp = FastAPI(docs_url="/reference")\n',
+    'backend/src/main.py': 'import fastapi\nfrom src.config import settings\n\n' +
+      'def initialize_backend_application() -> fastapi.FastAPI:\n    app = fastapi.FastAPI(**settings.attributes)\n    return app\n\n' +
+      'backend_app: fastapi.FastAPI = initialize_backend_application()\n',
+    'services/ambiguous/main.py': 'from fastapi import FastAPI\nfirst = FastAPI()\nsecond = FastAPI()\n'
+  });
+  const { groups } = await detectStartupSuggestions({ path });
+  const fastapi = groups.filter(item => item.name === 'FastAPI');
+  assert.deepEqual(fastapi.map(({ directory, choices: [choice] }) => [directory, choice.command.split(' -m uvicorn ')[1], choice.openPath]), [
+    ['.', 'app.main:app --reload', '/reference'], ['backend', 'src.main:backend_app --reload', undefined]
+  ]);
+});
+
+test('FastAPI supports declared entrypoints and discovers differently named applications in packages', async t => {
+  const path = await fixture(t, {
+    'services/catalog/pyproject.toml': '[project]\ndependencies = ["fastapi"]\n[tool.fastapi]\n# Select the service\nentrypoint = "products.http.gateway:application"\n[tool.other]\nflag = true\n',
+    'services/catalog/src/products/http/gateway.py': 'from products.factory import build\napplication = build()\n',
+    'services/catalog/main.py': 'from fastapi import FastAPI\nother = FastAPI()\n',
+    'services/search/requirements.txt': 'fastapi[standard]\n',
+    'services/search/api/http/entry.py': 'import os, fastapi as service\nsearch = service.FastAPI()\n',
+    'services/search/tests/test_server.py': 'from fastapi import FastAPI\nfake = FastAPI()\n'
+  });
+  const result = (await detectStartupSuggestions({ path })).groups.filter(item => item.name === 'FastAPI');
+  assert.deepEqual(result.map(group => [group.directory, group.choices[0].command.split(' -m uvicorn ')[1]]), [
+    ['services/search', 'api.http.entry:search --reload'],
+    ['services/catalog', 'products.http.gateway:application --reload --app-dir src']
+  ]);
+});
+
 test('startup suggestions read literal endpoints from framework config, CLI flags and entry points', async t => {
   const pkg = (dev, dependencies) => ({ packageManager: 'npm@11.0.0', scripts: { dev }, dependencies });
   const pom = plugin => `<project><build><plugins><plugin><artifactId>${plugin}-maven-plugin</artifactId></plugin></plugins></build></project>`;

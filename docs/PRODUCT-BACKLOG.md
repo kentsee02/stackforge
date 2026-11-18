@@ -3,9 +3,9 @@
 Develop these candidates in priority order. v0.33.0 completed startup preflight, v0.34.0 added project-scoped PostgreSQL, and v0.35.0 added the first Drizzle PostgreSQL migration preview.
 
 1. **Project startup preflight** (completed). Check a locally imported or cloned project and point users to the relevant setup action.
-2. **Engine-aware development database setup.** Replace the PostgreSQL-specific entry point with a project development database workflow. Use service-level discovery to recommend an engine and offer the existing connection or Compose controls when eligible. Confirm the service, engine, and evidence again on the server before creating a dedicated instance.
-3. **FastAPI startup detection for imports and clones.** Recognize common multi-name imports and named ASGI application objects, including a typed object initialized by a local factory. Preserve the service working directory and saved custom commands.
-4. **Project-scoped MySQL.** Dedicated Docker PostgreSQL shipped in v0.34.0. Once engine-aware setup is in place, add dedicated Docker MySQL with verified lifecycle, connection settings, backup, restore, and volume ownership.
+2. **Engine-aware development database setup** (completed in v0.39.0). Use service-level discovery to recommend PostgreSQL or MySQL and offer eligible connection and Compose controls. Recheck the service, engine, and connection settings when confirming creation.
+3. **FastAPI startup detection for imports and clones** (completed in v0.39.0). Recognize declared entrypoints, named application objects, and supported local factories through static service scans.
+4. **Project-scoped MySQL** (completed in v0.39.0). Manage a dedicated Docker MySQL database, configure eligible connection settings, and verify backup, restore, and volume ownership. Dedicated Docker PostgreSQL shipped in v0.34.0.
 5. **Additional migration adapters.** Drizzle PostgreSQL preview and confirmed execution for supported schema additions shipped in v0.35.0 and v0.36.0. Alembic file preview and read-only PostgreSQL history checks ship in v0.37.0 and v0.38.0. Evaluate EF Core Migrations, Flyway, and Liquibase against real imports.
 6. **Project activity history.** Record installation, check, and database outcomes per project.
 7. **Global task history and queue.** Evaluate a cross-project task view and queue after the individual workflows expose compatible state.
@@ -23,6 +23,7 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 - A matching saved connection or manageable Compose service offers its existing action. A creation preview identifies the target service, engine, version, endpoint, volume, and proposed configuration edit. The server rejects a changed or mismatched plan. Existing dedicated instances show management controls based on their recorded engine and verified ownership.
 - A FastAPI clone with `from fastapi import Depends, FastAPI` and `app = FastAPI(...)` in `app/main.py` offers `app.main:app` from the repository root. A clone with an initialized `backend_app` in `backend/src/main.py` offers `src.main:backend_app` from `backend/`.
 - Startup suggestions use static project evidence and expose ambiguous targets for manual review. Validate both FastAPI layouts through import and clone, including the rendered command and working directory.
+- Include independently named ASGI entry points, deep Python package layouts, and environment variables with arbitrary supported names in regression coverage. Run `npm run test:development-mysql` against the official image to verify lifecycle, projected settings, and the archive workflow.
 
 ## v0.38.0 Alembic PostgreSQL history checks
 

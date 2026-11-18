@@ -4,7 +4,7 @@ import { lstat, open, realpath, rename, unlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { parseEnv } from 'node:util';
-import { databaseConnectionValue, discoverDatabases, environmentRevision } from './discovery.mjs';
+import { databaseConnectionValue, databaseKey, discoverDatabases, environmentRevision } from './discovery.mjs';
 import { resolveStartup } from '../projects/project-startup.mjs';
 import { run, throwIfCancelled } from '../platform/process.mjs';
 
@@ -56,6 +56,10 @@ async function replaceConnection({ file, text, stat, folder, folderStat, gitRoot
   const after = parseEnv(updated);
   if (after[variable] !== url || Buffer.byteLength(updated) > 512 * 1024 ||
       JSON.stringify(after) !== JSON.stringify({ ...before, [variable]: url })) throw new Error(unsafeFile);
+  return writeReplacement({ file, updated, stat, folder, folderStat, gitRoot, variable, revision, signal });
+}
+
+async function writeReplacement({ file, updated, stat, folder, folderStat, gitRoot, variable, revision, signal }) {
   const gitDirectory = gitRoot && join(gitRoot, '.git');
   const metadata = gitDirectory && await readStat(gitDirectory);
   const staging = !gitRoot ? folder : metadata?.isDirectory() && metadata.dev === folderStat.dev ? gitDirectory : await realpath(tmpdir());
@@ -70,6 +74,63 @@ async function replaceConnection({ file, text, stat, folder, folderStat, gitRoot
     throwIfCancelled(signal);
     await rename(temporary, file);
   } finally { await unlink(temporary).catch(() => {}); }
+}
+
+async function mysqlFieldsFile(root, requirement) {
+  const keys = Object.values(requirement.connectionFields);
+  const label = keys.join(', ');
+  const folder = join(root, requirement.directory);
+  const file = join(folder, '.env');
+  if (await realpath(folder) !== folder) throw new Error(unsafeFile);
+  const folderStat = await readStat(folder);
+  const stat = await readStat(file);
+  const text = await readEnvironment(file, stat);
+  const here = parseEnv(text);
+  for (const path of [join(folder, '.env.local'), ...(requirement.directory === '.' ? [] : [join(root, '.env'), join(root, '.env.local')])]) {
+    const values = parseEnv(await readEnvironment(path, await readStat(path)));
+    if (keys.some(key => Object.hasOwn(values, key))) return;
+  }
+  if (keys.some(key => Object.hasOwn(process.env, key) || here[key]?.trim())) return;
+  const revision = stat ? environmentRevision(stat, label) : undefined;
+  return { folder, folderStat, file, stat, text, here, keys, label, revision, token: databaseKey(requirement.connectionFields, revision) };
+}
+
+export async function mysqlEnvironmentOption(root, requirement) {
+  if (!requirement.connectionFields || requirement.engine !== 'mysql') return;
+  const settings = await mysqlFieldsFile(root, requirement).catch(() => undefined);
+  if (settings) return { id: requirement.id, variable: settings.label, source: requirement.source, revision: settings.token,
+    file: requirement.directory === '.' ? '.env' : requirement.directory + '/.env', style: 'mysql-fields' };
+}
+
+export async function saveMysqlEnvironment(project, { requirementId, revision, host, port, name, user, password }, signal) {
+  const { root, identity, requirements } = await discoverDatabases(project);
+  const requirement = requirements.find(item => item.id === requirementId && item.engine === 'mysql' && item.connectionFields);
+  const settings = requirement && await mysqlFieldsFile(root, requirement);
+  if (!settings || revision !== settings.token) throw new Error(editChanged);
+  const { file, stat, folder, folderStat, text, here, keys, label } = settings;
+  const values = Object.fromEntries(Object.entries({ host, port: String(port), name, user, password }).map(([role, value]) => [requirement.connectionFields[role], value]));
+  const gitRoot = await verifyGit(folder, '.env');
+  const lineBreak = text.includes('\r\n') ? '\r\n' : '\n';
+  let updated = text;
+  for (const key of keys) {
+    const assignment = new RegExp(`^([ \\t]*(?:export[ \\t]+)?${key}[ \\t]*=[ \\t]*)(?:""|''|[ \\t]*)([ \\t]*(?:#[^\\r\\n]*)?)$`, 'gm');
+    if (Object.hasOwn(here, key)) {
+      if ([...updated.matchAll(assignment)].length !== 1) throw new Error(unsafeFile);
+      updated = updated.replace(assignment, (_, prefix, suffix) => `${prefix}"${values[key]}"${suffix}`);
+    } else updated += (updated && !updated.endsWith('\n') ? lineBreak : '') + `${key}="${values[key]}"${lineBreak}`;
+  }
+  const parsed = parseEnv(updated);
+  const expected = Object.entries({ ...here, ...values });
+  if (Buffer.byteLength(updated) > 512 * 1024 || Object.keys(parsed).length !== expected.length ||
+      expected.some(([key, value]) => parsed[key] !== value)) throw new Error(unsafeFile);
+  await resolveStartup(project, [], identity);
+  throwIfCancelled(signal);
+  if (stat) await writeReplacement({ file, updated, stat, folder, folderStat, gitRoot, variable: label, revision: settings.revision, signal });
+  else {
+    if (!sameFile(folderStat, await readStat(folder))) throw new Error(editChanged);
+    await writeFile(file, updated, { flag: 'wx', mode: 0o600 });
+  }
+  return { saved: true, file: requirement.directory === '.' ? '.env' : requirement.directory + '/.env' };
 }
 
 export async function saveDatabaseEnvironment(project, { requirementId, value, revision }, signal) {

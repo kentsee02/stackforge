@@ -163,27 +163,33 @@
             <pre id="runtime-output" aria-labelledby="runtime-log-title" tabindex="0" hidden></pre>
           </div>
           <details id="project-development-postgres" class="project-ports" hidden>
-            <summary data-i18n="项目专属 PostgreSQL">Project PostgreSQL</summary>
+            <summary data-i18n="项目开发数据库">Project development database</summary>
             <p id="development-postgres-status" class="hint" role="status"></p>
             <p id="development-postgres-target" class="hint" hidden></p>
+            <label id="development-postgres-choice-field" class="inline-field" hidden><span data-i18n="数据库服务">Database service</span><select id="development-postgres-choice"></select></label>
+            <p id="development-postgres-evidence" class="hint" hidden></p>
+            <div id="development-postgres-existing" class="project-operation-actions" hidden></div>
             <form id="development-postgres-create" hidden>
-              <p class="hint" data-i18n="在本机 Docker 中为此项目创建独立的 PostgreSQL 17 实例。">Create a dedicated PostgreSQL 17 instance for this project in local Docker.</p>
+              <p class="hint" data-i18n="在本机 Docker 中为此服务创建独立数据库。">Create a dedicated database for this service in local Docker.</p>
               <div class="port-fields">
                 <label class="inline-field"><span data-i18n="数据库名称">Database name</span><input id="development-postgres-name" pattern="[a-z][a-z0-9_]{0,62}" maxlength="63" required></label>
                 <label class="inline-field"><span data-i18n="端口">Port</span><input id="development-postgres-port" type="number" min="1024" max="65535" required></label>
               </div>
-              <button id="development-postgres-preview" type="submit" class="secondary" data-i18n="预览 PostgreSQL 实例">Preview PostgreSQL instance</button>
+              <button id="development-postgres-preview" type="submit" class="secondary" data-i18n="预览数据库实例">Preview database instance</button>
             </form>
             <div id="development-postgres-controls" class="project-operation-actions" hidden>
-              <button id="development-postgres-start" class="secondary" type="button" data-i18n="启动 PostgreSQL">Start PostgreSQL</button>
-              <button id="development-postgres-stop" class="secondary" type="button" data-i18n="停止 PostgreSQL">Stop PostgreSQL</button>
-              <button id="development-postgres-delete" class="secondary danger" type="button" data-i18n="删除 PostgreSQL 数据卷">Delete PostgreSQL volume</button>
+              <button id="development-postgres-start" class="secondary" type="button" data-i18n="启动数据库">Start database</button>
+              <button id="development-postgres-stop" class="secondary" type="button" data-i18n="停止数据库">Stop database</button>
+              <button id="development-postgres-backup" class="secondary" type="button" data-i18n="下载备份" hidden>Download backup</button>
+              <button id="development-postgres-restore" class="secondary" type="button" data-i18n="恢复备份" hidden>Restore backup</button>
+              <button id="development-postgres-delete" class="secondary danger" type="button" data-i18n="删除数据库数据卷">Delete database volume</button>
             </div>
+            <p id="development-postgres-transfer-message" class="hint" role="status"></p>
             <form id="development-postgres-connect" hidden>
-              <label class="inline-field"><span data-i18n="要配置的连接变量">Connection variable to configure</span><select id="development-postgres-requirement" required></select></label>
-              <button id="development-postgres-save" type="submit" class="secondary" data-i18n="保存数据库 URL">Save database URL</button>
+              <label class="inline-field"><span data-i18n="要配置的连接设置">Connection settings to configure</span><select id="development-postgres-requirement" required></select></label>
+              <button id="development-postgres-save" type="submit" class="secondary" data-i18n="保存连接设置">Save connection settings</button>
             </form>
-            <button id="development-postgres-refresh" type="button" class="text-button" data-i18n="刷新 PostgreSQL 状态">Refresh PostgreSQL status</button>
+            <button id="development-postgres-refresh" type="button" class="text-button" data-i18n="刷新开发数据库">Refresh development database</button>
           </details>
           <details id="project-database-discovery" class="project-ports">
             <summary data-i18n="数据库发现与初始化">Database discovery and initialization</summary>
@@ -384,6 +390,7 @@
   <dialog id="development-postgres-dialog" class="project-trash-dialog postgres-setup-dialog" aria-labelledby="development-postgres-dialog-title">
     <h2 id="development-postgres-dialog-title"></h2>
     <p class="hint" id="development-postgres-dialog-target"></p>
+    <p class="hint" id="development-postgres-dialog-connection" hidden></p>
     <form id="development-postgres-confirm-form">
       <label class="inline-field project-trash-field">
         <span id="development-postgres-confirm-hint"></span>

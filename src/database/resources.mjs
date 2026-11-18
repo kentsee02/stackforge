@@ -13,7 +13,7 @@ import { verifyBackupImage, verifySqlRestore } from './backup/restore-check.mjs'
 const changed = 'The restore preview or confirmed database target has changed.';
 const missing = 'Choose an available database binding.';
 
-export function databaseResources({ registry, vault, directory, operations, command, resolveLocalClient, verifyRestore = verifySqlRestore,
+export function databaseResources({ registry, vault, directory, operations, command, resolveLocalClient, resolveDedicated, verifyRestore = verifySqlRestore,
   preflight = verifyRestore === verifySqlRestore ? verifyBackupImage : undefined }) {
   const sqlite = sqliteAdapter(directory);
   const previews = new Map();
@@ -92,13 +92,14 @@ export function databaseResources({ registry, vault, directory, operations, comm
         canRestore: state.capabilities.restore, export: session.backup, inventory: session.inventory,
         restore: data => session.restore(data, state.identity) };
     }
-    if (provider !== 'docker' || binding && (!project.unmanaged || !binding.selection)) throw new Error(missing);
-    const target = await operations.databaseTarget(project, ports, signal, binding?.selection);
+    if (provider !== 'development' && (provider !== 'docker' || binding && (!project.unmanaged || !binding.selection))) throw new Error(missing);
+    const target = provider === 'development' ? await resolveDedicated(project, binding.id, signal) :
+      await operations.databaseTarget(project, ports, signal, binding?.selection);
     if (target.container?.status !== 'running') throw new Error('Start the project database before backing it up or restoring it.');
-    const options = { engine: target.engine, container: target.container.id, config: target.config, command: operations.command, signal, project: project.name };
+    const options = { engine: target.engine, container: target.container.id, config: target.config, command: target.command ?? operations.command, signal, project: project.name };
     const inventory = () => databaseInventory(options);
     const [{ version }, capabilities] = await Promise.all([inventory(), databaseTransferCapabilities(options)]);
-    return { engine: target.engine, name: binding ? `${project.name}/${target.service}` : project.name, version, identity: target.container.id, inventory, endpoints: target.endpoints,
+    return { engine: target.engine, name: target.name ?? (binding ? `${project.name}/${target.service}` : project.name), version, identity: target.container.id, inventory, endpoints: target.endpoints,
       canRestore: capabilities.restore, export: backupFile => transferDatabase({ ...options, backupFile }),
       restore: data => transferDatabase({ ...options, file: data }) };
   }

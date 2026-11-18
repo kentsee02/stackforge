@@ -4,7 +4,7 @@ import { drizzlePreview } from '/projects/drizzle-preview.js';
 import { alembicPreview } from '/projects/alembic-preview.js';
 
 export function createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
-  selectedId, selectedProject, renderPage, refresh, act, openDevelopment }) {
+  selectedId, selectedProject, renderPage, refresh, act, openDevelopment, refreshDevelopment }) {
   let databaseView;
   let databaseDiscovery;
   let configuringDatabase;
@@ -83,7 +83,8 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     if (!project || state.pending) return;
     state.pending = { id: project.id, action: 'database-backup' };
     const message = value => {
-      if (binding && !binding.compose && selectedId() === project.id) showMessage($('database-resource-message'), value);
+      if (binding?.development && selectedId() === project.id) showMessage($('development-postgres-transfer-message'), value);
+      else if (binding && !binding.compose && selectedId() === project.id) showMessage($('database-resource-message'), value);
       else transferMessage = { id: project.id, message: value };
     };
     message('Preparing backup…');
@@ -129,7 +130,10 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     finally {
       view.loading = false;
       view.next = Date.now() + 3500;
-      if (view === databaseView) renderPage();
+      if (view === databaseView) {
+        renderPage();
+        if (view.requestedBinding) openExisting({ id: view.requestedBinding, provider: 'docker' });
+      }
     }
   }
 
@@ -263,7 +267,8 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
         if (shared) setText(option, `${label} · Shared database`);
         return option;
       }));
-      const saved = sources.get(savedRequirementId);
+      const saved = sources.get(savedRequirementId) ?? data.bindings.find(item => item.id === view.requestedBinding);
+      view.requestedBinding = undefined;
       const matchingTarget = entries => entries.find(item => item.instanceId === saved?.instanceId)?.id;
       const localTarget = matchingTarget(local);
       if (localTarget) select.value = localTarget;
@@ -280,8 +285,8 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       else if (managed.some(item => item.id === previous)) targets.value = previous;
       $('database-resources').hidden = !managed.length;
       if (targets.value !== previous) resetResource();
-      showMessage($('database-discovery-message'), localTarget ? 'Database connection saved. Check the target or preview initialization below.' :
-        remoteTarget ? 'Database connection saved. Configure the remote connection below.' :
+      showMessage($('database-discovery-message'), savedRequirementId && localTarget ? 'Database connection saved. Check the target or preview initialization below.' :
+        savedRequirementId && remoteTarget ? 'Database connection saved. Configure the remote connection below.' :
         savedRequirementId ? 'Database connection saved.' : data.limited ? 'The scan reached its file limit.' :
         requirements.length ? '' : 'No database configuration was detected.');
       return data.requirements.find(item => item.id === savedRequirementId);
@@ -541,7 +546,8 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       const result = await response.json();
       if (approval) {
         $('database-restore-dialog').close();
-        if (binding && !binding.compose) showMessage($('database-resource-message'), 'Database restored and verified.');
+        if (binding?.development && selectedId() === project.id) showMessage($('development-postgres-transfer-message'), 'Database restored and verified.');
+        else if (binding && !binding.compose) showMessage($('database-resource-message'), 'Database restored and verified.');
         else transferMessage = { id: project.id, message: 'Database restored and verified.' };
         if (binding && databaseDiscovery) databaseDiscovery.resourceStatus = undefined;
       } else {
@@ -567,6 +573,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       $('database-restore-submit').disabled = !validRestore();
       renderPage();
       refresh();
+      if (binding?.development) void refreshDevelopment();
     }
   });
   $('database-restore-cancel').addEventListener('click', () => $('database-restore-dialog').close());
@@ -603,7 +610,31 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     act(deletingDatabase.id, 'database-delete', { confirmVolume: deletingDatabase.volume });
   });
 
+  function openExisting(action) {
+    const compose = action.provider === 'docker';
+    const panel = $(compose ? 'project-database' : 'project-database-discovery');
+    if (panel.hidden) return;
+    panel.open = true;
+    panel.querySelector('summary').focus();
+    if (compose) {
+      if (databaseView.loading) databaseView.requestedBinding = action.id;
+      else {
+        Object.assign(databaseView, { binding: action.id, requestedBinding: undefined, next: 0, status: undefined, log: undefined });
+        void loadDatabase();
+      }
+    } else {
+      databaseDiscovery.requestedBinding = action.id;
+      void loadDatabaseDiscovery();
+    }
+  }
+
   return {
+    openExisting,
+    developmentArchive(mode, id) {
+      const binding = { id, development: true };
+      if (mode === 'backup') void backupAction(selectedProject(), binding);
+      else openRestore(binding);
+    },
     render(project, busy, unavailable) {
       if (project.offline) return;
       renderDatabase(project, busy, unavailable);

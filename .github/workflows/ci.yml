@@ -40,6 +40,7 @@ jobs:
           docker pull mysql:8.4
           npm run test:database-integration
           npm run test:development-postgres
+          npm run test:development-mysql
           npm run test:prisma-integration -- --large
       - if: runner.os == 'Windows'
         shell: pwsh

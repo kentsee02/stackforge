@@ -139,10 +139,11 @@ try {
   const developmentRoute = '**/api/projects/*/database-development';
   await page.route(developmentRoute, async route => {
     if (route.request().method() === 'GET') return route.continue();
-    const { mode, name, port } = route.request().postDataJSON();
+    const { mode, name, port, targetId } = route.request().postDataJSON();
     assert.equal(mode, 'preview');
     assert.equal(name, 'app_portal');
-    await route.fulfill({ json: { plan: 'preview-only', name, port, host: '127.0.0.1', image: 'postgres:17' } });
+    assert.match(targetId, /^[a-f0-9]{64}$/);
+    await route.fulfill({ json: { plan: 'preview-only', name, port, targetId, host: '127.0.0.1', image: 'postgres:17' } });
   });
   await page.getByRole('button', { name: 'Open project PostgreSQL' }).click();
   await page.locator('#development-postgres-preview').click();
@@ -153,8 +154,8 @@ try {
   await page.locator('#development-postgres-cancel').click();
   await page.unroute(developmentRoute);
   await page.locator('#language').selectOption('zh-CN');
-  await contains('#project-development-postgres > summary', '项目专属 PostgreSQL');
-  await contains('#development-postgres-preview', '预览 PostgreSQL 实例');
+  await contains('#project-development-postgres > summary', '项目开发数据库');
+  await contains('#development-postgres-preview', '预览数据库实例');
   await page.locator('#language').selectOption('en');
   await assert.rejects(stat(join(project, '.env')), { code: 'ENOENT' });
   await writeFile(join(project, '.env'), 'DATABASE_URL=postgresql://demo:changeme@127.0.0.1:5432/example\n');
@@ -355,6 +356,38 @@ try {
   await service.locator('[name="directory"]').fill('.');
   await service.locator('[name="command"]').fill('node server.mjs');
   await exerciseRuntime('Cloned portal', 'api', true);
+  const mysqlProject = join(root, 'mysql-fastapi');
+  await mkdir(join(mysqlProject, 'app'), { recursive: true });
+  await mkdir(join(mysqlProject, 'backend/src'), { recursive: true });
+  await writeFile(join(mysqlProject, 'app/main.py'), 'from fastapi import Depends, FastAPI\napp = FastAPI()\n');
+  await writeFile(join(mysqlProject, 'app/database.py'), 'from sqlalchemy import create_engine\nengine = create_engine(f"mysql+pymysql://{user}@localhost/service")\n');
+  await writeFile(join(mysqlProject, 'backend/src/main.py'), 'import fastapi\nfrom src.config import settings\n' +
+    'def make_app() -> fastapi.FastAPI:\n    return fastapi.FastAPI(**settings)\n\nbackend_app: fastapi.FastAPI = make_app()\n');
+  await page.locator('#project-import-toggle').click();
+  await page.locator('#project-import-path').fill(mysqlProject);
+  await page.locator('#project-import-submit').click();
+  await contains('#selected-project-name', 'mysql-fastapi');
+  const { projects: knownProjects } = await (await fetch(origin + '/api/projects')).json();
+  const mysql = knownProjects.find(item => item.path === mysqlProject);
+  const { groups } = await (await fetch(origin + '/api/projects/' + mysql.id + '/startup-suggestions')).json();
+  assert.deepEqual(groups.map(item => [item.directory, item.choices[0].command.split(' -m uvicorn ')[1]]),
+    [['.', 'app.main:app --reload'], ['backend', 'src.main:backend_app --reload']]);
+  await page.route(developmentRoute, async route => {
+    if (route.request().method() === 'GET') return route.continue();
+    const { name, port, targetId } = route.request().postDataJSON();
+    assert.match(targetId, /^[a-f0-9]{64}$/);
+    assert.equal(port, 53306);
+    await route.fulfill({ json: { plan: 'mysql-preview', name, port, targetId, host: '127.0.0.1', image: 'mysql:8.4', engine: 'mysql' } });
+  });
+  const development = page.locator('#project-development-postgres');
+  if (await development.getAttribute('open') === null) await development.locator('summary').click();
+  await contains('#development-postgres-evidence', 'app/database.py');
+  await page.locator('#development-postgres-preview').click();
+  await contains('#development-postgres-dialog-title', 'Create project MySQL');
+  await page.locator('#language').selectOption('zh-CN');
+  await contains('#development-postgres-dialog-title', '创建项目专属 MySQL');
+  await page.locator('#development-postgres-cancel').click();
+  await page.unroute(developmentRoute);
   assert.deepEqual(errors, []);
   console.log('Verified bilingual startup preflight, pnpm build approval and retry, Prisma setup, Drizzle preview, and Alembic history selection in a cloned project.');
 } finally {

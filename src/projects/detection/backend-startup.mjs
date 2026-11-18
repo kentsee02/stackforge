@@ -2,6 +2,7 @@ import { lstat, opendir, stat } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { findBuildWrapper, localText, npmManifest } from './project-detection.mjs';
 import { declaredEndpoint, jvmEndpoint, ktorEndpoint, literalPath, literalPort, nestedText, uniqueValue } from './startup-endpoints.mjs';
+import { pythonSourceFiles } from './python-sources.mjs';
 
 function candidate(name, command, source, kind, { port, openPath } = {}) {
   return { name, choice: { command, script: name, source, ...(kind && { kind }), ...(port && { port }), ...(openPath && { openPath }) } };
@@ -31,19 +32,74 @@ async function pythonLauncher(folder) {
   return await isFile(folder, 'uv.lock') && await isFile(folder, 'pyproject.toml') ? 'uv run --no-sync python' : command;
 }
 
+function fastApiApplication(content) {
+  const source = content.replace(/"""[\s\S]*?"""|'''[\s\S]*?'''|#[^\r\n]*/g, '');
+  const constructors = new Set();
+  for (const [, imports] of source.matchAll(/^from[ \t]+fastapi[ \t]+import[ \t]+(\([^)]*\)|[^\r\n]+)/gm)) {
+    for (const item of imports.replace(/[()]/g, '').split(',')) {
+      const match = /^FastAPI(?:\s+as\s+([A-Za-z_]\w*))?$/.exec(item.trim());
+      if (match) constructors.add(match[1] ?? 'FastAPI');
+    }
+  }
+  for (const [, imports] of source.matchAll(/^import[ \t]+([^\r\n]+)/gm)) {
+    for (const item of imports.split(',')) {
+      const match = /^fastapi(?:[ \t]+as[ \t]+([A-Za-z_]\w*))?$/.exec(item.trim());
+      if (match) constructors.add((match[1] ?? 'fastapi') + '.FastAPI');
+    }
+  }
+  if (!constructors.size) return;
+  const constructor = [...constructors].map(name => name.replaceAll('.', '\\.')).join('|');
+  const helpers = new Set();
+  for (const [, name, body] of source.matchAll(/^def[ \t]+([A-Za-z_]\w*)\([ \t]*\)(?:[^\r\n:]*):[ \t]*\r?\n((?:[ \t]+[^\r\n]*\r?\n|\r?\n)*)/gm)) {
+    const returned = [...body.matchAll(/^[ \t]+return[ \t]+([A-Za-z_]\w*(?:\.\w+)?)[ \t]*(\()?/gm)];
+    if (returned.length !== 1) continue;
+    const [, value, call] = returned[0];
+    if (call ? constructors.has(value) : new RegExp('^[ \\t]+' + value + '[ \\t]*=[ \\t]*(?:' + constructor + ')[ \\t]*\\(', 'm').test(body)) helpers.add(name);
+  }
+  const apps = [...source.matchAll(/^([A-Za-z_]\w*)[ \t]*(?::[ \t]*([\w.]+)[ \t]*)?=[ \t]*([A-Za-z_]\w*(?:\.\w+)?)[ \t]*\(/gm)]
+    .filter(([, , annotation, callee]) => constructors.has(callee) || (!annotation || constructors.has(annotation)) && helpers.has(callee));
+  if (apps.length === 1) {
+    const [assignment, name] = apps[0];
+    return { name, arguments: source.slice(apps[0].index + assignment.length).match(/^[^)]{0,1600}/)?.[0] ?? '' };
+  }
+}
+
+async function declaredFastApi(folder, metadata) {
+  const block = /^\[tool\.fastapi\][ \t]*\r?\n([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(metadata)?.[1];
+  if (!block) return;
+  const entries = [...block.matchAll(/^\s*entrypoint\s*=\s*(['"])((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*):([A-Za-z_]\w*)\1\s*(?:#.*)?$/gm)];
+  if (entries.length !== 1) return;
+  const [, , module, name] = entries[0];
+  const stem = module.replaceAll('.', '/');
+  for (const sourceDir of ['', 'src/']) {
+    for (const file of [sourceDir + stem + '.py', sourceDir + stem + '/__init__.py']) {
+      const content = await nestedText(folder, file);
+      if (!content) continue;
+      const application = fastApiApplication(content);
+      return { file, kind: 'fastapi', content, module, srcLayout: Boolean(sourceDir), declared: true,
+        application: { name, arguments: application?.name === name ? application.arguments : '' } };
+    }
+  }
+}
+
 async function pythonStartup(folder) {
   const manage = await localText(folder, 'manage.py');
   if (/django\.core\.management/.test(manage) && /DJANGO_SETTINGS_MODULE/.test(manage)) {
     return candidate('Django', await pythonLauncher(folder) + ' manage.py runserver', 'manage.py · Django', 'web');
   }
 
-  const entries = ['main.py', 'app.py', 'asgi.py', 'wsgi.py', 'app/main.py', 'app/__init__.py', 'src/main.py', 'src/app.py'];
+  const commonEntries = ['main.py', 'app.py', 'asgi.py', 'wsgi.py', 'app/main.py', 'app/__init__.py', 'src/main.py', 'src/app.py'];
+  const metadata = await localText(folder, 'pyproject.toml');
+  const declared = await declaredFastApi(folder, metadata);
+  const walkPackages = /\bfastapi\b/i.test(metadata) || /\bfastapi\b/i.test(await localText(folder, 'requirements.txt'));
+  const additional = declared ? [] : await pythonSourceFiles(folder, walkPackages);
+  const entries = declared ? [] : [...new Set([...commonEntries, ...(additional ?? [])])];
   const contents = await Promise.all(entries.map(file => nestedText(folder, file)));
-  const detected = entries.flatMap((file, index) => {
+  const detected = declared ? [declared] : entries.flatMap((file, index) => {
     const content = contents[index];
-    if (/^\s*(?:from\s+fastapi\s+import\s+FastAPI\b|import\s+fastapi\b)/m.test(content) &&
-        /^app\s*=\s*(?:fastapi\.)?FastAPI\s*\(/m.test(content)) return [{ file, kind: 'fastapi' }];
-    if (/^\s*(?:from\s+flask\s+import\s+Flask\b|import\s+flask\b)/m.test(content) &&
+    const application = fastApiApplication(content);
+    if (application) return [{ file, kind: 'fastapi', application, content }];
+    if (commonEntries.includes(file) && /^\s*(?:from\s+flask\s+import\s+Flask\b|import\s+flask\b)/m.test(content) &&
         /^(?:app\s*=\s*(?:flask\.)?Flask\s*\(|def\s+create_app\s*\()/m.test(content)) return [{ file, kind: 'flask' }];
     return [];
   });
@@ -54,13 +110,14 @@ async function pythonStartup(folder) {
   if (entry.kind === 'flask') {
     return { ...candidate('Flask', python + ' -m flask --app ' + entry.file + ' run', entry.file + ' · Flask'), entryPath };
   }
-  const srcLayout = entry.file.startsWith('src/');
-  const module = (srcLayout ? entry.file.slice(4) : entry.file).replace(/(?:\/__init__)?\.py$/, '').replaceAll('/', '.');
-  const args = ' -m uvicorn ' + module + ':app --reload' + (srcLayout ? ' --app-dir src' : '');
-  const app = /^app\s*=\s*(?:fastapi\.)?FastAPI\s*\(([^)]{0,1600})\)/m.exec(contents[entries.indexOf(entry.file)])?.[1] ?? '';
+  const srcLayout = entry.srcLayout ?? (entry.file.startsWith('src/') && !await isFile(folder, 'src/__init__.py') &&
+    !/^(?:from[ \t]+src\.|import[ \t]+src\.)/m.test(entry.content));
+  const module = entry.module ?? (srcLayout ? entry.file.slice(4) : entry.file).replace(/(?:\/__init__)?\.py$/, '').replaceAll('/', '.');
+  const args = ' -m uvicorn ' + module + ':' + entry.application.name + ' --reload' + (srcLayout ? ' --app-dir src' : '');
+  const app = entry.application.arguments;
   const docs = [...app.matchAll(/(?:^|,)\s*docs_url\s*=\s*(['"])([^'"\r\n]+)\1\s*(?=,|$)/g)];
   const openPath = uniqueValue(docs.map(([, , value]) => value), literalPath);
-  return { ...candidate('FastAPI', python + args, entry.file + ' · FastAPI', 'api', { openPath }), entryPath };
+  return { ...candidate('FastAPI', python + args, (entry.declared ? 'pyproject.toml · ' : '') + entry.file + ' · FastAPI', 'api', { openPath }), entryPath };
 }
 
 async function dotnetStartup(folder) {
@@ -168,7 +225,7 @@ export async function detectBackendLaunchers(folder, root) {
     rustStartup(folder), phpStartup(folder), rubyStartup(folder), gradleStartup(folder, root)
   ]);
   if (declared?.choice.port) {
-    const target = /^(?:python3?\s+-m\s+)?uvicorn\s+([\w.]+:app)(?:\s|$)/.exec(declared.choice.command)?.[1];
+    const target = /^(?:python3?\s+-m\s+)?uvicorn\s+([\w.]+:[A-Za-z_]\w*)(?:\s|$)/.exec(declared.choice.command)?.[1];
     const fastapi = target && launchers.find(launcher => launcher?.name === 'FastAPI' && launcher.choice.command.includes(`uvicorn ${target} `));
     if (fastapi && !/--(?:root-path|app-dir|factory)\b/.test(declared.choice.command)) {
       declared.choice.kind = 'api';

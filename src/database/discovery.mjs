@@ -5,6 +5,7 @@ import { parseEnv } from 'node:util';
 import { isIP } from 'node:net';
 import { localText } from '../projects/detection/project-detection.mjs';
 import { scanProjectServices } from '../projects/detection/project-services.mjs';
+import { pythonSourceFiles } from '../projects/detection/python-sources.mjs';
 import { resolveStartup } from '../projects/project-startup.mjs';
 import { drizzleConfig } from './migrations/drizzle-config.mjs';
 import { alembicConfig } from './migrations/alembic-config.mjs';
@@ -16,6 +17,7 @@ export const engineNames = { postgres: 'PostgreSQL', mysql: 'MySQL', sqlite: 'SQ
 const engines = Object.assign(Object.create(null), { postgres: 'postgres', postgresql: 'postgres', mysql: 'mysql', mariadb: 'mysql', sqlite: 'sqlite', sqlite3: 'sqlite',
   sqlserver: 'sqlserver', mssql: 'sqlserver', mongodb: 'mongodb', 'mongodb+srv': 'mongodb', redis: 'redis', rediss: 'redis' });
 const ports = { postgres: 5432, mysql: 3306, sqlserver: 1433, mongodb: 27017, redis: 6379 };
+const sqlalchemyScheme = /^(postgres(?:ql)?|mysql)\+[a-z][a-z0-9_]*$/i;
 const composeFiles = ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'];
 const envFiles = ['.env', '.env.local', '.env.example'];
 const prismaConfigs = ['ts', 'js', 'mts', 'mjs', 'cts', 'cjs'].flatMap(ext => [`prisma.config.${ext}`, `.config/prisma.${ext}`]);
@@ -34,23 +36,26 @@ export function environmentRevision(stat, variable) {
 function connection(value, fallback, template) {
   const text = clean(value).replace(/^jdbc:/i, '');
   const protocol = /^([a-z\d+]+):/i.exec(text)?.[1]?.toLowerCase();
-  const engine = engines[protocol === 'file' ? 'sqlite' : protocol] ?? fallback;
+  const dialect = sqlalchemyScheme.exec(/^[\w+]+(?=:)/.exec(text)?.[0] ?? '')?.[1]?.toLowerCase();
+  const byProtocol = engines[protocol === 'file' ? 'sqlite' : protocol] ?? engines[dialect];
+  const engine = byProtocol ?? fallback;
   if (!engine) return {};
   if (!text) return { engine, status: 'missing' };
   let decoded = text;
   try { decoded = decodeURIComponent(text); } catch { /* Leave malformed escapes ambiguous below. */ }
   if (template || placeholder.test(decoded)) return { engine, status: 'placeholder' };
-  if (protocol && protocol !== 'file' && !engines[protocol]) return { engine, status: 'ambiguous' };
+  if (protocol && !byProtocol) return { engine, status: 'ambiguous' };
   if (engine === 'sqlite') {
     const path = text.replace(/^(?:sqlite(?:3)?|file):(?:\/\/\/)?/i, '');
     return { engine, path, status: 'configured' };
   }
   try {
-    const url = new URL(text);
+    const url = new URL(dialect ? text.replace(/^[^:]+/, dialect) : text);
     const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
     const port = url.port ? boundedPort(url.port) : ports[engine];
     const name = decodeURIComponent(url.pathname.replace(/^\//, '')) || (engine === 'redis' ? '0' : '');
-    if (validHost(host) && port && (!name || databaseName.test(name))) return { engine, host, port, ...(name && { name }), status: 'configured' };
+    if (validHost(host) && port && (!name || databaseName.test(name))) return { engine, host, port, ...(name && { name }),
+      ...(protocol === 'mariadb' && { variant: 'mariadb' }), status: 'configured' };
   } catch { /* A declaration can be incomplete or use a dynamic connection string. */ }
   return { engine, status: 'ambiguous' };
 }
@@ -79,6 +84,23 @@ function sqlitePath(value, directory) {
 async function projectText(folder, file) {
   const path = join(folder, file);
   return await realpath(path).catch(() => '') === path ? localText(folder, file) : '';
+}
+
+function sqlAlchemyMysqlFields(text) {
+  if (!/^load_dotenv\(\s*\)[ \t]*$/m.test(text)) return;
+  const urls = [...text.matchAll(/mysql\+[a-z][a-z0-9_]*:\/\/\{([A-Za-z_]\w*)\}:\{([A-Za-z_]\w*)\}(?:['"]\s*f['"])?@\{([A-Za-z_]\w*)\}:\{([A-Za-z_]\w*)\}\/\{([A-Za-z_]\w*)\}/gi)];
+  if (urls.length !== 1) return;
+  const names = urls[0].slice(1);
+  const usesGetenv = /^from[ \t]+os[ \t]+import[ \t]+(?:[^\r\n]*,\s*)?getenv\b/m.test(text);
+  const values = names.map(name => {
+    const call = usesGetenv ? '(?:os\\.getenv|os\\.environ\\.get|getenv)' : '(?:os\\.getenv|os\\.environ\\.get)';
+    const definitions = [...text.matchAll(new RegExp('^' + name + '[ \\t]*=[ \\t]*' + call + '\\([ \\t]*([\'\"])([A-Z_][A-Z0-9_]{0,127})\\1[ \\t]*\\)[ \\t]*$', 'gm'))];
+    return definitions.length === 1 && definitions[0][2];
+  });
+  if (values.every(Boolean) && new Set(values).size === values.length) {
+    const [user, password, host, port, name] = values;
+    return { host, port, name, user, password };
+  }
 }
 
 async function prismaConnection(folder, directory, files, runtimeEnv, dotenvEnv, environmentEntries) {
@@ -132,6 +154,7 @@ export async function discoverDatabases(project, { includeConnections = false, i
   const findings = new Map();
   const connections = new Map();
   const migrationSources = [];
+  const sqlalchemySources = new Set();
   let truncated = limited;
   function add(directory, file, key, metadata) {
     if (!metadata.engine || findings.size >= 128) { truncated ||= findings.size >= 128; return; }
@@ -144,6 +167,7 @@ export async function discoverDatabases(project, { includeConnections = false, i
       else record.status = 'ambiguous';
     }
     record.id = databaseKey(project.id, source, key, record.engine);
+    if (findings.has(record.id)) return;
     findings.set(record.id, record);
     return record.id;
   }
@@ -159,6 +183,28 @@ export async function discoverDatabases(project, { includeConnections = false, i
     }
     const env = directory === '.' ? rootEnv : new Map(await Promise.all(envFiles.map(async file => [file, parseEnv(await projectText(folder, file))])));
     const runtimeEnv = { ...rootEnv.get('.env'), ...rootEnv.get('.env.local'), ...env.get('.env'), ...env.get('.env.local') };
+    const pythonMetadata = await Promise.all(['pyproject.toml', 'requirements.txt'].filter(name => files.includes(name)).map(name => projectText(folder, name)));
+    const packages = pythonMetadata.some(text => /\bsqlalchemy\b/i.test(text));
+    const pythonFiles = packages ? await pythonSourceFiles(folder, true) : files.filter(name => /^[A-Za-z_]\w*\.py$/.test(name)).slice(0, 64);
+    for (const file of new Set(['database.py', 'app/database.py', 'src/database.py', ...(pythonFiles ?? [])])) {
+      const source = pathLabel(directory, file);
+      if (sqlalchemySources.has(source)) continue;
+      const text = await projectText(folder, file);
+      if (!/^(?:from\s+sqlalchemy(?:\.ext\.asyncio)?\s+import\b|import\s+sqlalchemy\b)/m.test(text) || !/\bcreate_(?:async_)?engine\s*\(/.test(text)) continue;
+      const dialects = new Set([...text.matchAll(/['"]((?:postgres(?:ql)?|mysql)\+[a-z][a-z0-9_]*)\:\/\//gi)].map(match => engines[sqlalchemyScheme.exec(match[1])?.[1]?.toLowerCase()]));
+      const connectionFields = dialects.size === 1 && dialects.has('mysql') && sqlAlchemyMysqlFields(text);
+      for (const engine of dialects) {
+        const settings = env.get('.env');
+        const fields = connectionFields && Object.fromEntries(Object.entries(connectionFields).map(([role, key]) => [role, clean(settings[key])]));
+        const credentials = fields && Object.values(fields).every(Boolean) && validHost(fields.host) && boundedPort(fields.port) && databaseName.test(fields.name);
+        const target = credentials && (fields.host.includes(':') ? '[' + fields.host + ']' : fields.host);
+        const value = credentials && `mysql://${encodeURIComponent(fields.user)}:${encodeURIComponent(fields.password)}@${target}:${fields.port}/${encodeURIComponent(fields.name)}`;
+        const detected = value && connection(value, engine);
+        const id = add(directory, file, engine, { engine, orm: 'SQLAlchemy', status: 'declared', ...detected, ...(connectionFields && { connectionFields }) });
+        if (includeConnections && id && detected?.status === 'configured') connections.set(id, { value });
+      }
+      sqlalchemySources.add(source);
+    }
     const dependencies = { ...manifest?.devDependencies, ...manifest?.dependencies };
     const declared = [
       ['postgres', ['pg', 'postgres']], ['mysql', ['mysql', 'mysql2', 'mariadb']],
@@ -223,10 +269,10 @@ export async function discoverDatabases(project, { includeConnections = false, i
           const value = variable ? runtimeEnv[variable] : /\burl\s*=\s*["']([^"']+)["']/.exec(block)?.[1];
           const result = value || variable ? connection(value, engine) : { engine, status: 'declared' };
           if (result.path && !isAbsolute(result.path)) result.path = file.slice(0, -'schema.prisma'.length) + result.path;
-          const schemaId = add(directory, file, key, { ...result, orm: 'Prisma', ...(variable && { environmentVariable: variable }) });
+          const schemaId = add(directory, file, key, { ...result, orm: 'Prisma', ...(engine && { declaredEngine: engine }), ...(variable && { environmentVariable: variable }) });
           if (includeConnections && schemaId && value) connections.set(schemaId, { value });
           if (!value && !variable && prismaConfig?.schema === file && ['postgres', 'mysql', 'sqlserver', 'mongodb'].includes(engine)) {
-            const id = add(directory, prismaConfig.file, prismaConfig.variable, { ...connection(prismaConfig.value, engine), orm: 'Prisma',
+            const id = add(directory, prismaConfig.file, prismaConfig.variable, { ...connection(prismaConfig.value, engine), orm: 'Prisma', declaredEngine: engine,
               environmentVariable: prismaConfig.variable, ...(prismaConfig.dotenvFile && { environmentFile: prismaConfig.dotenvFile }),
               ...(engine === 'postgres' && { guidedSetup: true }) });
             if (includeConnections && id) connections.set(id, { value: prismaConfig.value,
@@ -279,8 +325,10 @@ export async function discoverDatabases(project, { includeConnections = false, i
       try { model = JSON.parse(text); } catch { /* Static YAML scan for straightforward service declarations. */ }
       if (model) {
         for (const [service, spec] of Object.entries(model.services ?? {})) {
-          const engine = engines[/^(?:(?:docker\.io\/)?library\/)?([\w-]+)(?=[:@]|$)/.exec(spec?.image)?.[1]];
-          if (engine && /^[\w.-]{1,64}$/.test(service)) add(directory, file, service, { engine, kind: 'compose', status: 'unverified' });
+          const image = /^(?:(?:docker\.io\/)?library\/)?([\w-]+)(?=[:@]|$)/.exec(spec?.image)?.[1];
+          const engine = engines[image];
+          if (engine && /^[\w.-]{1,64}$/.test(service)) add(directory, file, service, { engine, kind: 'compose', status: 'unverified',
+            ...(image === 'mariadb' && { variant: 'mariadb' }) });
         }
       } else {
         const section = /^services:\s*\r?\n((?:[ \t]+.*(?:\r?\n|$)|\s*\r?\n)*)/m.exec(text)?.[1] ?? '';
@@ -290,7 +338,8 @@ export async function discoverDatabases(project, { includeConnections = false, i
           if (heading && heading[1].length <= indentation) { service = heading[2]; indentation = heading[1].length; }
           const image = /^( +)image:\s*['"]?(?:(?:docker\.io\/)?library\/)?([\w-]+)(?=[:@'"\s]|$)/.exec(line);
           const engine = engines[image?.[2]];
-          if (service && engine && image[1].length > indentation) add(directory, file, service, { engine, kind: 'compose', status: 'unverified' });
+          if (service && engine && image[1].length > indentation) add(directory, file, service, { engine, kind: 'compose', status: 'unverified',
+            ...(image[2] === 'mariadb' && { variant: 'mariadb' }) });
         }
       }
     }

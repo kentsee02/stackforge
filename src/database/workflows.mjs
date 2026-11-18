@@ -13,7 +13,7 @@ import { defaultPorts, projectPathKey } from '../projects/project-config.mjs';
 import { locationExists } from '../platform/paths.mjs';
 import { commandDiagnostic } from '../projects/project-diagnostics.mjs';
 import { discoverDatabases } from './discovery.mjs';
-import { developmentPostgres } from './docker/development-postgres.mjs';
+import { developmentDatabase } from './docker/development-database.mjs';
 import { previewDrizzle } from './migrations/drizzle-preview.mjs';
 import { previewAlembic } from './migrations/alembic-preview.mjs';
 import { alembicLocalTargets, compareAlembicHistory } from './migrations/alembic-history.mjs';
@@ -25,7 +25,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
   const databaseRegistry = new DatabaseRegistry(stateDir ? join(dirname(stateDir), 'databases.json') : undefined);
   const stagingRoot = stateDir ? join(dirname(stateDir), 'stackforge-backup-work') : tmpdir();
   const databaseWrites = new Map();
-  const development = developmentPostgres({ registry: databaseRegistry, ...databaseAdapters.developmentPostgres,
+  const development = developmentDatabase({ registry: databaseRegistry, ...databaseAdapters.developmentPostgres,
     async verifyShared(project, endpoint) {
       const activeIds = await refreshDatabaseBindings(project.id, true);
       if (databaseRegistry.usesEndpoint(project.id, endpoint, activeIds)) {
@@ -35,7 +35,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
   });
   const resources = databaseResources({ registry: databaseRegistry, operations, directory: stagingRoot,
     vault: databaseVault(stateDir ? join(dirname(stateDir), 'credentials') : undefined), ...databaseAdapters,
-    resolveLocalClient: development.client });
+    resolveLocalClient: development.client, resolveDedicated: development.archiveTarget });
   let transfer;
 
   async function scanDatabases(project, discovery, activeIds) {
@@ -73,6 +73,10 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
 
   async function resourceBinding(project, id, provider, activeIds) {
     if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) throw new Error('Choose an available database binding.');
+    if (!provider) {
+      const dedicated = await development.archiveBinding(project, id);
+      if (dedicated) return dedicated;
+    }
     const { bindings, requirements } = await scanDatabases(project, undefined, activeIds);
     const binding = bindings.find(item => item.id === id && (!provider || item.instance.provider === provider));
     if (!binding) throw new Error('Choose an available database binding.');

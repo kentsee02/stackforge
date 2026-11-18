@@ -448,9 +448,10 @@ const startup = createStartupPanel({ $, request, showMessage, state, selectedId,
 const dependencies = createDependenciesPanel({ $, request, showMessage, renderOutput, diagnosticMessages, state, selectedId, selectedProject, renderPage: render, act });
 const tools = createProjectToolsPanel({ $, request, showMessage, renderOutput, state, selectedId, renderPage: render, act });
 const developmentPostgres = createDevelopmentPostgres({ $, request, post, state, renderPage: render,
-  reloadDiscovery: () => database.reloadDiscovery() });
+  reloadDiscovery: () => database.reloadDiscovery(), openExisting: action => database.openExisting(action),
+  archive: (mode, id) => database.developmentArchive(mode, id) });
 const database = createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
-  selectedId, selectedProject, renderPage: render, refresh, act, openDevelopment: developmentPostgres.open });
+  selectedId, selectedProject, renderPage: render, refresh, act, openDevelopment: developmentPostgres.open, refreshDevelopment: developmentPostgres.refresh });
 const preflight = createPreflightPanel({ $, request, selectedProject, start: async id => {
   await act(id, 'start');
   if (selected === id && !$('runtime-action').disabled) $('runtime-action').focus({ preventScroll: true });
