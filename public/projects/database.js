@@ -173,7 +173,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       if ($('project-database-discovery').open) void loadDatabaseDiscovery();
     }
     const locked = busy || Boolean(databaseDiscovery.working);
-    for (const button of $('database-requirements').querySelectorAll('button')) button.disabled = locked || ['starting', 'running', 'stopping'].includes(project.status);
+    for (const control of $('database-requirements').querySelectorAll('button:not(.drizzle-confirmation button), .drizzle-confirmation')) control.disabled = locked;
     for (const control of ['database-local-check', 'database-local-preview', 'database-discovery-refresh']) $(control).disabled = locked;
     $('database-initialize-submit').disabled = locked || $('database-initialize-name').value !== databaseDiscovery.plan?.name;
     const binding = resourceBinding();

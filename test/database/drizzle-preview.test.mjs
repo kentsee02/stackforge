@@ -7,6 +7,7 @@ import test from 'node:test';
 import { discoverDatabases } from '../../src/database/discovery.mjs';
 import { drizzleConfig } from '../../src/database/migrations/drizzle-config.mjs';
 import { previewDrizzle } from '../../src/database/migrations/drizzle-preview.mjs';
+import { drizzleStatements } from '../../src/database/migrations/drizzle-sql.mjs';
 
 const config = `import type { Config } from 'drizzle-kit';
 export default {
@@ -15,6 +16,24 @@ export default {
   out: './lib/migrations',
   dbCredentials: { url: process.env.STACKFORGE_DRIZZLE_TEST_URL! }
 } satisfies Config;`;
+
+test('Drizzle execution recognizes schema additions and rejects other SQL batches', () => {
+  const changes = `CREATE TABLE "team" (id integer PRIMARY KEY, label text DEFAULT 'a; delete');
+    --> statement-breakpoint
+    DO $$ BEGIN
+      ALTER TABLE "member" ADD CONSTRAINT "team_ref" FOREIGN KEY (team_id) REFERENCES "team"(id) ON DELETE NO ACTION;
+    EXCEPTION WHEN duplicate_object THEN null; END $$;
+    CREATE UNIQUE INDEX "team_label" ON "team" (label);`;
+  assert.equal(drizzleStatements(changes).length, 3);
+  for (const sql of [
+    'CREATE TABLE sample (id integer); DROP TABLE customer;',
+    'ALTER TABLE customer ADD COLUMN a integer, DROP COLUMN b;',
+    'CREATE TABLE sample (id) AS VALUES (1);',
+    'DO $$ BEGIN DELETE FROM customer; END $$;',
+    'CREATE INDEX CONCURRENTLY sample_idx ON sample(id);',
+    '\\connect other\nCREATE TABLE sample (id integer);'
+  ]) assert.equal(drizzleStatements(sql), undefined);
+});
 
 test('Drizzle configuration accepts a static PostgreSQL target and rejects ambiguous targets', async () => {
   const detect = (source, files = ['drizzle.config.ts']) => drizzleConfig('.', files, async () => source);

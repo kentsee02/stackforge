@@ -1,14 +1,17 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { localSession, localhostEndpoint, validateLocalTarget } from '../adapters/local.mjs';
 import { databaseConnectionValue, discoverDatabases } from '../discovery.mjs';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { throwIfCancelled } from '../../platform/process.mjs';
+import { drizzleStatements } from './drizzle-sql.mjs';
 
 const maxEntries = 200;
 const localHosts = ['127.0.0.1', '::1', 'localhost'];
 const invalid = 'Choose a detected Drizzle PostgreSQL configuration.';
+const changed = 'The Drizzle migration preview changed. Check again before applying.';
+const signingKey = randomBytes(32);
 
 async function readBounded(path, limit) {
   const info = await lstat(path, { bigint: true });
@@ -46,36 +49,84 @@ async function migrationFiles(folder, out, signal) {
     const sql = await readBounded(join(directory, file), Math.min(bytes, 1024 * 1024));
     if (!sql.trim()) throw new Error();
     bytes -= Buffer.byteLength(sql);
-    result.push({ file: out + '/' + file, when, hash: createHash('sha256').update(sql).digest('hex') });
+    result.push({ file: out + '/' + file, when, hash: createHash('sha256').update(sql).digest('hex'), sql });
   }
   return result;
 }
 
-async function historyState(session, target, { historySchema, historyTable }) {
-  const read = text => session.query('BEGIN READ ONLY; SET LOCAL search_path = pg_catalog; ' + text + '; COMMIT;', target.name);
-  const header = await read(`WITH history AS (
+function stateQuery({ historySchema, historyTable }) {
+  return `WITH history AS (
     SELECT c.oid, c.relkind = 'r' AND NOT c.relrowsecurity AND NOT c.relhassubclass AND
       (SELECT count(*) FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped AND
         ((a.attname='hash' AND a.atttypid='text'::regtype) OR (a.attname='created_at' AND a.atttypid='bigint'::regtype)))=2 AS eligible
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname='${historySchema}' AND c.relname='${historyTable}'
-  ) SELECT current_database(),
+  ) SELECT jsonb_build_array(current_database(), current_user,
+    (SELECT oid::text FROM pg_database WHERE datname=current_database()), pg_postmaster_start_time()::text,
     coalesce((SELECT CASE WHEN eligible THEN 'readable' ELSE 'unsupported' END FROM history), 'absent'),
     EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
-      AND c.relkind IN ('r','p','v','m','S','f') AND NOT EXISTS(SELECT FROM history h WHERE h.oid=c.oid)
+      AND c.relkind IN ('r','p','v','m','S','f','c') AND NOT EXISTS(SELECT FROM history h WHERE h.oid=c.oid)
       AND NOT EXISTS(SELECT FROM history h WHERE c.relkind='S' AND EXISTS(
         SELECT FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.refclassid='pg_class'::regclass
-          AND d.objid=c.oid AND d.refobjid=h.oid AND d.deptype='a')))`);
-  const [database, history, objects] = header.split('\t');
-  if (database !== target.name || !['readable', 'unsupported', 'absent'].includes(history) || !['t', 'f'].includes(objects)) throw new Error();
-  if (history === 'unsupported') return { conflict: true };
-  if (history === 'absent') return { rows: [], hasObjects: objects === 't' };
-  const output = await read(`SELECT created_at, hash FROM ONLY "${historySchema}"."${historyTable}" ORDER BY created_at LIMIT ${maxEntries + 1}`);
-  return { rows: output ? output.split(/\r?\n/).map(row => row.split('\t')) : [], hasObjects: objects === 't' };
+          AND d.objid=c.oid AND d.refobjid=h.oid AND d.deptype='a')))
+    OR EXISTS(SELECT FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace
+      WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' AND t.typtype IN ('e','d','r','m'))
+    OR EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+      WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'),
+    (SELECT oid::text FROM history))`;
 }
 
-export async function previewDrizzle({ project, requirementId, command, resolveClient, probe, signal }) {
+const historyName = ({ historySchema, historyTable }) => '"' + historySchema + '"."' + historyTable + '"';
+
+async function historyState(session, target, config) {
+  const read = text => session.query('BEGIN READ ONLY; SET LOCAL search_path = pg_catalog; ' + text + '; COMMIT;', target.name);
+  const header = JSON.parse(await read(stateQuery(config)));
+  const [database, user, oid, started, history, hasObjects] = header;
+  if (database !== target.name || !user || !/^\d+$/.test(oid) || !started ||
+      !['readable', 'unsupported', 'absent'].includes(history) || typeof hasObjects !== 'boolean') throw new Error();
+  if (history === 'unsupported') return { conflict: true };
+  const rows = history === 'absent' ? [] : JSON.parse(await read(`SELECT coalesce(jsonb_agg(jsonb_build_array(created_at::text, hash) ORDER BY created_at), '[]')
+    FROM (SELECT created_at, hash FROM ONLY ${historyName(config)} ORDER BY created_at LIMIT ${maxEntries + 1}) history_rows`));
+  return { rows, hasObjects, header, history };
+}
+
+const pgText = text => "pg_catalog.convert_from(pg_catalog.decode('" + Buffer.from(text, 'utf8').toString('hex') + "', 'hex'), 'UTF8')";
+
+async function applyMigration(session, target, config, state, pending, statements) {
+  const table = historyName(config);
+  const existing = state.history === 'readable';
+  const previous = pgText(JSON.stringify(state.rows)) + '::jsonb';
+  const header = pgText(JSON.stringify(state.header)) + '::jsonb';
+  const prepareHistory = existing
+    ? `IF (SELECT coalesce(jsonb_agg(jsonb_build_array(created_at::text, hash) ORDER BY created_at), '[]') FROM ONLY ${table})
+         IS DISTINCT FROM ${previous} THEN RAISE EXCEPTION 'Drizzle migration history changed'; END IF;`
+    : `CREATE SCHEMA IF NOT EXISTS "${config.historySchema}";
+       CREATE TABLE ${table} (id serial PRIMARY KEY, hash text NOT NULL, created_at bigint);`;
+  const operations = pending.flatMap((file, index) => [
+    ...statements[index].map(sql => 'EXECUTE ' + pgText(sql) + ';'),
+    `INSERT INTO ${table} (hash, created_at) VALUES ('${file.hash}', ${file.when});`
+  ]);
+  await session.query(`BEGIN;
+    SET LOCAL search_path = pg_catalog;
+    SET LOCAL standard_conforming_strings = on;
+    SET LOCAL statement_timeout = '120s';
+    SELECT pg_advisory_xact_lock(hashtext('stackforge:drizzle'), hashtext('${table}'));
+    ${existing ? 'LOCK TABLE ' + table + ' IN ACCESS EXCLUSIVE MODE;' : ''}
+    DO $stackforge_drizzle$
+    BEGIN
+      IF (${stateQuery(config)}) IS DISTINCT FROM ${header} THEN
+        RAISE EXCEPTION 'Drizzle migration target changed';
+      END IF;
+      ${prepareHistory}
+      SET LOCAL search_path TO DEFAULT;
+      ${operations.join('\n')}
+    END;
+    $stackforge_drizzle$;
+    COMMIT;`, target.name, { timeout: 135000 });
+}
+
+export async function previewDrizzle({ project, requirementId, command, resolveClient, probe, signal, approval, verifyTarget }) {
   const { root, identity, requirements, connections } = await discoverDatabases(project, { includeConnections: true });
   const requirement = requirements.find(item => item.id === requirementId && item.migrationAdapter === 'drizzle');
   if (!requirement) throw new Error(invalid);
@@ -108,10 +159,11 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   await resolveStartup(project, [], identity);
   const client = await resolveClient?.(target);
   if (client && !(await client.installation(probe)).portOpen) return respond('docker-unreachable');
-  let state;
+  let state, session;
   try {
     const credentials = { user: decodeURIComponent(url.username), password: decodeURIComponent(url.password) };
-    state = await historyState(localSession({ ...target, sslmode }, credentials, client?.command ?? command, signal), target, config);
+    session = localSession({ ...target, sslmode }, credentials, client?.command ?? command, signal);
+    state = await historyState(session, target, config);
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     return respond(['authentication', 'server', 'permission', 'client', 'database', 'tls'].includes(error.issue) ? error.issue : 'connection');
@@ -123,5 +175,46 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
     return respond('history-conflict');
   }
   const migrations = result.migrations.map((item, index) => ({ ...item, state: index < rows.length ? 'applied' : 'pending' }));
-  return respond(rows.length < files.length ? 'pending' : 'current', { migrations });
+  const pending = files.slice(rows.length);
+  if (!pending.length) {
+    if (approval) throw new Error(changed);
+    return respond('current', { migrations });
+  }
+  const statements = pending.map(file => drizzleStatements(file.sql));
+  if (statements.some(items => !items)) {
+    if (approval) throw new Error(changed);
+    return respond('pending', { migrations, applyBlocked: true });
+  }
+  const expiry = approval ? /^\d{13}(?=\.)/.exec(approval.planId ?? '')?.[0] : String(Date.now() + 300000);
+  const signature = createHmac('sha256', signingKey).update(JSON.stringify([
+    expiry, project.id, identity, requirement.id, target, value, config.historySchema, config.historyTable,
+    state.header, rows, files.map(({ file, when, hash }) => [file, when, hash])
+  ])).digest('hex');
+  const planId = expiry + '.' + signature;
+  if (!approval) return respond('pending', { migrations, planId });
+  if (!expiry || Number(expiry) <= Date.now() || approval.planId !== planId || approval.confirmName !== target.name) throw new Error(changed);
+  await verifyTarget(target);
+  const latest = (await discoverDatabases(project, { includeConnections: true })).connections.get(requirement.id);
+  if (!latest || latest.environmentConflict || latest.value !== value || latest.out !== config.out ||
+      historyName(latest) !== historyName(config)) throw new Error(changed);
+  await resolveStartup(project, [], identity);
+  throwIfCancelled(signal);
+  try {
+    await applyMigration(session, target, config, state, pending, statements);
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    return respond('apply-failed');
+  }
+  try {
+    const after = await historyState(session, target, config);
+    const expected = files.map(file => [String(file.when), file.hash]);
+    if (JSON.stringify(after.rows) !== JSON.stringify(expected) ||
+        JSON.stringify(after.header?.slice(0, 4)) !== JSON.stringify(state.header.slice(0, 4))) {
+      return respond('apply-unverified');
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    return respond('apply-unverified');
+  }
+  return respond('applied', { migrations: migrations.map(item => ({ ...item, state: 'applied' })) });
 }

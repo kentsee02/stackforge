@@ -107,6 +107,10 @@
 .drizzle-preview ul:empty { display: none; }
 .drizzle-preview .check-list li { padding-top: 4px; }
 .drizzle-preview .check-list strong { display: inline; }
+.drizzle-confirmation { display: grid; gap: 8px; margin: 10px 0; padding: 0; border: 0; min-inline-size: 0; }
+.drizzle-confirmation .inline-field { display: grid; gap: 4px; }
+.drizzle-confirmation input { width: min(100%, 340px); }
+.drizzle-confirmation .primary { width: fit-content; min-height: 36px; padding-inline: 12px; }
 #database-requirements:has(.drizzle-preview[open]) { max-height: none; overflow: visible; }
 #database-connection-target, #database-connection-message { overflow-wrap: anywhere; }
 #database-connection-message:empty { display: none; }

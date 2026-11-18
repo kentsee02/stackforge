@@ -4,7 +4,7 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 
 1. **Project startup preflight** (completed). Check a locally imported or cloned project and point users to the relevant setup action.
 2. **Project-scoped development databases** (completed for Docker PostgreSQL). Imports and clones can create and manage one dedicated instance.
-3. **Additional migration adapters.** Drizzle PostgreSQL target checks and preview shipped in v0.35.0. Design confirmed, verified Drizzle execution separately. Evaluate Alembic, EF Core Migrations, Flyway, and Liquibase against real imports.
+3. **Additional migration adapters.** Drizzle PostgreSQL target checks and preview shipped in v0.35.0. v0.36.0 adds confirmed execution and verification for supported schema additions. Evaluate Alembic, EF Core Migrations, Flyway, and Liquibase against real imports.
 4. **Project activity history.** Record installation, check, and database outcomes per project.
 5. **Global task history and queue.** Evaluate a cross-project task view and queue after the individual workflows expose compatible state.
 6. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases, and Tasks.

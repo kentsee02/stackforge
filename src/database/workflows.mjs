@@ -225,10 +225,28 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     if (databaseWrites.size || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
       throw new Error('Wait for the current project operation to finish.');
     }
-    if (action === 'database-drizzle-preview') {
+    if (action === 'database-drizzle-preview' || action === 'database-drizzle-apply') {
       const { signal } = controller;
-      return previewDrizzle({ project, requirementId: payload.requirementId, command: localDatabase.command,
-        resolveClient: target => development.client(project, target, signal), probe: localDatabase.probe, signal });
+      const options = { project, requirementId: payload.requirementId, command: localDatabase.command,
+        resolveClient: target => development.client(project, target, signal), probe: localDatabase.probe, signal };
+      if (action === 'database-drizzle-preview') return previewDrizzle(options);
+      if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
+        throw new Error('Stop the project before applying database migrations.');
+      }
+      const record = databaseLog.begin(project, 'database-migrate');
+      const done = previewDrizzle({ ...options, approval: payload, async verifyTarget(target) {
+        const activeIds = await refreshDatabaseBindings(project.id, true);
+        if (databaseRegistry.usesEndpoint(project.id, target, activeIds)) {
+          throw new Error('Another project uses this PostgreSQL database. Choose a separate database for guided setup.');
+        }
+      } }).then(async result => {
+        await record(result.status === 'applied' ? 'succeeded' : 'failed');
+        return result;
+      }, async error => {
+        await record(signal.aborted ? 'cancelled' : 'failed');
+        throw error;
+      });
+      return trackWrite(project, controller, done);
     }
     if (action === 'database-sqlite-create' && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
       throw new Error('Stop the project before initializing its database.');

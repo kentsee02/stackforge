@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -106,18 +106,42 @@ try {
   assert.deepEqual(pending.migrations.map(item => item.state), ['pending', 'pending']);
   assert.equal((await query("SELECT to_regclass('public.drizzle_first') IS NULL")).trim(), 't');
   assert.equal(JSON.stringify(pending).includes(password), false);
-  await query('CREATE SCHEMA project_history; CREATE TABLE project_history.migrations (id serial PRIMARY KEY, hash text NOT NULL, created_at bigint);');
-  await query(`INSERT INTO project_history.migrations(hash, created_at) VALUES
-    ('${createHash('sha256').update(migrationSql[0]).digest('hex')}', ${entries[0].when});`);
-  assert.deepEqual((await drizzlePreview()).migrations.map(item => item.state), ['applied', 'pending']);
-  await query(`INSERT INTO project_history.migrations(hash, created_at) VALUES
-    ('${createHash('sha256').update(migrationSql[1]).digest('hex')}', ${entries[1].when});`);
+  const applyDrizzle = (preview, confirmName = 'portal', expected = 200) =>
+    api(id + '/database-drizzle-apply', { requirementId: drizzle.id, planId: preview.planId, confirmName }, expected);
+  await applyDrizzle(pending, 'wrong', 409);
+  const secondFile = join(path, 'db/migrations', entries[1].tag + '.sql');
+  await writeFile(secondFile, 'DROP TABLE drizzle_first;');
+  assert.equal((await drizzlePreview()).applyBlocked, true);
+  await applyDrizzle(pending, 'portal', 409);
+  await writeFile(secondFile, 'CREATE TABLE drizzle_second (id type_that_does_not_exist);');
+  assert.equal((await applyDrizzle(await drizzlePreview())).status, 'apply-failed');
+  assert.equal((await query("SELECT to_regclass('public.drizzle_first') IS NULL AND to_regclass('project_history.migrations') IS NULL")).trim(), 't');
+  await writeFile(secondFile, migrationSql[1]);
+  const journal = join(path, 'db/migrations/meta/_journal.json');
+  const writeJournal = selected => writeFile(journal, JSON.stringify({ version: '7', dialect: 'postgresql', entries: selected }));
+  await writeJournal(entries.slice(0, 1));
+  assert.equal((await applyDrizzle(await drizzlePreview())).status, 'applied');
+  await writeJournal(entries);
+  const remaining = await drizzlePreview();
+  assert.deepEqual(remaining.migrations.map(item => item.state), ['applied', 'pending']);
+  const sharedMigration = join(root, 'shared-migration');
+  await mkdir(sharedMigration);
+  await writeFile(join(sharedMigration, '.env'), stored);
+  const otherMigration = await api('import', { path: sharedMigration }, 201);
+  const blocked = await applyDrizzle(remaining, 'portal', 409);
+  assert.match(blocked.error, /Another project uses this PostgreSQL database/);
+  await api(otherMigration.id + '/remove', { confirmName: otherMigration.name });
+  const applied = await applyDrizzle(remaining);
+  assert.equal(applied.status, 'applied', JSON.stringify(applied));
+  assert.deepEqual(applied.migrations.map(item => item.state), ['applied', 'applied']);
+  assert.equal((await query("SELECT to_regclass('public.drizzle_first') IS NOT NULL AND to_regclass('public.drizzle_second') IS NOT NULL")).trim(), 't');
+  await applyDrizzle(pending, 'portal', 409);
   assert.equal((await drizzlePreview()).status, 'current');
   const altered = join(path, 'db/migrations', entries[0].tag + '.sql');
   await writeFile(altered, migrationSql[0] + '-- changed after application\n');
   assert.equal((await drizzlePreview()).status, 'history-conflict');
   await writeFile(altered, migrationSql[0]);
-  await query('DROP SCHEMA project_history CASCADE; CREATE TABLE proof (value integer); INSERT INTO proof VALUES (42);');
+  await query('DROP TABLE drizzle_first, drizzle_second; DROP SCHEMA project_history CASCADE; CREATE TABLE proof (value integer); INSERT INTO proof VALUES (42);');
   assert.equal((await drizzlePreview()).status, 'history-conflict');
   const requirement = discovery.requirements.find(item => item.guidedSetup);
   const binding = discovery.bindings.find(item => item.requirementId === requirement.id);
