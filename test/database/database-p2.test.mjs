@@ -95,6 +95,72 @@ test('local MongoDB, Redis and SQL Server connection checks keep credentials out
   }
 });
 
+test('database discovery follows literal .NET project references and reads custom connection sections', async t => {
+  const { project, request, register } = await fixture(t);
+  const secret = 'db-fixture-password';
+  const files = {
+    'services/customer/Api.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup><ProjectReference Include="..\\..\\layers\\services\\Storage.csproj"/></ItemGroup></Project>',
+    'layers/services/Storage.csproj': '<Project><ItemGroup><ProjectReference Include="../sql/Provider.csproj"/></ItemGroup></Project>',
+    'layers/sql/Provider.csproj': '<Project><ItemGroup><PackageReference Version="8.0.0" Include="Microsoft.EntityFrameworkCore.SqlServer"/><!-- <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL"/> --><ProjectReference Include="../services/Storage.csproj"/></ItemGroup></Project>',
+    'services/customer/appsettings.json': JSON.stringify({
+      ConnectionStrings: { Main: null },
+      Storage: { RelationalConnectionString: 'Database=customer;Password="' + secret + ';Server=203.0.113.9";Server=tcp:localhost,1433' },
+      Blob: { ConnectionString: 'DefaultEndpointsProtocol=https;AccountName=test' }
+    }),
+    'tests/storage/Tests.csproj': '<Project><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk"/><PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite"/></ItemGroup></Project>',
+    'tests/storage/appsettings.Testing.json': JSON.stringify({ ConnectionStrings: { Test: String.raw`Server=(localdb)\test;Database=customer_test` } })
+  };
+  for (const [path, content] of Object.entries(files)) {
+    const target = join(project, path);
+    await mkdir(join(target, '..'), { recursive: true });
+    await writeFile(target, content);
+  }
+  const route = await register();
+  const discovered = await request(route + '/database-discovery');
+  assert.equal(discovered.status, 200);
+  const data = await discovered.json();
+  assert.equal(data.limited, false);
+  assert.doesNotMatch(JSON.stringify(data), new RegExp(secret));
+  assert.deepEqual(data.requirements.map(({ directory, key, status, engine }) => [directory, key, status, engine]).sort(), [
+    ['layers/sql', 'sqlserver', 'declared', 'sqlserver'],
+    ['services/customer', 'Main', 'missing', 'sqlserver'],
+    ['services/customer', 'Storage.RelationalConnectionString', 'configured', 'sqlserver'],
+    ['tests/storage', 'Test', 'unverified', 'sqlserver']
+  ]);
+  assert.equal(data.requirements.find(item => item.status === 'configured').host, 'localhost');
+});
+
+test('database discovery reads literal Compose service images after comments and recognizes registry-qualified images', async t => {
+  const { project, request, register } = await fixture(t);
+  await writeFile(join(project, 'compose.yaml'), [
+    'services: # development services',
+    '  worker:',
+    '    image: example/worker:1',
+    '    environment:',
+    '      image: redis:7',
+    '# Local services start below.',
+    '  "sql": # SQL Server',
+    '    image: "mcr.microsoft.com/mssql/server:2022-latest"',
+    '    profiles: [dev]',
+    '  pg:',
+    '    image: docker.io/library/postgres:17 # PostgreSQL',
+    '  dynamic:',
+    '    image: "${CUSTOM_DB_IMAGE}"',
+    'volumes:',
+    '  pg:',
+    '    image: mysql:8'
+  ].join('\r\n'));
+  const nested = join(project, 'infrastructure/development/databases');
+  await mkdir(nested, { recursive: true });
+  await writeFile(join(nested, 'docker-compose.yml'), JSON.stringify({ services: { ledger: { image: 'library/mariadb:11' } } }));
+  const route = await register();
+  const data = await (await request(route + '/database-discovery')).json();
+  assert.deepEqual(data.requirements.map(({ engine, key, kind, status }) => [engine, key, kind, status]).sort(), [
+    ['mysql', 'ledger', 'compose', 'unverified'], ['postgres', 'pg', 'compose', 'unverified'], ['sqlserver', 'sql', 'compose', 'unverified']
+  ]);
+  assert.equal(data.requirements.find(item => item.key === 'ledger').variant, 'mariadb');
+});
+
 test('SQLite inspects real schema, backs up WAL data, previews a restore and creates only absent files', { timeout: 45000 }, async t => {
   const { root, project, request, register } = await fixture(t);
   await mkdir(join(project, 'prisma'));

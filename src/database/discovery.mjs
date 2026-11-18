@@ -10,6 +10,8 @@ import { djangoSettingsFiles, pythonSourceFiles } from '../projects/detection/py
 import { resolveStartup } from '../projects/project-startup.mjs';
 import { drizzleConfig } from './migrations/drizzle-config.mjs';
 import { alembicConfig } from './migrations/alembic-config.mjs';
+import { composeImageName, composeImages } from './discovered-compose.mjs';
+import { adoFields, dotnetConnectionEntries, dotnetDatabaseProviders } from './dotnet-discovery.mjs';
 
 export const databaseKey = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 export const sqlName = /^[a-zA-Z][a-zA-Z0-9_]{0,62}$/;
@@ -152,11 +154,16 @@ async function boundedFiles(folder) {
 
 export async function discoverDatabases(project, { includeConnections = false, includeMigrations = false } = {}) {
   const { root, identity, services, limited } = await scanProjectServices(project);
+  const folders = await Promise.all(services.map(async service => {
+    const { files, limited: filesLimited } = await boundedFiles(service.folder);
+    return { ...service, files, filesLimited };
+  }));
+  const providers = await dotnetDatabaseProviders(folders, projectText);
   const findings = new Map();
   const connections = new Map();
   const migrationSources = [];
   const sqlalchemySources = new Set();
-  let truncated = limited;
+  let truncated = limited || providers.limited;
   function add(directory, file, key, metadata) {
     if (!metadata.engine || findings.size >= 128) { truncated ||= findings.size >= 128; return; }
     const { path, ...details } = metadata;
@@ -174,9 +181,10 @@ export async function discoverDatabases(project, { includeConnections = false, i
   }
 
   const rootEnv = new Map(await Promise.all(envFiles.map(async file => [file, parseEnv(await projectText(root, file))])));
-  for (const { folder, directory, manifest, pom } of services) {
-    const { files, limited: filesLimited } = await boundedFiles(folder);
+  for (const { folder, directory, manifest, pom, files, filesLimited } of folders) {
     truncated ||= filesLimited;
+    const dotnet = providers.forFolder(folder);
+    for (const { file, engine } of dotnet.declarations) add(directory, file, engine, { engine, orm: 'EF Core', status: 'declared' });
     const alembic = includeMigrations && await alembicConfig(folder, files);
     if (alembic) {
       const source = pathLabel(directory, alembic.file);
@@ -293,20 +301,29 @@ export async function discoverDatabases(project, { includeConnections = false, i
         }
       } else {
         if (dotnetSettingsFile.test(file)) {
-          const config = dotnetJson(text);
-          for (const [key, value] of Object.entries(config?.ConnectionStrings ?? {})) {
-            if (typeof value !== 'string' || !/^[\w.-]{1,64}$/.test(key) || !/^(?:server|host|data source)\s*=/i.test(value)) continue;
-            const fields = Object.fromEntries(value.split(';').filter(field => field.includes('=')).map(field => {
-              const split = field.indexOf('=');
-              return [field.slice(0, split).trim().toLowerCase(), clean(field.slice(split + 1))];
-            }));
-            const engine = fields.host ? 'postgres' : fields.server || fields['data source'] ? 'sqlserver' : undefined;
-            const [host, explicitPort] = (fields.host ?? fields.server ?? fields['data source'] ?? '').toLowerCase().split(',');
+          const soleProvider = dotnet.engines.size === 1 ? [...dotnet.engines][0] : undefined;
+          for (const { key, value, section } of dotnetConnectionEntries(dotnetJson(text))) {
+            if (section && !value?.trim()) {
+              add(directory, file, key, { engine: soleProvider, status: 'missing' });
+              continue;
+            }
+            const fields = adoFields(value);
+            if (!fields) continue;
+            const endpoint = fields.host ?? fields.server ?? fields['data source'] ?? fields.address;
             const name = fields.database ?? fields['initial catalog'];
+            if (!endpoint || !section && !name) continue;
+            const localdb = /^\(localdb\)\\[\w.-]+$/i.test(endpoint);
+            const sqlServer = localdb || !fields.host && (fields['integrated security'] || fields['initial catalog'] || fields.trusted_connection);
+            const engine = sqlServer ? 'sqlserver' : ['postgres', 'mysql', 'sqlserver'].includes(soleProvider) ? soleProvider
+              : fields.host ? 'postgres' : section ? 'sqlserver' : undefined;
+            if (!engine) continue;
+            const address = engine === 'sqlserver' ? endpoint.replace(/^tcp:/i, '') : endpoint;
+            const [host, explicitPort] = address.toLowerCase().split(',');
             const port = boundedPort(fields.port ?? explicitPort ?? ports[engine]);
-            const status = placeholder.test(value) ? 'placeholder' : !host || !name ? 'missing' : validHost(host) && databaseName.test(name) && port ? 'configured' : 'ambiguous';
+            const status = localdb ? 'unverified' : placeholder.test(value) ? 'placeholder' : !name ? 'missing'
+              : validHost(host) && databaseName.test(name) && port ? 'configured' : 'ambiguous';
             const id = add(directory, file, key, { engine, status, ...(status === 'configured' && { host, name, port }) });
-            if (includeConnections && id && engine === 'sqlserver' && !/[{}"'\r\n]/.test(value)) {
+            if (includeConnections && id && engine === 'sqlserver' && status === 'configured' && !/[{}"'\r\n]/.test(value)) {
               connections.set(id, { sqlServerAuth: { user: fields['user id'] ?? fields.uid ?? fields.user,
                 password: fields.password ?? fields.pwd, integrated: /^(?:true|yes|sspi)$/i.test(fields['integrated security'] ?? fields.trusted_connection ?? '') } });
             }
@@ -330,26 +347,11 @@ export async function discoverDatabases(project, { includeConnections = false, i
     for (const file of composeFiles) {
       const text = await projectText(folder, file);
       if (!text) continue;
-      let model;
-      try { model = JSON.parse(text); } catch { /* Static YAML scan for straightforward service declarations. */ }
-      if (model) {
-        for (const [service, spec] of Object.entries(model.services ?? {})) {
-          const image = /^(?:(?:docker\.io\/)?library\/)?([\w-]+)(?=[:@]|$)/.exec(spec?.image)?.[1];
-          const engine = engines[image];
-          if (engine && /^[\w.-]{1,64}$/.test(service)) add(directory, file, service, { engine, kind: 'compose', status: 'unverified',
-            ...(image === 'mariadb' && { variant: 'mariadb' }) });
-        }
-      } else {
-        const section = /^services:\s*\r?\n((?:[ \t]+.*(?:\r?\n|$)|\s*\r?\n)*)/m.exec(text)?.[1] ?? '';
-        let service, indentation = Infinity;
-        for (const line of section.split(/\r?\n/)) {
-          const heading = /^( +)([\w.-]{1,64}):\s*(?:#.*)?$/.exec(line);
-          if (heading && heading[1].length <= indentation) { service = heading[2]; indentation = heading[1].length; }
-          const image = /^( +)image:\s*['"]?(?:(?:docker\.io\/)?library\/)?([\w-]+)(?=[:@'"\s]|$)/.exec(line);
-          const engine = engines[image?.[2]];
-          if (service && engine && image[1].length > indentation) add(directory, file, service, { engine, kind: 'compose', status: 'unverified',
-            ...(image[2] === 'mariadb' && { variant: 'mariadb' }) });
-        }
+      for (const [service, reference] of composeImages(text)) {
+        const image = composeImageName(reference);
+        const engine = engines[image];
+        if (engine) add(directory, file, service, { engine, kind: 'compose', status: 'unverified',
+          ...(image === 'mariadb' && { variant: 'mariadb' }) });
       }
     }
   }
