@@ -4,6 +4,14 @@ import { join } from 'node:path';
 const ignored = /^(?:\.|__|venv$|env$|tests?$|test_|fixtures?$|docs?$|examples?$|scripts?$|migrations?$|node_modules$|build$|dist$|site-packages$)/i;
 const manifest = async path => (await lstat(path).catch(() => null))?.isFile();
 
+export function djangoSettingsFiles(manage) {
+  if (!/\bdjango\.core\.management\b/.test(manage)) return [];
+  const configured = [...manage.matchAll(/\bos\.environ\.setdefault\(\s*['"]DJANGO_SETTINGS_MODULE['"]\s*,\s*(['"])((?:[A-Za-z_]\w*\.){0,7}[A-Za-z_]\w*)\1\s*\)/g)];
+  if (configured.length !== 1) return [];
+  const module = configured[0][2].replaceAll('.', '/');
+  return [module + '.py', module + '/__init__.py'];
+}
+
 export async function pythonSourceFiles(folder, walkPackages) {
   const pending = [{ directory: '', depth: 0 }];
   const files = [];

@@ -73,7 +73,7 @@ export async function detectStartupSuggestions(project) {
       for (const member of record.members) suppressed.add(member);
       groups.push({ directory: record.directory, name: record.name, choices: orchestrators });
     } else if (!record.members.some(member => records.get(member)?.choices.length) &&
-        !((folder === root || record.unknownWorkspace) && [...records].some(([candidate, item]) => item.choices.length && childOf(candidate, folder)))) {
+        !(record.unknownWorkspace && [...records].some(([candidate, item]) => item.choices.length && childOf(candidate, folder)))) {
       groups.push({ directory: record.directory, name: record.name, choices: record.choices });
     }
   }

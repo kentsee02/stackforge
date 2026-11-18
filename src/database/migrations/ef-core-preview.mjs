@@ -129,7 +129,7 @@ export async function scanEfCore(project, { sourceId, signal } = {}) {
   const invalid = 'Choose a detected EF Core migration project.';
   if (sourceId !== undefined && (typeof sourceId !== 'string' || !/^[a-f0-9]{64}$/.test(sourceId))) throw new Error(invalid);
   const { root, identity } = await resolveStartup(project, []);
-  const { projects, limited } = await scanDotnetLayout(root, { includeSources: true, signal });
+  const { projects, limited } = await scanDotnetLayout(root, { signal });
   let partial = limited;
   const budget = { files: 1024, bytes: 24 * 1024 ** 2 };
   const sources = [];

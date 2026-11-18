@@ -1,5 +1,6 @@
 import { lstat, opendir, readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { ignoredRepositoryDirectory } from './repository-layout.mjs';
 
 const npmFrameworks = [
   ['Next.js', 'next', ['react']],
@@ -43,6 +44,13 @@ async function localDirectory(path) {
 export function npmManifest(text) {
   try { return JSON.parse(text.replace(/^\uFEFF/, '')); }
   catch { return undefined; }
+}
+
+export function dotnetJson(text) {
+  const uncommented = text.replace(/"(?:[^"\\]|\\.)*"|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g,
+    token => token.startsWith('"') ? token : ' ');
+  return npmManifest(uncommented.replace(/"(?:[^"\\]|\\.)*"|,(?=\s*[}\]])/g,
+    token => token === ',' ? '' : token));
 }
 
 export async function findMavenWrapper(directory, root) {
@@ -129,7 +137,7 @@ async function collectWorkspace(directory, segments, folders, budget, depth = 0)
   try {
     for await (const entry of entries) {
       if (budget.left-- <= 0 || folders.size >= 96) break;
-      if (entry.isDirectory() && !ignored(entry.name) && (recursive || match.test(entry.name))) {
+      if (entry.isDirectory() && !ignoredRepositoryDirectory(entry.name) && (recursive || match.test(entry.name))) {
         await collectWorkspace(join(directory, entry.name), recursive ? segments : rest, folders, budget, depth + 1);
       }
     }

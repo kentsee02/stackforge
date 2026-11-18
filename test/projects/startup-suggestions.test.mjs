@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { discoverDatabases } from '../../src/database/discovery.mjs';
 import { createApp } from '../../src/http/server.mjs';
 import { ProjectOperations } from '../../src/projects/project-operations.mjs';
+import { cloneGithub } from '../../src/projects/project-clone.mjs';
 import { detectStartupSuggestions } from '../../src/projects/detection/startup-suggestions.mjs';
 
 async function fixture(t, files) {
@@ -135,8 +136,8 @@ test('nested .NET hosts contribute startup suggestions and database settings fro
   const second = 'samples/edition/components/api';
   const root = await fixture(t, {
     [first + '/Web.csproj']: '<Project Sdk="Microsoft.NET.Sdk.Web" />',
-    [first + '/Properties/launchSettings.json']: { profiles: { Dev: { commandName: 'Project', applicationUrl: 'http://localhost:5104' } } },
-    [first + '/appsettings.Development.json']: { ConnectionStrings: { Default: 'Host=localhost;Database=inventory;Username=app' } },
+    [first + '/Properties/launchSettings.json']: '{\n // Local profile\n"profiles": {"Dev": {"commandName": "Project", "applicationUrl": "http://localhost:5104", }},\n}',
+    [first + '/appsettings.Development.json']: '\ufeff{\n /* Local database */ "ConnectionStrings": {"Default": "Host=localhost;Database=inventory;Username=app", },\n}',
     [second + '/Api.fsproj']: '<Project Sdk="Microsoft.NET.Sdk.Web" />',
     [second + '/appsettings.json']: { ConnectionStrings: { Default: 'Host=localhost;Database=catalog;Username=app' } },
     'samples/edition/components/library/Library.csproj': '<Project Sdk="Microsoft.NET.Sdk" />',
@@ -324,29 +325,51 @@ test('reading suggestions leaves saved custom configuration and project files un
   await assert.rejects(stat(join(root, 'executed.txt')), { code: 'ENOENT' });
 });
 
-test('one service scan feeds import labels, startup, dependencies and workspace checks before saving any configuration', async t => {
+test('local imports and clones share nested service evidence across startup, dependencies, databases and checks', async t => {
+  const frontend = 'areas/customers/retail/display';
+  const python = 'integrations/partners/search/http';
+  const node = 'internal/tools/inventory/http';
+  const java = 'features/payments/server';
+  const django = 'workloads/accounts/identity/http';
+  const compose = 'ops/env/local/data';
   const root = await realpath(await fixture(t, {
     'package.json': { packageManager: 'pnpm@10.0.0' },
-    'pnpm-workspace.yaml': 'packages:\n  - modules/*\n',
-    'modules/ui/package.json': { dependencies: { next: '16.0.0' }, scripts: { dev: 'next dev', build: 'next build' } },
-    'services/python/main.py': 'from fastapi import FastAPI\napp = FastAPI()\n',
-    'services/python/pyproject.toml': '[project]\nname = "api"\ndependencies = ["fastapi"]',
-    'services/python/uv.lock': 'version = 1',
+    'pnpm-workspace.yaml': 'packages:\n  - areas/customers/retail/*\n',
+    [frontend + '/package.json']: { dependencies: { next: '16.0.0' }, scripts: { dev: 'next dev', build: 'next build' } },
+    [python + '/main.py']: 'from fastapi import FastAPI\napp = FastAPI()\n',
+    [python + '/pyproject.toml']: '[project]\nname = "api"\ndependencies = ["fastapi"]',
+    [python + '/uv.lock']: 'version = 1',
+    [python + '/.env']: 'DATABASE_URL=postgresql://app@localhost:5432/search',
     'Example.Api/Example.Api.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web" />',
     'pom.xml': '<project><packaging>pom</packaging><modules><module>features/payments/server</module></modules></project>',
-    'features/payments/server/pom.xml': '<project><build><plugins><plugin><artifactId>quarkus-maven-plugin</artifactId></plugin></plugins></build></project>',
+    [java + '/pom.xml']: '<project><build><plugins><plugin><artifactId>quarkus-maven-plugin</artifactId></plugin></plugins></build></project>',
+    [java + '/src/main/resources/application-local.properties']: 'quarkus.datasource.jdbc.url=jdbc:postgresql://localhost:5432/payments',
     'backend/go.mod': 'module example.com/http\n',
     'backend/cmd/api/main.go': 'package main\nimport "net/http"\nfunc main() { http.ListenAndServe(":8080", nil) }',
-    'internal/tools/hidden/package.json': { packageManager: 'npm@11.0.0', dependencies: { fastify: '5.0.0' }, scripts: { start: 'node server.js', test: 'node --test' } },
+    [node + '/package.json']: { packageManager: 'npm@11.0.0', dependencies: { fastify: '5.0.0' }, scripts: { start: 'node server.js', test: 'node --test' } },
+    [node + '/.env']: 'DATABASE_URL=mysql://app@localhost:3306/inventory',
+    [django + '/manage.py']: 'import os\nfrom django.core.management import execute_from_command_line\nos.environ.setdefault("DJANGO_SETTINGS_MODULE", "accounts.settings.local")\n',
+    [django + '/accounts/settings/local.py']: 'DATABASES = {"default": {"ENGINE": "django.db.backends.mysql"}}\n',
+    [compose + '/compose.yml']: 'services:\n  cache:\n    image: redis:7\n',
     'services/php/composer.json': { require: { 'laravel/framework': '^12.0' } },
     'services/php/artisan': '<?php',
-    'services/php/Procfile': 'web: php artisan serve --port=8080'
+    'services/php/Procfile': 'web: php artisan serve --port=8080',
+    'node_modules/ignored/package.json': { dependencies: { hono: '4.0.0' }, packageManager: 'npm@11.0.0', scripts: { start: 'node index.js' } },
+    'dist/ignored/compose.yml': 'services:\n  ignored:\n    image: mysql:8.4\n'
   }));
   const outside = await fixture(t, { 'package.json': { dependencies: { hono: '4.0.0' }, packageManager: 'pnpm@10.0.0', scripts: { dev: 'node app.js', test: 'node --test' } } });
-  await symlink(outside, join(root, 'modules/outside'), 'junction');
+  const linked = join(root, 'areas/customers/retail/outside');
+  await symlink(outside, linked, 'junction');
+  const cloneParent = await fixture(t, {});
   const calls = [];
   const operations = new ProjectOperations({ command: async (command, args, { cwd }) => { calls.push({ command, args, cwd }); } });
-  const app = createApp({ stateDir: false, operations }).listen(0, '127.0.0.1');
+  const app = createApp({ stateDir: false, operations, clone: (repo, parent, options) => cloneGithub(repo, parent, {
+    ...options, command: async (program, args) => {
+      assert.equal(program, 'git');
+      await cp(root, args.at(-1), { recursive: true, filter: source => source !== linked });
+      await mkdir(join(args.at(-1), '.git'));
+    }
+  }) }).listen(0, '127.0.0.1');
   await once(app, 'listening');
   t.after(async () => { await app.shutdownTasks(); await new Promise(resolve => app.close(resolve)); });
   const base = `http://127.0.0.1:${app.address().port}`;
@@ -357,27 +380,53 @@ test('one service scan feeds import labels, startup, dependencies and workspace 
   assert.equal(response.status, 201);
   const { id, external, frameworks } = await response.json();
   assert.equal(external, false);
-  assert.deepEqual(frameworks.sort(), ['ASP.NET Core', 'FastAPI', 'Go', 'Laravel', 'Next.js', 'Quarkus']);
+  assert.deepEqual(frameworks.sort(), ['ASP.NET Core', 'Django', 'FastAPI', 'Fastify', 'Go', 'Laravel', 'Next.js', 'Quarkus']);
   const route = '/api/projects/' + id;
-  const [startup, dependencies, checks] = await Promise.all(['startup-suggestions', 'dependencies', 'checks'].map(view => get(route + '/' + view)));
-  assert.deepEqual(startup.groups.map(group => group.directory).sort(), ['Example.Api', 'backend/cmd/api', 'features/payments/server', 'modules/ui', 'services/php', 'services/python']);
+  const readViews = path => Promise.all(['startup-suggestions', 'dependencies', 'checks', 'database-discovery'].map(view => get(path + '/' + view)));
+  const databaseTargets = ({ requirements }) => requirements.map(({ directory, engine, status }) => [directory, engine, status]);
+  const [startup, dependencies, checks, databases] = await readViews(route);
+  assert.equal(startup.limited, false);
+  assert.deepEqual(startup.groups.map(group => group.directory).sort(), ['Example.Api', frontend, 'backend/cmd/api', java, python, node, 'services/php', django]);
   assert.equal(startup.groups.find(group => group.directory === 'services/php').choices[0].source, 'Procfile · web');
   assert.deepEqual(Object.fromEntries(dependencies.steps.map(({ directory, command }) => [directory, command])), {
     '.': 'pnpm install', backend: 'go mod download', 'Example.Api': 'dotnet restore Example.Api.csproj',
-    'services/php': 'composer install --no-interaction', 'services/python': 'uv sync --locked'
+    'services/php': 'composer install --no-interaction', [python]: 'uv sync --locked', [node]: 'npm install'
   });
-  const check = checks.checks.find(item => item.directory === 'modules/ui');
-  assert.deepEqual([check.directory, check.tool, check.name], ['modules/ui', 'pnpm', 'build']);
-  assert.deepEqual((await get('/api/projects?logs=' + id)).projects[0].startupServices, []);
+  assert.deepEqual(databaseTargets(databases), [[java, 'postgres', 'configured'], [python, 'postgres', 'configured'],
+    [node, 'mysql', 'configured'], [compose, 'redis', 'unverified'], [django, 'mysql', 'declared']]);
+  const check = checks.checks.find(item => item.directory === frontend);
+  assert.deepEqual([check.directory, check.tool, check.name], [frontend, 'pnpm', 'build']);
+  const clone = await post('/api/projects/clone', { repository: 'https://github.com/example/multiservice', parentDir: cloneParent });
+  assert.equal(clone.status, 201);
+  const cloned = await clone.json();
+  assert.deepEqual(cloned.frameworks.sort(), frameworks);
+  const [clonedStartup, clonedDependencies, clonedChecks, clonedDatabases] = await readViews('/api/projects/' + cloned.id);
+  assert.deepEqual(clonedStartup, startup);
+  assert.deepEqual(clonedDependencies.steps, dependencies.steps);
+  assert.deepEqual(clonedChecks, checks);
+  assert.deepEqual(databaseTargets(clonedDatabases), databaseTargets(databases));
+  assert.deepEqual((await get('/api/projects?logs=' + id)).projects.find(project => project.id === id).startupServices, []);
   assert.deepEqual(calls, []);
   assert.equal((await post(route + '/run-check', { check: check.id })).status, 202);
   for (let i = 0; i < 40 && !calls.length; i++) await delay(25);
-  assert.deepEqual(calls, [{ command: 'pnpm run build', args: [], cwd: join(root, 'modules', 'ui') }]);
+  assert.deepEqual(calls, [{ command: 'pnpm run build', args: [], cwd: join(root, frontend) }]);
 
-  const configured = 'internal/tools/hidden';
-  assert.equal((await post(route + '/startup', { services: [{ name: 'Custom path', directory: configured, command: 'npm run start' }] })).status, 200);
-  assert.ok((await get('/api/projects')).projects[0].frameworks.includes('Fastify'));
-  assert.ok((await get(route + '/startup-suggestions')).groups.some(group => group.directory === configured));
-  assert.ok((await get(route + '/dependencies')).steps.some(step => step.directory === configured));
-  assert.ok((await get(route + '/checks')).checks.some(item => item.directory === configured));
+  const services = [{ name: 'Custom path', directory: node, command: 'npm run start' }];
+  assert.equal((await post(route + '/startup', { services })).status, 200);
+  const saved = (await get('/api/projects?logs=' + id)).projects.find(project => project.id === id).startupServices;
+  assert.deepEqual(saved.map(({ name, directory, command }) => ({ name, directory, command })), services);
+});
+
+test('independent root and nested launchers both survive a bounded scan', async t => {
+  const manifest = { packageManager: 'npm@11.0.0', scripts: { start: 'node index.js' } };
+  const nested = 'retail/europe/catalog/preview';
+  const beyondLimit = Array(13).fill('nested').join('/');
+  const path = await fixture(t, {
+    'package.json': manifest,
+    [nested + '/package.json']: manifest,
+    [beyondLimit + '/package.json']: manifest
+  });
+  const result = await detectStartupSuggestions({ path });
+  assert.equal(result.limited, true);
+  assert.deepEqual(result.groups.map(group => group.directory), ['.', nested]);
 });

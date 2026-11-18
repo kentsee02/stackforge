@@ -1,6 +1,7 @@
 import { lstat, opendir, stat } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
-import { findBuildWrapper, localText, npmManifest } from './project-detection.mjs';
+import { dotnetJson, findBuildWrapper, localText, npmManifest } from './project-detection.mjs';
+import { dotnetManifest } from './repository-layout.mjs';
 import { declaredEndpoint, jvmEndpoint, ktorEndpoint, literalPath, literalPort, nestedText, uniqueValue } from './startup-endpoints.mjs';
 import { pythonSourceFiles } from './python-sources.mjs';
 
@@ -128,7 +129,7 @@ async function dotnetStartup(folder) {
   try {
     for await (const entry of entries) {
       if (++visited > 192) return;
-      if (!entry.isFile() || !/^[a-z0-9][a-z0-9_. -]{0,119}\.(?:csproj|fsproj|vbproj)$/i.test(entry.name)) continue;
+      if (!entry.isFile() || !/^[a-z0-9][a-z0-9_. -]{0,126}$/i.test(entry.name) || !dotnetManifest.test(entry.name)) continue;
       const project = (await localText(folder, entry.name)).replace(/<!--[\s\S]*?-->/g, '');
       if (/<Project\b[^>]*\bSdk\s*=\s*["']Microsoft\.NET\.Sdk\.Web(?:\/[^"']+)?["']/i.test(project)) projects.push(entry.name);
       if (projects.length > 1) return;
@@ -137,7 +138,7 @@ async function dotnetStartup(folder) {
   if (!projects.length) return;
   const [project] = projects;
   const target = project.includes(' ') ? `"${project}"` : project;
-  const profiles = npmManifest(await nestedText(folder, 'Properties/launchSettings.json'))?.profiles;
+  const profiles = dotnetJson(await nestedText(folder, 'Properties/launchSettings.json'))?.profiles;
   const profile = profiles && Object.entries(profiles).find(([name, value]) => /^\w[\w.-]{0,79}$/.test(name) && value?.commandName === 'Project');
   const command = 'dotnet run --project ' + target + (profile ? ' --launch-profile ' + profile[0] : ' --no-launch-profile');
   const settings = profile?.[1];

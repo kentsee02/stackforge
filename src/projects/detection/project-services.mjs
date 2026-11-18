@@ -1,13 +1,25 @@
 import { realpath } from 'node:fs/promises';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { detectBackendLaunchers } from './backend-startup.mjs';
 import { inspectNode } from './node-project.mjs';
 import { detectManifestFrameworks, localText, mavenLauncher, npmManifest, validFrameworks, workspaceFolders, workspaceSegments } from './project-detection.mjs';
 import { resolveStartup } from '../project-startup.mjs';
-import { scanDotnetLayout } from './dotnet-layout.mjs';
+import { composeConfigFiles, databaseEnvironmentFiles, dotnetManifest, dotnetSettingsFile, jvmSettingsFile, walkRepository } from './repository-layout.mjs';
 
 const serviceFolders = ['frontend', 'backend', 'client', 'server', 'web', 'api', 'apps/*', 'packages/*',
   'services/*', 'src/*', 'backend/*', 'server/*', 'cmd/*', 'backend/cmd/*', 'server/cmd/*', 'services/*/cmd/*', 'apps/*/cmd/*', '*'];
+const serviceFiles = new Set([
+  'package.json', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'go.mod', 'main.go', 'Cargo.toml',
+  'pyproject.toml', 'requirements.txt', 'Pipfile', 'uv.lock', 'poetry.lock', 'manage.py',
+  'composer.json', 'Gemfile', 'Procfile', 'Procfile.dev', 'alembic.ini',
+  ...composeConfigFiles, ...databaseEnvironmentFiles
+]);
+
+function hasServiceEvidence(files) {
+  if (files.some(file => serviceFiles.has(file) || dotnetManifest.test(file) || dotnetSettingsFile.test(file) ||
+      /\.(?:db|sqlite3?)$/i.test(file))) return true;
+  return !files.includes('__init__.py') && files.some(file => /^(?:main|app|asgi|wsgi)\.py$/.test(file));
+}
 
 export function childOf(folder, root) {
   const path = relative(root, folder);
@@ -18,17 +30,34 @@ export async function scanProjectServices(project) {
   const saved = project.startup;
   const { root, identity } = await resolveStartup(project, []);
   const budget = { left: 2048 };
-  const [conventional, dotnet] = await Promise.all([workspaceFolders(root, serviceFolders, budget), scanDotnetLayout(root)]);
-  const pending = new Set([root, ...conventional, ...dotnet.projects.map(item => join(root, item.directory))]);
+  const pending = new Set([root]);
+  const [conventional, layoutLimited] = await Promise.all([
+    workspaceFolders(root, serviceFolders, budget),
+    walkRepository(root, ({ folder, directory, files }) => {
+      if (hasServiceEvidence(files)) pending.add(folder);
+      if (files.includes('schema.prisma')) pending.add(/(?:^|\/)prisma$/.test(directory) ? dirname(folder) : folder);
+      if (/(?:^|\/)config$/.test(directory) && files.some(file => /^database\.ya?ml$/i.test(file))) pending.add(dirname(folder));
+      if (/(?:^|\/)src\/main\/resources$/.test(directory) && files.some(file => jvmSettingsFile.test(file))) {
+        pending.add(join(folder, '..', '..', '..'));
+      }
+    })
+  ]);
   for (const service of saved?.services ?? []) {
     const resolved = await resolveStartup(project, [service], identity).catch(() => null);
     if (resolved) pending.add(resolved.commands[0].cwd);
   }
 
   const services = new Map(), owners = new Map(), opaqueWorkspaces = [];
-  while (pending.size && services.size < 96) {
-    const folder = [...pending].sort((a, b) => a.length - b.length || a.localeCompare(b))[0];
-    pending.delete(folder);
+  // Directories with evidence and declared members take priority over naming hints.
+  for (const folder of pending) conventional.delete(folder);
+  function nextFolder() {
+    const candidates = pending.size ? pending : conventional;
+    const [folder] = [...candidates].sort((a, b) => a.length - b.length || a.localeCompare(b));
+    candidates.delete(folder);
+    return folder;
+  }
+  while ((pending.size || conventional.size) && services.size < 96) {
+    const folder = nextFolder();
     if (services.has(folder)) continue;
     const actual = await realpath(folder).catch(() => null);
     if (!actual || relative(folder, actual)) continue;
@@ -52,10 +81,14 @@ export async function scanProjectServices(project) {
     if (unknownWorkspace) opaqueWorkspaces.push(folder);
     else for (const member of members) owners.set(member, { manager });
     const mavenModules = await workspaceFolders(folder, modules.slice(0, 32).filter(path => !path.includes('*')), budget);
-    for (const child of [...members, ...mavenModules]) if (!services.has(child)) pending.add(child);
+    for (const child of [...members, ...mavenModules]) if (!services.has(child)) {
+      conventional.delete(child);
+      pending.add(child);
+    }
   }
-  return { root, identity, services: [...services.values()], limited: pending.size > 0 || budget.left <= 0 ||
-    dotnet.projects.length > 0 && dotnet.limited };
+  // Keep ancestor candidates ahead of nested entry points, especially for Python package-relative commands.
+  const ordered = [...services.values()].sort((a, b) => a.folder.length - b.folder.length || a.folder.localeCompare(b.folder));
+  return { root, identity, services: ordered, limited: pending.size > 0 || conventional.size > 0 || budget.left <= 0 || layoutLimited };
 }
 
 export async function detectFrameworks(project) {

@@ -3,9 +3,10 @@ import { lstat, opendir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseEnv } from 'node:util';
 import { isIP } from 'node:net';
-import { localText } from '../projects/detection/project-detection.mjs';
+import { dotnetJson, localText } from '../projects/detection/project-detection.mjs';
 import { scanProjectServices } from '../projects/detection/project-services.mjs';
-import { pythonSourceFiles } from '../projects/detection/python-sources.mjs';
+import { composeConfigFiles as composeFiles, databaseEnvironmentFiles as envFiles, dotnetSettingsFile, jvmSettingsFile } from '../projects/detection/repository-layout.mjs';
+import { djangoSettingsFiles, pythonSourceFiles } from '../projects/detection/python-sources.mjs';
 import { resolveStartup } from '../projects/project-startup.mjs';
 import { drizzleConfig } from './migrations/drizzle-config.mjs';
 import { alembicConfig } from './migrations/alembic-config.mjs';
@@ -18,8 +19,6 @@ const engines = Object.assign(Object.create(null), { postgres: 'postgres', postg
   sqlserver: 'sqlserver', mssql: 'sqlserver', mongodb: 'mongodb', 'mongodb+srv': 'mongodb', redis: 'redis', rediss: 'redis' });
 const ports = { postgres: 5432, mysql: 3306, sqlserver: 1433, mongodb: 27017, redis: 6379 };
 const sqlalchemyScheme = /^(postgres(?:ql)?|mysql)\+[a-z][a-z0-9_]*$/i;
-const composeFiles = ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'];
-const envFiles = ['.env', '.env.local', '.env.example'];
 const prismaConfigs = ['ts', 'js', 'mts', 'mjs', 'cts', 'cjs'].flatMap(ext => [`prisma.config.${ext}`, `.config/prisma.${ext}`]);
 const connectionKey = /^(?:[A-Z0-9]+_)*(?:DATABASE_URL|DIRECT_URL|DB_URL|REDIS_URL)$/i;
 const placeholder = /(?:\$\{|\{\{|<[^>]+>|\b(?:changeme|placeholder|replace[_-]?(?:me|with)|your[_-](?:host|database|db|password)|example\.com)\b)/i;
@@ -142,10 +141,12 @@ async function boundedFiles(folder) {
   const listing = await opendir(folder).catch(() => null);
   if (!listing) return { files, limited: true };
   let entries = 0;
-  for await (const entry of listing) {
-    if (++entries > 512) break;
-    if (entry.isFile()) files.push(entry.name);
-  }
+  try {
+    for await (const entry of listing) {
+      if (++entries > 512) break;
+      if (entry.isFile()) files.push(entry.name);
+    }
+  } catch { return { files: files.sort(), limited: true }; }
   return { files: files.sort(), limited: entries > 512 };
 }
 
@@ -257,8 +258,17 @@ export async function discoverDatabases(project, { includeConnections = false, i
     }
     const prismaConfig = await prismaConnection(folder, directory, files, runtimeEnv, env.get('.env'), environmentEntries);
     if (prismaConfig?.schema?.endsWith('.prisma') && !prismaConfig.schema.startsWith('../') && !prisma.includes(prismaConfig.schema)) prisma.push(prismaConfig.schema);
-    const configs = [...files.filter(file => /^(?:application(?:-[\w-]+)?\.(?:properties|ya?ml)|appsettings(?:\.[\w-]+)?\.json|settings\.py|database\.ya?ml|requirements\.txt|pyproject\.toml|Gemfile)$/i.test(file)).slice(0, 20),
-      'src/main/resources/application.properties', 'src/main/resources/application.yml', 'src/main/resources/application.yaml', 'config/database.yml'];
+    const resourceDirectory = join(folder, 'src/main/resources');
+    const resources = await realpath(resourceDirectory).catch(() => '') === resourceDirectory
+      ? await boundedFiles(resourceDirectory) : { files: [], limited: false };
+    const jvmConfigs = resources.files.filter(file => jvmSettingsFile.test(file));
+    const localConfigs = files.filter(file => jvmSettingsFile.test(file) || dotnetSettingsFile.test(file) ||
+      /^(?:settings\.py|database\.ya?ml|requirements\.txt|pyproject\.toml|Gemfile)$/i.test(file));
+    const djangoConfigs = files.includes('manage.py') ? djangoSettingsFiles(await projectText(folder, 'manage.py')) : [];
+    truncated ||= resources.limited || jvmConfigs.length > 20 || localConfigs.length > 20;
+    const configs = [...localConfigs.slice(0, 20), ...jvmConfigs.slice(0, 20).map(file => 'src/main/resources/' + file),
+      'src/main/resources/application.properties', 'src/main/resources/application.yml', 'src/main/resources/application.yaml',
+      ...djangoConfigs, 'config/database.yml', 'config/database.yaml'];
     await Promise.all([...prisma, ...new Set(configs)].map(async file => {
       const text = await projectText(folder, file);
       if (!text) return;
@@ -282,9 +292,8 @@ export async function discoverDatabases(project, { includeConnections = false, i
           }
         }
       } else {
-        if (/^appsettings(?:\.[\w-]+)?\.json$/i.test(file)) {
-          let config;
-          try { config = JSON.parse(text); } catch { /* A malformed appsettings file provides no connection evidence. */ }
+        if (dotnetSettingsFile.test(file)) {
+          const config = dotnetJson(text);
           for (const [key, value] of Object.entries(config?.ConnectionStrings ?? {})) {
             if (typeof value !== 'string' || !/^[\w.-]{1,64}$/.test(key) || !/^(?:server|host|data source)\s*=/i.test(value)) continue;
             const fields = Object.fromEntries(value.split(';').filter(field => field.includes('=')).map(field => {
