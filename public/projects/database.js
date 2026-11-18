@@ -1,6 +1,7 @@
 import { setText } from '/i18n.js';
 import { createPostgresSetup } from '/projects/postgres-setup.js';
 import { drizzlePreview } from '/projects/drizzle-preview.js';
+import { alembicPreview } from '/projects/alembic-preview.js';
 
 export function createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
   selectedId, selectedProject, renderPage, refresh, act, openDevelopment }) {
@@ -246,6 +247,12 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
         if (item.migrationAdapter === 'drizzle') row.append(drizzlePreview(view.id, item, { request, post }));
         return row;
       });
+      for (const source of data.migrationSources ?? []) {
+        if (source.adapter !== 'alembic') continue;
+        const row = document.createElement('li');
+        row.append(alembicPreview(view.id, source, { request, post }));
+        requirements.push(row);
+      }
       $('database-requirements').replaceChildren(...requirements);
       const local = [...new Map(data.bindings.filter(item => item.instance.provider === 'local' &&
         ['postgres', 'mysql'].includes(item.instance.engine)).map(item => [item.instanceId, item])).values()];

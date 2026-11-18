@@ -4,7 +4,7 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 
 1. **Project startup preflight** (completed). Check a locally imported or cloned project and point users to the relevant setup action.
 2. **Project-scoped development databases** (completed for Docker PostgreSQL). Imports and clones can create and manage one dedicated instance.
-3. **Additional migration adapters.** Drizzle PostgreSQL target checks and preview shipped in v0.35.0. v0.36.0 adds confirmed execution and verification for supported schema additions. Evaluate Alembic, EF Core Migrations, Flyway, and Liquibase against real imports.
+3. **Additional migration adapters.** Drizzle PostgreSQL preview and confirmed execution for supported schema additions shipped in v0.35.0 and v0.36.0. Alembic file preview ships in v0.37.0. Evaluate Alembic database target verification, EF Core Migrations, Flyway, and Liquibase against real imports.
 4. **Project activity history.** Record installation, check, and database outcomes per project.
 5. **Global task history and queue.** Evaluate a cross-project task view and queue after the individual workflows expose compatible state.
 6. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases, and Tasks.
@@ -14,6 +14,12 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 10. **Additional local database operations.** Evaluate backup, restore, and lifecycle controls for MongoDB, Redis, and SQL Server individually.
 11. **Native PostgreSQL and MySQL provisioning.** Evaluate setup for supported local operating systems with their existing server and permissions model.
 12. **Cloud database lifecycle.** Evaluate provider-specific provisioning, lifecycle, and deletion with separate provider permissions.
+
+## v0.37.0 Alembic revision preview
+
+- [x] Find standard `alembic.ini` files in imported and cloned service directories, including nested backends.
+- [x] List local revision files and their declared heads from static file reads. Report missing files, unsupported layouts, and ambiguous graphs.
+- [x] Verify the [FastAPI Full Stack Template](https://github.com/fastapi/full-stack-fastapi-template), branch and merge fixtures, and the Projects panel in English and Chinese.
 
 ## v0.35.0 Drizzle PostgreSQL migration preview
 

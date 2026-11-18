@@ -99,6 +99,8 @@ Database creation, connection configuration, schema initialization, and applying
 
 The Drizzle PostgreSQL adapter previews recognized static configurations and PostgreSQL journal v7 files. It compares SQL file hashes and timestamps with the history table on a direct local PostgreSQL target. For supported schema additions, applying migrations requires a fresh preview and exact database-name confirmation. The server verifies the target and history again under a database lock, commits SQL and Drizzle history in one transaction, and checks the resulting history.
 
+The Alembic adapter discovers service-level migration configurations through the same scan used by imports and clones. For a standard `alembic.ini` and a project-relative `versions` directory, it reads literal revision declarations and shows local ordering and branch heads. The file preview reports the database state as unverified. Custom layouts and ambiguous revision graphs require review in the project's environment.
+
 Migration support is capability-based. Detecting an ORM or a migration tool does not authorize its execution. Applying migrations uses reviewed files and a confirmed target. Schema reset, schema replacement, and destructive SQL require separate explicit support and approval.
 
 #### 3.4.4 Backup and restore
@@ -138,7 +140,7 @@ Keep project-specific configuration separate from app-wide preferences. StackFor
 
 - A provider adapter reports actual capabilities for its engine and deployment type. Capability depends on current permissions, tool availability, verified target identity, and resource ownership.
 - ORM detection reads configuration and describes requirements. A migration adapter resolves the target, inspects status, produces a preview, and verifies a confirmed execution. Keep those responsibilities separate from database lifecycle and transport.
-- Evaluate Alembic, EF Core Migrations, Flyway, and Liquibase separately. The existence of a provider or ORM discovery rule does not establish migration support.
+- Evaluate Alembic database target verification, EF Core Migrations, Flyway, and Liquibase separately. Migration execution requires adapter-specific validation even when discovery identifies the provider or ORM.
 - Document contracts at stable seams. Introduce a shared interface when callers need consistent operations and results. Keep capabilities optional where tools differ.
 
 ## 6. Dependencies and ownership

@@ -1,11 +1,11 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { lstat, open, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { localSession, localhostEndpoint, validateLocalTarget } from '../adapters/local.mjs';
 import { databaseConnectionValue, discoverDatabases } from '../discovery.mjs';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { throwIfCancelled } from '../../platform/process.mjs';
 import { drizzleStatements } from './drizzle-sql.mjs';
+import { readMigrationFile } from './migration-files.mjs';
 
 const maxEntries = 200;
 const localHosts = ['127.0.0.1', '::1', 'localhost'];
@@ -13,26 +13,9 @@ const invalid = 'Choose a detected Drizzle PostgreSQL configuration.';
 const changed = 'The Drizzle migration preview changed. Check again before applying.';
 const signingKey = randomBytes(32);
 
-async function readBounded(path, limit) {
-  const info = await lstat(path, { bigint: true });
-  if (!info.isFile() || info.size > BigInt(limit) || await realpath(path) !== path) throw new Error();
-  const handle = await open(path, 'r');
-  try {
-    const start = await handle.stat({ bigint: true });
-    if (start.dev !== info.dev || start.ino !== info.ino || start.ctimeNs !== info.ctimeNs) throw new Error();
-    const buffer = Buffer.alloc(Number(info.size));
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const end = await handle.stat({ bigint: true });
-    if (bytesRead !== buffer.length || start.ctimeNs !== end.ctimeNs || start.size !== end.size) throw new Error();
-    const text = buffer.toString('utf8');
-    if (!Buffer.from(text).equals(buffer)) throw new Error();
-    return text;
-  } finally { await handle.close(); }
-}
-
 async function migrationFiles(folder, out, signal) {
   const directory = join(folder, out);
-  const journal = JSON.parse(await readBounded(join(directory, 'meta', '_journal.json'), 256 * 1024));
+  const journal = JSON.parse(await readMigrationFile(join(directory, 'meta', '_journal.json'), 256 * 1024));
   if (journal.version !== '7' || journal.dialect !== 'postgresql' ||
       !Array.isArray(journal.entries) || !journal.entries.length || journal.entries.length > maxEntries) throw new Error();
   const tags = new Set();
@@ -46,7 +29,7 @@ async function migrationFiles(folder, out, signal) {
     tags.add(tag.toLowerCase());
     previous = when;
     const file = tag + '.sql';
-    const sql = await readBounded(join(directory, file), Math.min(bytes, 1024 * 1024));
+    const sql = await readMigrationFile(join(directory, file), Math.min(bytes, 1024 * 1024));
     if (!sql.trim()) throw new Error();
     bytes -= Buffer.byteLength(sql);
     result.push({ file: out + '/' + file, when, hash: createHash('sha256').update(sql).digest('hex'), sql });

@@ -64,6 +64,9 @@ try {
   await mkdir(join(fixtureRepo, 'frontend'));
   await writeFile(join(fixtureRepo, 'frontend/package.json'), '{"name":"approval-fixture","packageManager":"pnpm@11.17.0"}');
   await writeFile(join(fixtureRepo, 'frontend/pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+  await mkdir(join(fixtureRepo, 'services/api/alembic/versions'), { recursive: true });
+  await writeFile(join(fixtureRepo, 'services/api/alembic.ini'), '[alembic]\nscript_location = %(here)s/alembic\n');
+  await writeFile(join(fixtureRepo, 'services/api/alembic/versions/first.py'), "revision = 'start'\ndown_revision = None\n");
   await writeFile(join(fixtureRepo, 'drizzle.config.ts'), `import type { Config } from 'drizzle-kit';
     export default { dialect: 'postgresql', dbCredentials: { url: process.env.STACKFORGE_BROWSER_DRIZZLE_URL! } } satisfies Config;`);
   await mkdir(join(fixtureRepo, 'drizzle/meta'), { recursive: true });
@@ -72,7 +75,7 @@ try {
   await writeFile(join(fixtureRepo, 'drizzle/0000_create.sql'), 'CREATE TABLE sample (id integer);');
   const gitOptions = { cwd: fixtureRepo, timeout: 15000 };
   await run('git', ['init', '-b', 'main'], gitOptions);
-  await run('git', ['add', 'package.json', 'server.mjs', 'drizzle.config.ts', 'drizzle', 'frontend'], gitOptions);
+  await run('git', ['add', 'package.json', 'server.mjs', 'drizzle.config.ts', 'drizzle', 'frontend', 'services'], gitOptions);
   await run('git', ['-c', 'user.name=StackForge Test', '-c', 'user.email=stackforge-test@example.invalid',
     '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=' + join(root, 'disabled-hooks'), 'commit', '-m', 'Create isolated browser fixture'], gitOptions);
   const terminals = [];
@@ -302,6 +305,17 @@ try {
   await page.locator('#language').selectOption('en');
   const databaseDiscovery = page.locator('#project-database-discovery');
   if (await databaseDiscovery.getAttribute('open') === null) await databaseDiscovery.locator(':scope > summary').click();
+  const alembic = page.locator('.alembic-preview');
+  await alembic.locator('summary').press('Enter');
+  await contains('.alembic-preview [role="status"]', 'Database status is unverified.');
+  await contains('.alembic-preview', 'Declared heads · start');
+  await contains('.alembic-preview', 'services/api/alembic/versions');
+  await contains('.alembic-preview li', 'start · first.py');
+  await page.locator('#language').selectOption('zh-CN');
+  await contains('.alembic-preview summary', '预览 Alembic 迁移');
+  await contains('.alembic-preview', '代码中声明的分支末端 · start');
+  await contains('.alembic-preview [role="status"]', '数据库状态未验证。');
+  await page.locator('#language').selectOption('en');
   await page.getByText('Preview Drizzle migrations', { exact: true }).click();
   await contains('.drizzle-preview [role="status"]', 'Save a supported direct PostgreSQL URL');
   await contains('.drizzle-preview li', 'Unverified · drizzle/0000_create.sql');
@@ -317,7 +331,7 @@ try {
   await service.locator('[name="command"]').fill('node server.mjs');
   await exerciseRuntime('Cloned portal', 'api', true);
   assert.deepEqual(errors, []);
-  console.log('Verified bilingual startup preflight, pnpm build approval and retry, Prisma setup, and the Drizzle migration preview in a cloned project.');
+  console.log('Verified bilingual startup preflight, pnpm build approval and retry, Prisma setup, and Drizzle and Alembic migration previews in a cloned project.');
 } finally {
   try {
     await browser?.close();

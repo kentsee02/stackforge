@@ -15,6 +15,7 @@ import { commandDiagnostic } from '../projects/project-diagnostics.mjs';
 import { discoverDatabases } from './discovery.mjs';
 import { developmentPostgres } from './docker/development-postgres.mjs';
 import { previewDrizzle } from './migrations/drizzle-preview.mjs';
+import { previewAlembic } from './migrations/alembic-preview.mjs';
 
 export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
   runtime, removals, configWrites, localDatabase, isClosing }) {
@@ -37,14 +38,14 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
   let transfer;
 
   async function scanDatabases(project, discovery, activeIds) {
-    const { requirements, limited } = discovery ?? await discoverDatabases(project);
+    const { requirements, migrationSources, limited } = discovery ?? await discoverDatabases(project);
     const recorded = requirements.map(({ environmentEdit, ...item }) => item);
     await databaseRegistry.sync(project, recorded, projectConfig.ports(project).database ?? defaultPorts(project).database, () => {
       if (!managedProjects().some(item => item.id === project.id && projectPathKey(item.path) === projectPathKey(project.path))) {
         throw new Error('The project registration has changed. Refresh Projects and try again.');
       }
     });
-    return { ...databaseRegistry.view(project, activeIds), requirements, limited };
+    return { ...databaseRegistry.view(project, activeIds), requirements, limited, ...(migrationSources && { migrationSources }) };
   }
 
   async function refreshDatabaseBindings(except, strict = false) {
@@ -112,7 +113,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     if (view === 'database-development') return development.inspect(project);
     if (view === 'database-discovery') {
       const activeIds = await refreshDatabaseBindings(project.id);
-      const discovery = await scanDatabases(project, undefined, activeIds);
+      const discovery = await scanDatabases(project, await discoverDatabases(project, { includeMigrations: true }), activeIds);
       return { ...discovery, bindings: discovery.bindings.map(item => ({
         ...item, ...(item.instance.provider === 'remote' && {
           profileSaved: Boolean(databaseRegistry.profile(project.id, item.instanceId))
@@ -225,6 +226,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     if (databaseWrites.size || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
       throw new Error('Wait for the current project operation to finish.');
     }
+    if (action === 'database-alembic-preview') return previewAlembic(project, payload.sourceId, controller.signal);
     if (action === 'database-drizzle-preview' || action === 'database-drizzle-apply') {
       const { signal } = controller;
       const options = { project, requirementId: payload.requirementId, command: localDatabase.command,

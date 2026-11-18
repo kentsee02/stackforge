@@ -7,6 +7,7 @@ import { localText } from '../projects/detection/project-detection.mjs';
 import { scanProjectServices } from '../projects/detection/project-services.mjs';
 import { resolveStartup } from '../projects/project-startup.mjs';
 import { drizzleConfig } from './migrations/drizzle-config.mjs';
+import { alembicConfig } from './migrations/alembic-config.mjs';
 
 export const databaseKey = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 export const sqlName = /^[a-zA-Z][a-zA-Z0-9_]{0,62}$/;
@@ -126,10 +127,11 @@ async function boundedFiles(folder) {
   return { files: files.sort(), limited: entries > 512 };
 }
 
-export async function discoverDatabases(project, { includeConnections = false } = {}) {
+export async function discoverDatabases(project, { includeConnections = false, includeMigrations = false } = {}) {
   const { root, identity, services, limited } = await scanProjectServices(project);
   const findings = new Map();
   const connections = new Map();
+  const migrationSources = [];
   let truncated = limited;
   function add(directory, file, key, metadata) {
     if (!metadata.engine || findings.size >= 128) { truncated ||= findings.size >= 128; return; }
@@ -150,6 +152,11 @@ export async function discoverDatabases(project, { includeConnections = false } 
   for (const { folder, directory, manifest, pom } of services) {
     const { files, limited: filesLimited } = await boundedFiles(folder);
     truncated ||= filesLimited;
+    const alembic = includeMigrations && await alembicConfig(folder, files);
+    if (alembic) {
+      const source = pathLabel(directory, alembic.file);
+      migrationSources.push({ id: databaseKey(project.id, 'alembic', source), adapter: 'alembic', source, directory, versions: alembic.versions });
+    }
     const env = directory === '.' ? rootEnv : new Map(await Promise.all(envFiles.map(async file => [file, parseEnv(await projectText(folder, file))])));
     const runtimeEnv = { ...rootEnv.get('.env'), ...rootEnv.get('.env.local'), ...env.get('.env'), ...env.get('.env.local') };
     const dependencies = { ...manifest?.devDependencies, ...manifest?.dependencies };
@@ -324,5 +331,5 @@ export async function discoverDatabases(project, { includeConnections = false } 
     if (databaseName.test(name) && !placeholder.test(name)) match.name = name;
   }
   await resolveStartup(project, [], identity);
-  return { root, identity, limited: truncated, requirements, ...(includeConnections && { connections }) };
+  return { root, identity, limited: truncated, requirements, ...(includeMigrations && { migrationSources }), ...(includeConnections && { connections }) };
 }

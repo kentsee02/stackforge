@@ -26,7 +26,7 @@ const states = { applied: 'Applied', pending: 'Pending', unverified: 'Unverified
 
 export function drizzlePreview(projectId, requirement, { request, post }) {
   const details = document.createElement('details');
-  details.className = 'drizzle-preview';
+  details.className = 'migration-preview drizzle-preview';
   const summary = document.createElement('summary');
   const target = document.createElement('p');
   const status = document.createElement('p');
