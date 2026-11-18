@@ -124,12 +124,29 @@ export function developmentPostgres({ registry, verifyShared, command = run, pro
     }
   }
   const owner = project => databaseKey(project.id, project.folderIdentity);
+  const historyTargetId = (project, record) => databaseKey('alembic-docker', project.id, record.key);
   const current = project => registry.value.development[project.id];
   const persist = (project, record) => registry.saveDevelopment(project.id, record);
   const reserved = port => Object.values(registry.value.development).some(item => item.port === port);
   function valid(record, project, daemon) {
     if (record.daemon !== daemon || record.owner !== owner(project) || !id.test(record.key) ||
         !validName(record.name) || !validPort(record.port)) throw new Error(changed);
+  }
+
+  async function databasePassword(cli, container) {
+    const config = await inspectDocker(cli, 'container', container, '{{json .Config.Env}}');
+    const passwords = config?.filter(entry => /^POSTGRES_PASSWORD=[a-f\d]{48}$/.test(entry));
+    if (passwords?.length !== 1) throw new Error(changed);
+    return passwords[0].slice('POSTGRES_PASSWORD='.length);
+  }
+
+  async function historyTarget(project) {
+    await registry.ready;
+    const record = current(project);
+    if (!record?.container || !record.created || record.deleting) return;
+    assertProject(project);
+    valid(record, project, record.daemon);
+    return { id: historyTargetId(project, record), name: record.name, port: record.port, host, projectPostgres: true };
   }
   function summary(record, target, accepting) {
     const status = target.status === 'running' ? accepting ? 'ready' : 'starting' :
@@ -157,11 +174,12 @@ export function developmentPostgres({ registry, verifyShared, command = run, pro
     return { ...summary(record, target, accepting), connections: options };
   }
 
-  async function client(project, endpoint, signal) {
+  async function client(project, endpoint, signal, expectedTargetId) {
     await registry.ready;
     const record = current(project);
     if (!record || endpoint.engine !== 'postgres' || endpoint.host !== host ||
         endpoint.port !== record.port || endpoint.name !== record.name) return;
+    if (expectedTargetId && historyTargetId(project, record) !== expectedTargetId) throw new Error(changed);
     assertProject(project);
     await resolveStartup(project, []);
     const { cli, daemon } = await dockerSession(command, signal);
@@ -174,6 +192,13 @@ export function developmentPostgres({ registry, verifyShared, command = run, pro
     }
     const target = await verify();
     return {
+      async credentials() {
+        const latest = await verify();
+        if (latest.status !== 'running' || !latest.publishedOnLoopback) {
+          throw Object.assign(new Error('Project PostgreSQL is not running.'), { code: 'container-stopped' });
+        }
+        return { user, password: await databasePassword(cli, latest.container) };
+      },
       async installation(probe = databasePortOpen) {
         const serviceStatus = target.status === 'running' ? 'running' : 'stopped';
         const version = serviceStatus === 'running' ? await cli(['exec', target.container, 'psql', '--version']).catch(error => {
@@ -275,10 +300,7 @@ export function developmentPostgres({ registry, verifyShared, command = run, pro
       if (!requirement || requirement.revision !== payload.revision || !await ready(cli, record, target)) {
         throw new Error('Choose a detected connection variable and wait for project PostgreSQL to be ready.');
       }
-      const config = await inspectDocker(cli, 'container', target.container, '{{json .Config.Env}}');
-      const passwords = config?.filter(entry => /^POSTGRES_PASSWORD=[a-f\d]{48}$/.test(entry));
-      if (passwords?.length !== 1) throw new Error(changed);
-      const password = passwords[0].slice('POSTGRES_PASSWORD='.length);
+      const password = await databasePassword(cli, target.container);
       const result = await saveDatabaseEnvironment(project, { requirementId: requirement.id, revision: requirement.revision,
         value: 'postgresql://' + user + ':' + password + '@' + host + ':' + record.port + '/' + record.name }, signal);
       return result;
@@ -286,7 +308,7 @@ export function developmentPostgres({ registry, verifyShared, command = run, pro
     return { changed: true };
   }
 
-  return { inspect, action, client, async guardRemoval(project) {
+  return { inspect, action, client, historyTarget, async guardRemoval(project) {
     await registry.ready;
     if (current(project)) throw new Error('Delete the dedicated PostgreSQL volume before removing this project.');
   } };

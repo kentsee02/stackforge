@@ -8,6 +8,7 @@ import { archiveBackup, inspectArchive } from '../../src/database/backup/archive
 import { databaseInventory, databaseReady, transferDatabase } from '../../src/database/backup/docker-transfer.mjs';
 import { verifySqlRestore } from '../../src/database/backup/restore-check.mjs';
 import { executeInitialization, initializationPlan } from '../../src/database/initialization.mjs';
+import { compareAlembicHistory } from '../../src/database/migrations/alembic-history.mjs';
 import { localSession } from '../../src/database/adapters/local.mjs';
 import { remoteSession } from '../../src/database/adapters/remote.mjs';
 import { localTransferSession } from '../../src/database/adapters/local-transfer.mjs';
@@ -214,7 +215,13 @@ async function windowsNative() {
     await session.query('INSERT INTO notes VALUES (41);', name);
     assert.equal(await session.query('SELECT id FROM notes;', name), '41');
     assert.deepEqual((await initializationPlan(context)).steps, []);
-    console.log('Native Windows PostgreSQL initialized and verified');
+    const compare = () => compareAlembicHistory({ selection: target, credentials, resolveClient: async () => undefined,
+      revisions: [{ revision: 'initial', parents: [], dependencies: [] }] });
+    assert.equal((await compare()).status, 'history-missing');
+    await session.query("CREATE TABLE alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO alembic_version VALUES ('initial');", name);
+    assert.equal((await compare()).status, 'current');
+    assert.equal(await session.query('SELECT version_num FROM alembic_version;', name), 'initial');
+    console.log('Native Windows PostgreSQL initialized and Alembic history verified');
   } finally {
     await session.query('DROP DATABASE IF EXISTS ' + session.quote(name) + ';');
   }

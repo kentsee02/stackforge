@@ -107,6 +107,11 @@
 .migration-preview ul:empty { display: none; }
 .migration-preview .check-list li { padding-top: 4px; }
 .migration-preview .check-list strong { display: inline; }
+.alembic-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; margin: 10px 0; padding: 0; border: 0; }
+.alembic-controls label { display: grid; flex: 1 1 18rem; gap: 4px; min-width: 0; }
+.alembic-controls select { width: 100%; min-height: 36px; }
+.alembic-preview p:empty { margin: 0; }
+.alembic-revision-state { color: var(--muted); }
 .drizzle-confirmation { display: grid; gap: 8px; margin: 10px 0; padding: 0; border: 0; min-inline-size: 0; }
 .drizzle-confirmation .inline-field { display: grid; gap: 4px; }
 .drizzle-confirmation input { width: min(100%, 340px); }

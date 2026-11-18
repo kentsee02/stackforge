@@ -110,11 +110,11 @@ async function revisionFiles(folder, versions, prefix, signal) {
   return revisions;
 }
 
-export async function previewAlembic(project, sourceId, signal) {
+export async function previewAlembic(project, sourceId, signal, discovery) {
   throwIfCancelled(signal);
   const invalid = 'Choose a detected Alembic configuration.';
   if (typeof sourceId !== 'string' || !/^[a-f0-9]{64}$/.test(sourceId)) throw new Error(invalid);
-  const { root, identity, migrationSources } = await discoverDatabases(project, { includeMigrations: true });
+  const { root, identity, migrationSources } = discovery ?? await discoverDatabases(project, { includeMigrations: true });
   throwIfCancelled(signal);
   const config = migrationSources.find(item => item.id === sourceId && item.adapter === 'alembic');
   if (!config) throw new Error(invalid);

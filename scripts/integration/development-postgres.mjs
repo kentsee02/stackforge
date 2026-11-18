@@ -50,6 +50,13 @@ try {
   await mkdir(join(path, 'prisma'), { recursive: true });
   await writeFile(join(path, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
   await writeFile(join(path, 'prisma.config.ts'), definition);
+  await mkdir(join(path, 'backend/migrations/versions'), { recursive: true });
+  await writeFile(join(path, 'backend/alembic.ini'), '[alembic]\nscript_location = %(here)s/migrations\n');
+  for (const [revision, parent, dependency] of [['base', 'None', 'None'], ['audit', "'base'", 'None'],
+    ['views', "'base'", 'None'], ['tip', "'views'", "'audit'"]]) {
+    await writeFile(join(path, 'backend/migrations/versions', revision + '.py'),
+      `revision = '${revision}'\ndown_revision = ${parent}\ndepends_on = ${dependency}\n`);
+  }
   await mkdir(join(path, 'db/migrations/meta'), { recursive: true });
   await writeFile(join(path, 'package.json'), JSON.stringify({ devDependencies: { 'drizzle-kit': '^0.31.1' } }));
   await writeFile(join(path, 'drizzle.config.ts'), `import { defineConfig } from 'drizzle-kit';
@@ -90,6 +97,35 @@ try {
   assert.equal(connections[0].variable, 'DATABASE_URL');
   const { key, container: identity } = JSON.parse(await readFile(stateFile, 'utf8')).development[id];
   const query = statement => docker(['exec', identity, 'psql', '-XAtw', '-U', 'stackforge', '-d', 'portal', '-c', statement]);
+  const initialDiscovery = await api(id + '/database-discovery');
+  const sourceId = initialDiscovery.migrationSources[0].id;
+  const { id: alembicTarget } = initialDiscovery.alembicTargets.find(item => item.projectPostgres);
+  const alembic = (target = alembicTarget, expected = 200) => api(id + '/database-alembic-preview', { sourceId, targetId: target }, expected);
+  await alembic('a'.repeat(64), 409);
+  const emptyHistory = (await alembic()).database;
+  assert.equal(emptyHistory.status, 'pending', JSON.stringify(emptyHistory));
+  assert.deepEqual(emptyHistory.heads, []);
+  assert.equal((await query("SELECT to_regclass('public.alembic_version') IS NULL")).trim(), 't');
+  await query('CREATE TABLE before_migrations (id integer)');
+  assert.equal((await alembic()).database.status, 'history-missing');
+  await query(`CREATE TABLE alembic_version (version_num varchar(32) PRIMARY KEY);
+    INSERT INTO alembic_version VALUES ('audit'), ('views');`);
+  const branches = (await alembic()).database;
+  assert.equal(branches.status, 'pending');
+  assert.deepEqual(branches.heads, ['audit', 'views']);
+  assert.deepEqual(branches.revisions.filter(item => item.state === 'pending').map(item => item.revision), ['tip']);
+  await query("TRUNCATE alembic_version; INSERT INTO alembic_version VALUES ('tip');");
+  const checked = (await alembic()).database;
+  assert.equal(checked.status, 'current');
+  assert.deepEqual(checked.heads, ['tip']);
+  assert.ok(checked.revisions.every(item => item.state === 'applied'));
+  await query('ALTER TABLE alembic_version ENABLE ROW LEVEL SECURITY');
+  assert.equal((await alembic()).database.status, 'history-unavailable');
+  await query("ALTER TABLE alembic_version DISABLE ROW LEVEL SECURITY; UPDATE alembic_version SET version_num = 'private_unknown_row';");
+  const diverged = await alembic();
+  assert.equal(diverged.database.status, 'history-conflict');
+  assert.doesNotMatch(JSON.stringify(diverged), /private_unknown_row/);
+  assert.equal((await query('SELECT version_num FROM alembic_version')).trim(), 'private_unknown_row');
   const result = await action({ mode: 'save', requirementId: connections[0].id });
   assert.deepEqual(result, { saved: true, file: '.env' });
   const stored = await readFile(join(path, '.env'), 'utf8');
@@ -98,6 +134,20 @@ try {
   assert.equal(JSON.stringify(await read()).includes(password), false);
   assert.equal((await readFile(stateFile, 'utf8')).includes(password), false);
   const discovery = await api(id + '/database-discovery');
+  const configuredAlembic = discovery.alembicTargets.find(item => !item.projectPostgres);
+  assert.equal((await alembic(configuredAlembic.id)).database.status, 'history-conflict');
+  assert.equal(JSON.stringify(discovery.alembicTargets).includes(password), false);
+  const historyPassword = randomBytes(12).toString('hex');
+  await query(`CREATE ROLE history_reader LOGIN PASSWORD '${historyPassword}'; UPDATE alembic_version SET version_num = 'tip';`);
+  await writeFile(join(path, '.env'), stored + '\nHISTORY_DATABASE_URL=postgresql://history_reader:' + historyPassword + '@127.0.0.1:' + port + '/portal\n');
+  const readerTargets = (await api(id + '/database-discovery')).alembicTargets;
+  assert.equal(JSON.stringify(readerTargets).includes(historyPassword), false);
+  const reader = readerTargets.find(item => !item.projectPostgres && item.id !== configuredAlembic.id);
+  assert.equal((await alembic(reader.id)).database.status, 'permission');
+  await query('GRANT SELECT ON alembic_version TO history_reader');
+  assert.equal((await alembic(reader.id)).database.status, 'current');
+  await writeFile(join(path, '.env'), stored);
+  await query('DROP TABLE alembic_version, before_migrations');
   const drizzle = discovery.requirements.find(item => item.migrationAdapter === 'drizzle');
   assert.equal(drizzle.status, 'configured');
   const drizzlePreview = () => api(id + '/database-drizzle-preview', { requirementId: drizzle.id });
@@ -190,6 +240,7 @@ try {
   assert.match((await api(id + '/remove', { confirmName: 'portal' }, 409)).error, /dedicated PostgreSQL volume/);
   await action({ mode: 'stop' });
   assert.equal((await read()).status, 'stopped');
+  assert.equal((await alembic()).database.status, 'container-stopped');
   assert.deepEqual(await local(), { kind: 'project-docker', serviceStatus: 'stopped', portOpen: false });
   assert.equal((await prisma()).status, 'docker-stopped');
   assert.match((await transferStatus(409)).error, /Open Project PostgreSQL/);
@@ -213,6 +264,7 @@ try {
   try {
     replacement = (await docker(['container', 'create', '--name', container, '--label', 'stackforge.integration=' + key,
       'docker.io/library/postgres:17'])).trim();
+    assert.equal((await alembic()).database.status, 'target-changed');
     assert.match((await transferStatus(409)).error, /could not be verified/);
     assert.match((await action({ mode: 'delete', confirm: volume }, 409)).error, /could not be verified/);
     await docker(['container', 'inspect', replacement]);
@@ -228,6 +280,7 @@ try {
 
   const nextPlan = await action({ mode: 'preview', ...options });
   await action({ mode: 'create', plan: nextPlan.plan, ...options, confirm: 'portal' });
+  await alembic(alembicTarget, 409);
   await action({ mode: 'stop' });
   const second = JSON.parse(await readFile(stateFile, 'utf8')).development[id];
   const secondVolume = 'stackforge-pg-' + second.key + '-data';
@@ -240,7 +293,7 @@ try {
   } finally { await docker(['volume', 'rm', secondVolume]); }
   await action({ mode: 'delete', confirm: secondVolume });
   await api(id + '/remove', { confirmName: 'portal' });
-  console.log('Verified dedicated PostgreSQL, including local connection checks, backup and scoped restore without host clients.');
+  console.log('Verified dedicated PostgreSQL, including Alembic history, local connection checks, backup and scoped restore without host clients.');
 } finally {
   if (listener) await new Promise(resolve => listener.close(resolve));
   await stopApp();

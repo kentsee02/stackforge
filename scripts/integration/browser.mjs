@@ -94,7 +94,15 @@ try {
     await verify();
     terminals.push({ folder, action });
   } };
-  app = createApp({ stateDir: false, clone: cloneFixture, operations, desktop, localDatabase: { probe: async () => false, command: async () => { throw new Error('ENOENT'); } } });
+  let alembicChecks = 0;
+  const localDatabase = { probe: async () => false, async command(program, args, options) {
+    if (program !== 'psql' || !options.input?.toString().includes('public.alembic_version')) throw new Error('ENOENT');
+    alembicChecks++;
+    assert.match(options.input.toString(), /BEGIN READ ONLY/);
+    assert.equal(args[args.indexOf('-d') + 1], 'browser_alembic');
+    return JSON.stringify({ name: 'browser_alembic', table: 'readable', hasObjects: true, rows: ['start'] });
+  } };
+  app = createApp({ stateDir: false, clone: cloneFixture, operations, desktop, localDatabase });
   app.listen(0, '127.0.0.1');
   await once(app, 'listening');
   const origin = 'http://127.0.0.1:' + app.address().port;
@@ -303,9 +311,13 @@ try {
   assert.equal(await page.locator('#dependency-approval').isVisible(), false);
   assert.deepEqual(installCommands, Array(2).fill(['pnpm install --frozen-lockfile', [], frontend]));
   await page.locator('#language').selectOption('en');
+  await writeFile(join(cloned.path, '.env'), 'ALEMBIC_DATABASE_URL=postgresql://browseruser:browser_test_only@127.0.0.1:5432/browser_alembic\n');
   const databaseDiscovery = page.locator('#project-database-discovery');
   if (await databaseDiscovery.getAttribute('open') === null) await databaseDiscovery.locator(':scope > summary').click();
+  await page.locator('#database-discovery-refresh').click();
   const alembic = page.locator('.alembic-preview');
+  const targetLabel = '127.0.0.1:5432/browser_alembic · .env · ALEMBIC_DATABASE_URL';
+  await alembic.locator('option').filter({ hasText: targetLabel }).waitFor({ state: 'attached' });
   await alembic.locator('summary').press('Enter');
   await contains('.alembic-preview [role="status"]', 'Database status is unverified.');
   await contains('.alembic-preview', 'Declared heads · start');
@@ -315,7 +327,20 @@ try {
   await contains('.alembic-preview summary', '预览 Alembic 迁移');
   await contains('.alembic-preview', '代码中声明的分支末端 · start');
   await contains('.alembic-preview [role="status"]', '数据库状态未验证。');
+  assert.equal(alembicChecks, 0);
+  const checkHistory = alembic.getByRole('button', { name: '检查数据库迁移历史' });
+  assert.equal(await checkHistory.isDisabled(), true);
+  const target = alembic.getByLabel('public.alembic_version 所在数据库');
+  await target.selectOption({ label: targetLabel });
+  await checkHistory.click();
+  await contains('.alembic-preview', '数据库的迁移记录覆盖所有本地版本。');
+  await contains('.alembic-preview li', 'start · first.py · 已应用');
+  assert.equal(alembicChecks, 1);
   await page.locator('#language').selectOption('en');
+  await contains('.alembic-preview', 'The recorded revision history covers every local revision.');
+  await alembic.getByLabel('Database for public.alembic_version').selectOption('');
+  assert.equal(await alembic.getByRole('button', { name: 'Check database history' }).isDisabled(), true);
+  assert.equal(await alembic.locator('.alembic-revision-state').count(), 0);
   await page.getByText('Preview Drizzle migrations', { exact: true }).click();
   await contains('.drizzle-preview [role="status"]', 'Save a supported direct PostgreSQL URL');
   await contains('.drizzle-preview li', 'Unverified · drizzle/0000_create.sql');
@@ -331,7 +356,7 @@ try {
   await service.locator('[name="command"]').fill('node server.mjs');
   await exerciseRuntime('Cloned portal', 'api', true);
   assert.deepEqual(errors, []);
-  console.log('Verified bilingual startup preflight, pnpm build approval and retry, Prisma setup, and Drizzle and Alembic migration previews in a cloned project.');
+  console.log('Verified bilingual startup preflight, pnpm build approval and retry, Prisma setup, Drizzle preview, and Alembic history selection in a cloned project.');
 } finally {
   try {
     await browser?.close();

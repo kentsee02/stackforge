@@ -16,6 +16,7 @@ import { discoverDatabases } from './discovery.mjs';
 import { developmentPostgres } from './docker/development-postgres.mjs';
 import { previewDrizzle } from './migrations/drizzle-preview.mjs';
 import { previewAlembic } from './migrations/alembic-preview.mjs';
+import { alembicLocalTargets, compareAlembicHistory } from './migrations/alembic-history.mjs';
 
 export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
   runtime, removals, configWrites, localDatabase, isClosing }) {
@@ -113,8 +114,15 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     if (view === 'database-development') return development.inspect(project);
     if (view === 'database-discovery') {
       const activeIds = await refreshDatabaseBindings(project.id);
-      const discovery = await scanDatabases(project, await discoverDatabases(project, { includeMigrations: true }), activeIds);
-      return { ...discovery, bindings: discovery.bindings.map(item => ({
+      const scanned = await discoverDatabases(project, { includeMigrations: true, includeConnections: true });
+      const discovery = await scanDatabases(project, scanned, activeIds);
+      const alembicTargets = [];
+      if (scanned.migrationSources.length) {
+        const container = await development.historyTarget(project).catch(() => undefined);
+        if (container) alembicTargets.push(container);
+        alembicTargets.push(...alembicLocalTargets(scanned).map(item => item.public));
+      }
+      return { ...discovery, alembicTargets, bindings: discovery.bindings.map(item => ({
         ...item, ...(item.instance.provider === 'remote' && {
           profileSaved: Boolean(databaseRegistry.profile(project.id, item.instanceId))
         })
@@ -226,7 +234,30 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     if (databaseWrites.size || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
       throw new Error('Wait for the current project operation to finish.');
     }
-    if (action === 'database-alembic-preview') return previewAlembic(project, payload.sourceId, controller.signal);
+    if (action === 'database-alembic-preview') {
+      const { signal } = controller;
+      const { sourceId, targetId } = payload;
+      if (targetId === undefined) return previewAlembic(project, sourceId, signal);
+      const invalid = 'Choose an available Alembic PostgreSQL target and rescan if it changed.';
+      if (typeof targetId !== 'string' || !/^[a-f0-9]{64}$/.test(targetId)) throw new Error(invalid);
+      const scanned = await discoverDatabases(project, { includeMigrations: true, includeConnections: true });
+      const preview = await previewAlembic(project, sourceId, signal, scanned);
+      if (preview.status !== 'ready') return preview;
+      const local = alembicLocalTargets(scanned).find(item => item.public.id === targetId);
+      const container = await development.historyTarget(project).catch(() => undefined);
+      const selection = local?.public ?? (container?.id === targetId ? container : undefined);
+      if (!selection) throw new Error(invalid);
+      const database = await compareAlembicHistory({ revisions: preview.revisions, selection, credentials: local?.credentials,
+        sslmode: local?.sslmode, command: localDatabase.command, probe: localDatabase.probe, signal,
+        async resolveClient(target) {
+          try { return await development.client(project, target, signal, selection.projectPostgres ? selection.id : undefined); }
+          catch (error) {
+            if (error.name === 'AbortError') throw error;
+            throw Object.assign(new Error(invalid), { code: 'target-changed' });
+          }
+        } });
+      return { ...preview, database };
+    }
     if (action === 'database-drizzle-preview' || action === 'database-drizzle-apply') {
       const { signal } = controller;
       const options = { project, requirementId: payload.requirementId, command: localDatabase.command,

@@ -174,7 +174,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       if ($('project-database-discovery').open) void loadDatabaseDiscovery();
     }
     const locked = busy || Boolean(databaseDiscovery.working);
-    for (const control of $('database-requirements').querySelectorAll('button:not(.drizzle-confirmation button), .drizzle-confirmation')) control.disabled = locked;
+    for (const control of $('database-requirements').querySelectorAll('button:not(.drizzle-confirmation button, .alembic-controls button), .drizzle-confirmation, .alembic-controls')) control.disabled = locked;
     for (const control of ['database-local-check', 'database-local-preview', 'database-discovery-refresh']) $(control).disabled = locked;
     $('database-initialize-submit').disabled = locked || $('database-initialize-name').value !== databaseDiscovery.plan?.name;
     const binding = resourceBinding();
@@ -250,7 +250,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       for (const source of data.migrationSources ?? []) {
         if (source.adapter !== 'alembic') continue;
         const row = document.createElement('li');
-        row.append(alembicPreview(view.id, source, { request, post }));
+        row.append(alembicPreview(view.id, source, data.alembicTargets ?? [], { request, post }));
         requirements.push(row);
       }
       $('database-requirements').replaceChildren(...requirements);
