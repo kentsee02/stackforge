@@ -37,7 +37,7 @@ function scalar(text) {
 
 // Read simple properties and indentation-based YAML. Keep duplicate and dynamic values
 // so an ambiguous setting cannot be mistaken for a literal.
-function settings(properties, yaml) {
+export function settings(properties, yaml) {
   const values = new Map();
   const add = (key, value) => {
     if (!values.has(key)) values.set(key, []);

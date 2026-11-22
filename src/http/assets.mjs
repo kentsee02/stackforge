@@ -15,6 +15,7 @@ const assets = new Map([
   ['/projects/drizzle-preview.js', 'projects/drizzle-preview.js'],
   ['/projects/alembic-preview.js', 'projects/alembic-preview.js'],
   ['/projects/ef-core-preview.js', 'projects/ef-core-preview.js'],
+  ['/projects/flyway-preview.js', 'projects/flyway-preview.js'],
   ['/projects/development-postgres.js', 'projects/development-postgres.js'],
   ['/i18n.js', 'shared/i18n.js'],
   ['/messages.js', 'shared/messages.js'],

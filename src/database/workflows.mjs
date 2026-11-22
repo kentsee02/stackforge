@@ -20,6 +20,7 @@ import { compareAlembicHistory } from './migrations/alembic-history.mjs';
 import { scanEfCore } from './migrations/ef-core-preview.mjs';
 import { compareEfCoreHistory, efCoreHistoryTable } from './migrations/ef-core-history.mjs';
 import { postgresHistoryTargets } from './migrations/postgres-history.mjs';
+import { previewFlyway } from './migrations/flyway-preview.mjs';
 
 export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
   runtime, removals, configWrites, localDatabase, isClosing }) {
@@ -127,9 +128,10 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       ]);
       const discovery = await scanDatabases(project, scanned, activeIds);
       const alembicTargets = [], efCoreTargets = [];
-      if (scanned.migrationSources.length || ef.sources.length) {
+      const hasAlembic = scanned.migrationSources.some(source => source.adapter === 'alembic');
+      if (hasAlembic || ef.sources.length) {
         const container = await development.historyTarget(project).catch(() => undefined);
-        if (scanned.migrationSources.length) {
+        if (hasAlembic) {
           if (container) alembicTargets.push(container);
           alembicTargets.push(...postgresHistoryTargets(scanned).map(item => item.public));
         }
@@ -251,6 +253,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     if (databaseWrites.size || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
       throw new Error('Wait for the current project operation to finish.');
     }
+    if (action === 'database-flyway-preview') return previewFlyway(project, payload.sourceId, controller.signal);
     if (action === 'database-ef-core-preview') {
       const { signal } = controller;
       const { targetId, groupId, schema, table } = payload;

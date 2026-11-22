@@ -6,7 +6,7 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 2. **Engine-aware development database setup** (completed in v0.39.0). Use service-level discovery to recommend PostgreSQL or MySQL and offer eligible connection and Compose controls. Recheck the service, engine, and connection settings when confirming creation.
 3. **FastAPI startup detection for imports and clones** (completed in v0.39.0). Recognize declared entrypoints, named application objects, and supported local factories through static service scans.
 4. **Project-scoped MySQL** (completed in v0.39.0). Manage a dedicated Docker MySQL database, configure eligible connection settings, and verify backup, restore, and volume ownership. Dedicated Docker PostgreSQL shipped in v0.34.0.
-5. **Additional migration adapters.** Drizzle and Alembic shipped in v0.35.0–v0.38.0. EF Core source preview shipped in v0.40.0 and PostgreSQL history verification in v0.41.0. Evaluate Flyway and Liquibase against real imports, in that order.
+5. **Additional migration adapters.** Drizzle and Alembic shipped in v0.35.0–v0.38.0. EF Core source preview shipped in v0.40.0 and PostgreSQL history verification in v0.41.0. Flyway SQL source preview ships in v0.42.0. Liquibase source preview is next.
 6. **Project activity history.** Record installation, check, and database outcomes per project.
 7. **Global task history and queue.** Evaluate a cross-project task view and queue after the individual workflows expose compatible state.
 8. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases, and Tasks.
@@ -16,6 +16,12 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 12. **Additional local database operations.** Evaluate backup, restore, and lifecycle controls for MongoDB, Redis, and SQL Server individually.
 13. **Native PostgreSQL and MySQL provisioning.** Evaluate setup for supported local operating systems with their existing server and permissions model.
 14. **Cloud database lifecycle.** Evaluate provider-specific provisioning, lifecycle, and deletion with separate provider permissions.
+
+## v0.42.0 Flyway SQL source preview
+
+- [x] Discover standard local SQL locations for Flyway CLI configuration, Spring Boot, and Maven and Gradle plugins, including separately declared Maven profile configuration files.
+- [x] List versioned, repeatable, baseline, and undo SQL migration files. Compare numeric versions and report duplicate, unresolved, or incomplete results in English and Chinese.
+- [x] Verify the [Spring Boot sample](https://github.com/nanotaboada/java.samples.spring.boot), the [Maven profile sample](https://github.com/BootcampToProd/flyway-with-spring-boot-maven), and the Projects panel. The preview covers local files. Database history comparison and migration execution are separate adapter work.
 
 ## v0.41.0 EF Core PostgreSQL history verification
 

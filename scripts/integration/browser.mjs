@@ -67,6 +67,11 @@ try {
   await mkdir(join(fixtureRepo, 'services/api/alembic/versions'), { recursive: true });
   await writeFile(join(fixtureRepo, 'services/api/alembic.ini'), '[alembic]\nscript_location = %(here)s/alembic\n');
   await writeFile(join(fixtureRepo, 'services/api/alembic/versions/first.py'), "revision = 'start'\ndown_revision = None\n");
+  const billing = join(fixtureRepo, 'services/billing/storage');
+  await mkdir(join(billing, 'changes'), { recursive: true });
+  await writeFile(join(billing, 'flyway.toml'), '[flyway]\nlocations = ["filesystem:./changes"]');
+  await writeFile(join(billing, 'changes/V1__Create_invoice.sql'), 'CREATE TABLE invoice (id integer);');
+  await writeFile(join(billing, 'changes/R__Refresh_totals.sql'), 'CREATE VIEW totals AS SELECT count(*) FROM invoice;');
   await mkdir(join(fixtureRepo, 'services/reporting/storage/db'), { recursive: true });
   await writeFile(join(fixtureRepo, 'services/reporting/storage/Reports.csproj'), '<Project Sdk="Microsoft.NET.Sdk" />');
   await writeFile(join(fixtureRepo, 'services/reporting/storage/db/Schema.cs'), `using Microsoft.EntityFrameworkCore.Migrations;
@@ -359,8 +364,17 @@ try {
   await contains('.ef-core-preview', '所选历史表包含此 DbContext 的全部本地迁移记录。');
   await contains('.ef-core-preview li', 'CreateReports · db/Schema.cs · 已应用');
   assert.equal(await ef.evaluate(panel => panel.scrollWidth <= panel.clientWidth), true);
+  const flyway = page.locator('.flyway-preview');
+  await flyway.locator('summary').press('Enter');
+  await contains('.flyway-preview summary', '预览 Flyway 迁移');
+  await contains('.flyway-preview [role="status"]', '数据库历史尚未核对。');
+  await contains('.flyway-preview', '可重复迁移 · changes/R__Refresh_totals.sql');
+  assert.equal(await flyway.evaluate(panel => panel.scrollWidth <= panel.clientWidth), true);
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.locator('#language').selectOption('en');
+  await contains('.flyway-preview', 'Versioned migration · changes/V1__Create_invoice.sql');
+  await flyway.getByRole('button', { name: 'Rescan Flyway files' }).click();
+  await contains('.flyway-preview [role="status"]', 'Database history is unverified.');
   await alembic.locator('summary').press('Enter');
   await contains('.alembic-preview [role="status"]', 'Database status is unverified.');
   await contains('.alembic-preview', 'Declared heads · start');
@@ -431,7 +445,7 @@ try {
   await page.locator('#development-postgres-cancel').click();
   await page.unroute(developmentRoute);
   assert.deepEqual(errors, []);
-  console.log('Verified bilingual startup, database setup, and Drizzle, Alembic, and EF Core migration previews in imported and cloned projects.');
+  console.log('Verified bilingual startup, database setup, and Drizzle, Alembic, EF Core and Flyway migration previews in imported and cloned projects.');
 } finally {
   try {
     await browser?.close();

@@ -11,7 +11,7 @@ const serviceFolders = ['frontend', 'backend', 'client', 'server', 'web', 'api',
 const serviceFiles = new Set([
   'package.json', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'go.mod', 'main.go', 'Cargo.toml',
   'pyproject.toml', 'requirements.txt', 'Pipfile', 'uv.lock', 'poetry.lock', 'manage.py',
-  'composer.json', 'Gemfile', 'Procfile', 'Procfile.dev', 'alembic.ini',
+  'composer.json', 'Gemfile', 'Procfile', 'Procfile.dev', 'alembic.ini', 'flyway.conf', 'flyway.toml',
   ...composeConfigFiles, ...databaseEnvironmentFiles
 ]);
 

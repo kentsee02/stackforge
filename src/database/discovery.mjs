@@ -10,6 +10,7 @@ import { djangoSettingsFiles, pythonSourceFiles } from '../projects/detection/py
 import { resolveStartup } from '../projects/project-startup.mjs';
 import { drizzleConfig } from './migrations/drizzle-config.mjs';
 import { alembicConfig } from './migrations/alembic-config.mjs';
+import { flywaySources } from './migrations/flyway-config.mjs';
 import { composeImageName, composeImages } from './discovered-compose.mjs';
 import { adoFields, dotnetConnectionEntries, dotnetDatabaseProviders } from './dotnet-discovery.mjs';
 
@@ -277,6 +278,16 @@ export async function discoverDatabases(project, { includeConnections = false, i
     const configs = [...localConfigs.slice(0, 20), ...jvmConfigs.slice(0, 20).map(file => 'src/main/resources/' + file),
       'src/main/resources/application.properties', 'src/main/resources/application.yml', 'src/main/resources/application.yaml',
       ...djangoConfigs, 'config/database.yml', 'config/database.yaml'];
+    if (includeMigrations) {
+      const flyway = await flywaySources({ files, pom, configs: [...localConfigs.slice(0, 20),
+        ...jvmConfigs.slice(0, 20).map(file => 'src/main/resources/' + file)], read: file => projectText(folder, file) });
+      truncated ||= flyway.limited;
+      for (const { file, document, ...config } of flyway.sources) {
+        const source = pathLabel(directory, file);
+        migrationSources.push({ id: databaseKey(project.id, 'flyway', source, config.scope, config.profile, document),
+          adapter: 'flyway', source, directory, ...config });
+      }
+    }
     await Promise.all([...prisma, ...new Set(configs)].map(async file => {
       const text = await projectText(folder, file);
       if (!text) return;
