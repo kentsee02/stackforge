@@ -26,6 +26,7 @@ npm run test:public-migrations -- --postgres --case=PUB-05 --case=PUB-09
 npm run test:public-migrations -- --postgres --case=PUB-07
 npm run test:native-migrations -- --structured-only
 npm run test:native-migrations -- --mysql-only
+npm run test:native-migrations -- --tags-only
 npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
 ```
 
@@ -71,6 +72,7 @@ npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
 | LIQ-04 | A JSON root includes YAML and XML changelogs | Preserve declaration order and file identities. Reject approval after an included resource changes. Verify that rollback preview leaves the tables and history intact, then confirm that native rollback removes both the tables and their history rows. | `test:native-migrations -- --structured-only` |
 | LIQ-05 | Unsafe includes, external data-file declarations, custom runtime change types and encoded property expressions | Refuse to stage execution. Keep supported read-only discovery evidence. | `test` |
 | LIQ-06 | Native MySQL structured rollback and cancellation | Keep the database unchanged during SQL preview. Verify rolled-back tables and history. Cancel a running worker and check that its MySQL session and remaining changes are gone. | `test:native-migrations -- --mysql-only`, PUB-11 |
+| LIQ-07 | Rollback using a recorded tag on PostgreSQL and MySQL | Suggest unique recorded tags. Refuse missing tags, duplicate tags, and requests that combine a tag with a count. Verify that native rollback retains a manually tagged row and honors the changelog's tag retention setting. | `test:native-migrations -- --tags-only`, `test:browser` |
 | FLOW-01 | Mismatched confirmation, altered files, shared or replaced target | Refuse the write. Use a fresh approval after changes. | `test:native-migrations`, `test:development-postgres` |
 | FLOW-02 | Verified backup recovery to a fresh PostgreSQL database | Refuse a populated restore target. On an eligible empty target, restore the archive and verify migration history. | `test:native-migrations` |
 | FLOW-03 | Imported and cloned Projects views in English and Chinese | Render file previews, statuses and confirmation controls. Exact database-name matching gates execution. | `test:browser` |
@@ -82,5 +84,5 @@ npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
 - Alembic writes cover supported revisions that use the staged runtime and version graph. Project-specific `env.py`, project imports, external dependencies, `depends_on` and nontransactional migrations need their own execution path.
 - EF Core executes reviewed PostgreSQL SQL exports. Direct project-tool invocation and SQL Server writes remain separate coverage. The real SQL Server test currently checks history.
 - Flyway writes cover supported standalone and Spring Boot properties configurations on project PostgreSQL and MySQL. Maven and Gradle runtime integration and licensed Undo remain open.
-- Liquibase writes cover supported formatted SQL and declarative XML, YAML and JSON changelogs on project PostgreSQL and MySQL. Runtime-dependent migrations, external CSV or SQL resources, context and label filters, and rollback by tag remain open. PUB-08 covers source discovery.
+- Liquibase writes cover supported formatted SQL and declarative XML, YAML and JSON changelogs on project PostgreSQL and MySQL, with rollback by count or recorded tag. Runtime-dependent migrations, external CSV or SQL resources, and context or label filters remain open. PUB-08 covers source discovery.
 - A history match verifies recorded migrations. Schema drift and data correctness need separate checks.

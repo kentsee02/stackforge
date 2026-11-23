@@ -61,7 +61,15 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   rollbackCount.min = '1';
   rollbackCount.step = '1';
   rollbackCount.value = '1';
-  if (source.adapter === 'liquibase') actions.append(labelledMigrationControl('Changesets to roll back', rollbackCount));
+  const rollbackTag = document.createElement('input');
+  rollbackTag.maxLength = 255;
+  rollbackTag.autocomplete = 'off';
+  rollbackTag.spellcheck = false;
+  const availableTags = document.createElement('datalist');
+  availableTags.id = 'rollback-tags-' + projectId + '-' + source.id;
+  rollbackTag.setAttribute('list', availableTags.id);
+  if (source.adapter === 'liquibase') actions.append(labelledMigrationControl('Changesets to roll back', rollbackCount),
+    labelledMigrationControl('Rollback tag (optional)', rollbackTag), availableTags);
   function setRevisions(ids) {
     const previous = revision.value;
     const automatic = new Option('', '');
@@ -74,6 +82,10 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   revision.addEventListener('change', () => reset(true));
   script.addEventListener('input', () => reset(true));
   rollbackCount.addEventListener('input', () => reset(true));
+  rollbackTag.addEventListener('input', () => {
+    rollbackCount.disabled = Boolean(rollbackTag.value.trim());
+    reset(true);
+  });
   cancel.addEventListener('click', () => active?.abort());
   function reset(visible = false) {
     plan = undefined;
@@ -113,6 +125,7 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
       lock(false);
       controls.disabled = false;
       for (const control of actions.querySelectorAll('button, select, input')) control.disabled = false;
+      rollbackCount.disabled = Boolean(rollbackTag.value.trim());
     }
   }
 
@@ -125,14 +138,15 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
     button.addEventListener('click', () => void work(async () => {
       reset(true);
       setText(status, 'Preparing the migration tool and checking database history…');
+      const tag = rollbackTag.value.trim();
       const targetSelection = { ...selection(), ...(revision.value && { revision: revision.value }), ...(efCore && { scriptFile: script.value.trim() }),
-        ...(source.adapter === 'liquibase' && operation === 'rollback' && { rollbackCount: Number(rollbackCount.value) }) };
+        ...(source.adapter === 'liquibase' && operation === 'rollback' && (tag ? { rollbackTag: tag } : { rollbackCount: Number(rollbackCount.value) })) };
       const result = await send('preview', operation, targetSelection);
       plan = { operation, targetSelection, ...result };
       const { host, port, name } = result.target;
       scope.textContent = [[result.tool, result.version].filter(Boolean).join(' '), result.directory, host + ':' + port + '/' + name,
         result.history.schema + '.' + result.history.table,
-        result.toRevision && result.fromRevision + ' → ' + result.toRevision, result.scriptFile].filter(Boolean).join(' · ');
+        result.toRevision && result.fromRevision + ' → ' + result.toRevision, result.rollbackTag, result.scriptFile].filter(Boolean).join(' · ');
       files.replaceChildren(...result.migrations.map(item => {
         const line = document.createElement('li');
         line.textContent = item.revision + ' · ' + item.file;
@@ -169,5 +183,7 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
       setText(status, outcomes[result.status]);
     });
   });
-  return { element: section, reset, setRevisions };
+  return { element: section, reset, setRevisions, setTags(tags = []) {
+    availableTags.replaceChildren(...tags.map(tag => new Option(tag, tag)));
+  } };
 }

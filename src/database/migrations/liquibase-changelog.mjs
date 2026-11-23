@@ -3,6 +3,8 @@ const otherEntries = new Set(['property', 'preConditions', 'logicalFilePath']);
 const fields = new Set(['id', 'author', 'file', 'path', 'logicalFilePath', 'relativeToChangelogFile',
   'ignore', 'errorIfMissing', 'errorIfMissingOrEmpty', 'minDepth', 'maxDepth', 'endsWithFilter', 'filter', 'resourceComparator']);
 
+export const validLiquibaseTag = tag => typeof tag === 'string' && tag === tag.trim() && /^[^\x00-\x1f\x7f]{1,255}$/.test(tag);
+
 export function liquibaseXmlAttributes(text, all = false) {
   const attributes = Object.create(null);
   const pattern = /\s+([A-Za-z_][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/gy;

@@ -3,6 +3,7 @@ import { versionKey } from './flyway-preview.mjs';
 import { readLocalMigrationHistory } from './postgres-history.mjs';
 import { postgresHistoryQuery } from './postgres-history-table.mjs';
 import { mysqlHistoryQuery } from './mysql-history.mjs';
+import { validLiquibaseTag } from './liquibase-changelog.mjs';
 import { databaseKey } from '../discovery.mjs';
 
 const maxRows = 1024;
@@ -93,6 +94,20 @@ export async function compareSqlMigrationHistory({ adapter, preview, history, ch
       snapshot.rows.some(row => !Array.isArray(row) || row.length !== (flyway ? 6 : 4))) return respond('history-unavailable');
   const { items, conflict, unsupported } = flyway ? flywayState(preview, snapshot.rows, checksums) :
     liquibaseState(preview, snapshot.rows, resourcePrefix);
+  let tags;
+  if (!flyway && !includeFingerprint && !conflict && (options.selection.projectMysql || options.selection.projectPostgres)) {
+    const tagQuery = (mysql ? mysqlHistoryQuery : postgresHistoryQuery)(history, { tag: 'text' },
+      { maxRows, row: array + '(' + bounded('tag') + ')', order: 'ORDER BY tag' });
+    const { snapshot: tagSnapshot } = await readLocalMigrationHistory(options, tagQuery, engine);
+    if (tagSnapshot?.table === 'readable' && Array.isArray(tagSnapshot.rows) && tagSnapshot.rows.length <= maxRows) {
+      const counts = new Map();
+      for (const entry of tagSnapshot.rows) {
+        const tag = Array.isArray(entry) && entry[0];
+        if (validLiquibaseTag(tag)) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+      tags = [...counts].filter(([, count]) => count === 1).map(([tag]) => tag);
+    }
+  }
   return respond(conflict ? 'history-conflict' : unsupported ? 'history-partial' :
-    items.some(item => ['pending', 'outdated'].includes(item.state)) ? 'pending' : 'recorded', { items });
+    items.some(item => ['pending', 'outdated'].includes(item.state)) ? 'pending' : 'recorded', { items, ...(tags && { tags }) });
 }

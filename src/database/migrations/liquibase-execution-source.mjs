@@ -1,7 +1,7 @@
 import { liquibaseXmlAttributes, liquibaseXmlTokens, parseLiquibaseChangelog } from './liquibase-changelog.mjs';
 
 const elements = new Set([
-  'databaseChangeLog', 'include', 'includeAll', 'changeSet', 'changes', 'rollback', 'comment',
+  'databaseChangeLog', 'include', 'includeAll', 'changeSet', 'changes', 'rollback', 'comment', 'tagDatabase',
   'createTable', 'dropTable', 'renameTable', 'addColumn', 'dropColumn', 'renameColumn', 'modifyDataType',
   'addNotNullConstraint', 'dropNotNullConstraint', 'addDefaultValue', 'dropDefaultValue',
   'createIndex', 'dropIndex', 'addUniqueConstraint', 'dropUniqueConstraint', 'addPrimaryKey', 'dropPrimaryKey',
@@ -10,7 +10,7 @@ const elements = new Set([
   'column', 'columns', 'constraints', 'insert', 'update', 'delete', 'where', 'sql'
 ]);
 const simpleFields = new Set([
-  'id', 'author', 'file', 'path', 'relativeToChangelogFile', 'errorIfMissing', 'errorIfMissingOrEmpty',
+  'id', 'author', 'tag', 'keepTagOnRollback', 'file', 'path', 'relativeToChangelogFile', 'errorIfMissing', 'errorIfMissingOrEmpty',
   'endsWithFilter', 'minDepth', 'maxDepth', 'tableName', 'oldTableName', 'newTableName', 'schemaName',
   'columnName', 'oldColumnName', 'newColumnName', 'newDataType', 'columnDataType', 'indexName', 'constraintName',
   'viewName', 'oldViewName', 'newViewName', 'replaceIfExists', 'selectQuery',

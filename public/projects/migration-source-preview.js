@@ -112,6 +112,7 @@ export function migrationSourcePreview(projectId, source, { request, post, histo
       form.hidden = result.status !== 'ready' || !historyTargets.length;
       guide.hidden = result.status !== 'ready' || Boolean(historyTargets.length);
       showResult(result);
+      native?.setTags(database?.tags);
       if (!afterExecution) {
         if (adapter === 'flyway') native?.setRevisions(result.migrations.every(item => item.kind === 'versioned') ?
           result.migrations.map(item => item.version) : []);
@@ -136,6 +137,7 @@ export function migrationSourcePreview(projectId, source, { request, post, histo
     const nextTable = mysql && adapter === 'liquibase' ? 'DATABASECHANGELOG' : tableName;
     if (table.value === defaultTable) table.value = nextTable;
     defaultTable = nextTable;
+    native?.setTags();
     if (lastPreview) showResult(lastPreview);
     native?.reset(lastPreview?.status === 'ready' && canMigrate());
   });

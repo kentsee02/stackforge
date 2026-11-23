@@ -489,12 +489,62 @@ async function testNativeMysql() {
   }
 }
 
+async function testLiquibaseTags() {
+  for (const engine of ['postgres', 'mysql']) {
+    const project = join(root, 'liquibase-tags-' + engine);
+    await mkdir(join(project, 'prisma'), { recursive: true });
+    await writeFile(join(project, 'prisma/schema.prisma'), 'datasource db { provider = "' + (engine === 'mysql' ? 'mysql' : 'postgresql') + '" }');
+    await writeFile(join(project, 'liquibase.properties'), 'changeLogFile=changelog.json\n');
+    const create = tableName => [{ createTable: { tableName, columns: [{ column: { name: 'id', type: 'int' } }] } }];
+    await writeFile(join(project, 'changelog.json'), JSON.stringify({ databaseChangeLog: [
+      ['base', create('tag_base_item')], ['checkpoint', [{ tagDatabase: { tag: 'release-one', keepTagOnRollback: engine === 'mysql' } }]],
+      ['after', create('tag_after_item')], ['last', create('tag_last_item')]
+    ].map(([id, changes]) => ({ changeSet: { id, author: 'fixture', changes } })) }));
+    const { id } = await api('import', { path: project }, 201);
+    const name = 'liquibase_tags_' + engine;
+    const query = await database(id, name, engine);
+    const discovery = await api(id + '/database-discovery');
+    const targetId = discovery.sqlMigrationTargets.find(item => engine === 'mysql' ? item.projectMysql : item.projectPostgres).id;
+    const sourceId = discovery.migrationSources.find(item => item.adapter === 'liquibase').id;
+    const request = (mode, operation, fields, expected) =>
+      api(id + '/database-native-migration', { adapter: 'liquibase', targetId, sourceId, mode, operation, ...fields }, expected);
+    const apply = await request('preview', 'apply');
+    assert.equal((await request('execute', 'apply', { planId: apply.planId, confirmName: name })).status, 'applied');
+    const history = engine === 'mysql' ? 'DATABASECHANGELOG' : 'databasechangelog';
+    const tags = async () => (await api(id + '/database-liquibase-preview', { sourceId, targetId })).database.tags;
+    const tables = () => query("SELECT table_name FROM information_schema.tables WHERE table_schema='" +
+      (engine === 'mysql' ? name : 'public') + "' AND table_name LIKE 'tag_%_item' ORDER BY table_name;");
+    await request('preview', 'rollback', { rollbackTag: 'missing' }, 409);
+    await request('preview', 'rollback', { rollbackTag: 'release-one', rollbackCount: 1 }, 409);
+    assert.deepEqual(await tags(), ['release-one']);
+    await query("UPDATE " + history + " SET tag='release-one' WHERE id='after';");
+    await request('preview', 'rollback', { rollbackTag: 'release-one' }, 409);
+    assert.deepEqual(await tags(), []);
+    await query("UPDATE " + history + " SET tag='manual-tag' WHERE id='after';");
+    const manual = await request('preview', 'rollback', { rollbackTag: 'manual-tag' });
+    assert.deepEqual(manual.migrations.map(item => item.revision), ['fixture:last']);
+    assert.match(manual.undo.join('\n'), /DROP TABLE[^;]*tag_last_item/i);
+    assert.equal((await tables()).trim().split(/\r?\n/).length, 3);
+    assert.equal((await request('execute', 'rollback', { rollbackTag: 'manual-tag', planId: manual.planId, confirmName: name })).status, 'rolled-back');
+    assert.equal((await query("SELECT id FROM " + history + " WHERE tag='manual-tag';")).trim(), 'after');
+    const declared = await request('preview', 'rollback', { rollbackTag: 'release-one' });
+    const keepTag = engine === 'mysql';
+    assert.deepEqual(declared.migrations.map(item => item.revision), keepTag ? ['fixture:after'] : ['fixture:after', 'fixture:checkpoint']);
+    assert.equal((await request('execute', 'rollback', { rollbackTag: 'release-one', planId: declared.planId, confirmName: name })).status, 'rolled-back');
+    assert.equal((await query('SELECT id FROM ' + history + ' ORDER BY orderexecuted;')).trim(), keepTag ? 'base\ncheckpoint' : 'base');
+    assert.equal((await tables()).trim(), 'tag_base_item');
+    console.log('Verified Liquibase rollback to declared and manual tags on ' + engine + '.');
+  }
+}
+
 try {
   const mysqlOnly = process.argv.includes('--mysql-only');
   const structuredOnly = process.argv.includes('--structured-only');
-  if (!mysqlOnly && !structuredOnly) await testExistingAdapters();
-  if (!mysqlOnly) await testStructuredLiquibase();
-  if (!structuredOnly) await testNativeMysql();
+  const tagsOnly = process.argv.includes('--tags-only');
+  if (!mysqlOnly && !structuredOnly && !tagsOnly) await testExistingAdapters();
+  if (!mysqlOnly && !tagsOnly) await testStructuredLiquibase();
+  if (!structuredOnly && !tagsOnly) await testNativeMysql();
+  if (!mysqlOnly && !structuredOnly) await testLiquibaseTags();
 } finally {
   for (const id of records) await removeDatabase(id);
   await app.shutdownTasks();

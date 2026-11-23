@@ -31,7 +31,7 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 - [x] Preview and run EF Core PostgreSQL SQL exports for the selected `DbContext` and migration range. Roll back the transaction if the script does not produce the expected history.
 - [x] Run supported Flyway SQL selected by literal Spring Boot properties on project-owned PostgreSQL.
 - [x] Add a reproducible [test matrix](MIGRATION-TEST-CASES.md) with fixed upstream commits plus live database and bilingual cases.
-- [ ] Extend writes to additional database engines and runtime layouts. Remaining items include EF Core SQL Server writes, project-specific Alembic runtimes, runtime-dependent Liquibase changelogs and rollback by tag, licensed Flyway Undo, and broader Drizzle SQL.
+- [ ] Extend writes to additional database engines and runtime layouts. Remaining items include EF Core SQL Server writes, project-specific Alembic runtimes, runtime-dependent Liquibase changelogs, licensed Flyway Undo, and broader Drizzle SQL.
 
 ## v0.47.0 Structured Liquibase changelogs
 
@@ -39,7 +39,13 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 - [x] Apply the public Spring Boot Liquibase example's YAML and included SQL on a disposable PostgreSQL database.
 - [x] Generate native rollback SQL for a reviewed structured changeset range and recheck the exact preview before writing.
 - [x] In v0.47.1, reject encoded variable expressions and prove that changing an included changelog invalidates its approval. Verify physical tables and history through rollback.
-- [ ] Cover runtime-dependent changelogs, referenced data files and rollback tags.
+- [ ] Cover runtime-dependent changelogs and referenced data files.
+
+## v0.48.1 Liquibase rollback by tag
+
+- [x] List unique recorded tags in the history panel and preview the selected tag on project PostgreSQL and MySQL.
+- [x] Show the exact rollback range and verify the retained history for both manually tagged rows and changelog tag changesets.
+- [x] Exercise missing and ambiguous tags, read-only preview, native rollback and bilingual controls.
 
 ## v0.48.0 Flyway and Liquibase on project MySQL
 

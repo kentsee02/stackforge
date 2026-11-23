@@ -530,6 +530,8 @@ export const messages = [
   ['Flyway 回滚需要支持 Undo 的工具和对应的迁移脚本。', 'Flyway rollback requires an eligible Undo tool and migration.'],
   ['最后一次已应用的变更集需要显式回滚语句。', 'The last applied changeset needs an explicit rollback statement.'],
   ['要回滚的变更集数量', 'Changesets to roll back'],
+  ['回滚标签（可选）', 'Rollback tag (optional)'],
+  ['请选择目标数据库中已有且唯一的 Liquibase 标签。', 'Choose a unique Liquibase tag recorded in the selected database.'],
   ['请选择不超过 Liquibase 已应用变更集的回滚数量。', 'Choose a rollback count within the applied Liquibase changesets.'],
   ['每个选定的变更集都需要显式回滚语句。', 'Each selected changeset needs an explicit rollback statement.'],
   ['Liquibase 无法为此范围生成可供审核的回滚 SQL。', 'Liquibase could not generate reviewable rollback SQL for this range.'],

@@ -358,6 +358,13 @@ try {
     data.sqlMigrationTargets.unshift(ownedMysql);
     return route.fulfill({ response, json: data });
   });
+  await page.route('**/api/projects/' + cloned.id + '/database-liquibase-preview', async route => {
+    const { targetId, sourceId } = route.request().postDataJSON();
+    if (targetId !== ownedMysql.id) return route.continue();
+    const response = await route.fetch({ postData: { sourceId } });
+    const data = await response.json();
+    return route.fulfill({ response, json: { ...data, database: { target: ownedMysql, status: 'recorded', tags: ['release-one'] } } });
+  });
   let nativeExecutions = 0;
   const reviewedPlan = { status: 'planned', target: ownedTarget, tool: 'Flyway', version: '11.20.3',
     directory: 'services/billing/storage', history: { schema: 'public', table: 'flyway_schema_history' },
@@ -380,10 +387,13 @@ try {
     }
     if (payload.adapter === 'liquibase') {
       assert.equal(payload.operation, 'rollback');
-      assert.equal(payload.rollbackCount, 2);
       assert.equal(payload.table, 'DATABASECHANGELOG');
+      if (payload.rollbackTag) {
+        assert.equal(payload.rollbackTag, 'release-one');
+        assert.equal(payload.rollbackCount, undefined);
+      } else assert.equal(payload.rollbackCount, 2);
       return route.fulfill({ json: { ...reviewedPlan, target: ownedMysql, tool: 'Liquibase', version: '4.33.0',
-        undo: ['DROP TABLE invoice;'] } });
+        rollbackTag: payload.rollbackTag, undo: ['DROP TABLE invoice;'] } });
     }
     assert.equal(payload.adapter, 'flyway');
     assert.equal(payload.operation, 'apply');
@@ -453,12 +463,18 @@ try {
   await contains('.flyway-preview', '校验和已变化');
   await contains('.liquibase-preview', '标记为已运行');
   await liquibase.locator(':scope > form select').selectOption(ownedMysql.id);
+  await liquibase.locator(':scope > form button').click();
+  await liquibase.locator('.native-migration datalist option[value="release-one"]').waitFor({ state: 'attached' });
   const liquibaseNative = liquibase.locator('.native-migration');
   await liquibaseNative.getByLabel('要回滚的变更集数量').fill('2');
   await liquibaseNative.getByRole('button', { name: '预览回滚计划' }).click();
   await contains('.liquibase-preview .native-migration pre', 'DROP TABLE invoice;');
   await contains('.liquibase-preview .native-migration form', '执行计划前请备份 MySQL。');
   assert.equal(await liquibaseNative.getByRole('button', { name: '执行已审核的回滚' }).isDisabled(), true);
+  await liquibaseNative.getByLabel('回滚标签（可选）').fill('release-one');
+  assert.equal(await liquibaseNative.getByLabel('要回滚的变更集数量').isDisabled(), true);
+  await liquibaseNative.getByRole('button', { name: '预览回滚计划' }).click();
+  await contains('.liquibase-preview .native-migration form', 'release-one');
   await flyway.locator(':scope > form select').selectOption(ownedTarget.id);
   const native = flyway.locator('.native-migration');
   await native.getByRole('button', { name: '预览迁移计划' }).click();
