@@ -1,5 +1,5 @@
 import { readPostgresHistory } from './postgres-history.mjs';
-import { postgresHistoryQuery } from './postgres-history-table.mjs';
+import { postgresHistoryQuery, postgresHistoryTable } from './postgres-history-table.mjs';
 
 const userSchema = "n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'";
 const hasUserObjects = `EXISTS (SELECT FROM pg_catalog.pg_namespace n WHERE ${userSchema} AND n.nspname <> 'public'
@@ -9,7 +9,7 @@ const hasUserObjects = `EXISTS (SELECT FROM pg_catalog.pg_namespace n WHERE ${us
   UNION ALL SELECT FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
     WHERE ${userSchema} AND t.typtype IN ('e', 'd', 'r', 'm'))`;
 
-export async function compareAlembicHistory({ revisions, history, ...options }) {
+export async function compareAlembicHistory({ revisions, history = postgresHistoryTable('public', 'alembic_version'), ...options }) {
   const query = postgresHistoryQuery(history, { version_num: 'text' }, {
     maxRows: 200, row: 'CASE WHEN length(version_num) <= 64 THEN version_num ELSE NULL END',
     extra: ", 'hasObjects', " + hasUserObjects
