@@ -1,6 +1,6 @@
 {
   "name": "stackforge-local",
-  "version": "0.43.0",
+  "version": "0.44.0",
   "description": "A local, open-source full-stack project generator",
   "type": "module",
   "private": true,
@@ -16,6 +16,7 @@
     "test:prisma-integration": "node scripts/integration/prisma-setup.mjs",
     "test:development-postgres": "node scripts/integration/development-postgres.mjs",
     "test:development-mysql": "node scripts/integration/development-mysql.mjs",
+    "test:migration-sql-server": "node scripts/integration/migration-sql-server.mjs",
     "test:secret-service": "node scripts/integration/secret-service.mjs",
     "test:browser": "node scripts/integration/browser.mjs",
     "test": "node --test \"test/**/*.test.mjs\"",

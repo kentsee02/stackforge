@@ -11,11 +11,11 @@ const unsupported = 'Choose a detected local PostgreSQL or MySQL database.';
 const authentication = 'The database client could not authenticate or connect. Check the credentials, port, and local service.';
 function connectionIssue(message) {
   if (/ENOENT|not recognized/i.test(message)) return 'client';
-  if (/password authentication failed|no password supplied|role .* does not exist/i.test(message)) return 'authentication';
-  if (/database .* does not exist/i.test(message)) return 'database';
-  if (/permission denied|no pg_hba\.conf entry/i.test(message)) return 'permission';
+  if (/password authentication failed|no password supplied|role .* does not exist|ERROR 1045\b/i.test(message)) return 'authentication';
+  if (/database .* does not exist|ERROR 1049\b/i.test(message)) return 'database';
+  if (/permission denied|no pg_hba\.conf entry|ERROR (?:1044|1142|1143)\b/i.test(message)) return 'permission';
   if (/SSL|TLS|certificate/i.test(message)) return 'tls';
-  if (/connection refused|could not translate host|timed out|timeout expired|执行超时/i.test(message)) return 'server';
+  if (/connection refused|could not translate host|timed out|timeout expired|ERROR 2003\b|执行超时/i.test(message)) return 'server';
   return 'connection';
 }
 const versionNumber = output => /\b\d+\.\d+(?:\.\d+)?\b/.exec(output)?.[0];

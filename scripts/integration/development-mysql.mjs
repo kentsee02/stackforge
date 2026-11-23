@@ -27,6 +27,11 @@ engine = create_engine(f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_P
 `);
   await writeFile(join(project, '.gitignore'), '.env\n');
   await writeFile(join(project, '.env'), '# Private development settings\nDB_HOST=""\nAPP_MODE=development\n');
+  await mkdir(join(project, 'sql'));
+  await writeFile(join(project, 'flyway.conf'), 'flyway.locations=filesystem:sql\n');
+  await writeFile(join(project, 'sql/V1__create.sql'), 'CREATE TABLE example (id int);\n');
+  await writeFile(join(project, 'liquibase.properties'), 'changeLogFile=changelog.xml\n');
+  await writeFile(join(project, 'changelog.xml'), '<databaseChangeLog><changeSet id="create" author="example"/></databaseChangeLog>');
   await run('git', ['init'], { cwd: project });
   const noClient = async () => { throw new Error('ENOENT'); };
   app = createApp({ stateDir: join(root, 'state/jobs'), localDatabase: { command: noClient }, databaseAdapters: { command: noClient } });
@@ -78,6 +83,21 @@ engine = create_engine(f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_P
   const query = sql => docker(['exec', container, 'sh', '-c',
     'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --no-defaults --batch --skip-column-names --user=root --database="$MYSQL_DATABASE" --execute="$1"', 'stackforge', sql]);
   assert.equal((await query("SELECT COUNT(*) FROM mysql.user WHERE user='root' AND host <> 'localhost';")).trim(), '0');
+  const migrations = await api(projectId + '/database-discovery');
+  const { id: targetId } = migrations.sqlMigrationTargets.find(item => item.projectMysql);
+  const migrationHistory = async (adapter, table) => {
+    const { id: sourceId } = migrations.migrationSources.find(item => item.adapter === adapter);
+    return (await api(projectId + '/database-' + adapter + '-preview', { sourceId, targetId, table })).database;
+  };
+  assert.equal((await migrationHistory('flyway')).status, 'history-missing');
+  assert.equal((await migrationHistory('liquibase')).status, 'history-missing');
+  await query(`CREATE TABLE custom_flyway (installed_rank INT, version VARCHAR(50), script VARCHAR(1000), type VARCHAR(20),
+    checksum INT, success BOOL); INSERT custom_flyway VALUES (1, '01', 'V1__create.sql', 'SQL', NULL, true);
+    CREATE TABLE DATABASECHANGELOG (id VARCHAR(255), author VARCHAR(255), filename VARCHAR(255), exectype VARCHAR(10));
+    INSERT DATABASECHANGELOG VALUES ('create', 'example', 'changelog.xml', 'EXECUTED');`);
+  assert.deepEqual((await migrationHistory('flyway', 'custom_flyway')).items, [{ state: 'recorded' }]);
+  assert.deepEqual((await migrationHistory('liquibase')).items, [{ state: 'recorded' }]);
+  await query('DROP TABLE custom_flyway, DATABASECHANGELOG;');
   const { id, revision } = status.connections[0];
   assert.deepEqual(await send({ mode: 'save', requirementId: id, revision }), { saved: true, file: '.env' });
   const text = await readFile(join(project, '.env'), 'utf8');

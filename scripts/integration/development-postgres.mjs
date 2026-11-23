@@ -6,6 +6,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { crc32 } from 'node:zlib';
 import { createApp } from '../../src/http/server.mjs';
 import { run } from '../../src/platform/process.mjs';
 
@@ -71,6 +72,12 @@ try {
     await writeFile(join(path, 'backend/migrations/versions', revision + '.py'),
       `revision = '${revision}'\ndown_revision = ${parent}\ndepends_on = ${dependency}\n`);
   }
+  await mkdir(join(path, 'sql'), { recursive: true });
+  await writeFile(join(path, 'flyway.conf'), 'flyway.locations=filesystem:sql\n');
+  await writeFile(join(path, 'sql/V01_0__create.sql'), '\uFEFFCREATE TABLE flyway_example(id int);\r\n');
+  await writeFile(join(path, 'sql/R__refresh.sql'), 'SELECT 1;\n');
+  await writeFile(join(path, 'liquibase.properties'), 'changeLogFile=changes.xml\n');
+  await writeFile(join(path, 'changes.xml'), '<databaseChangeLog><changeSet id="first" author="app"/><changeSet id="second" author="app"/></databaseChangeLog>\n');
   await mkdir(join(path, 'db/migrations/meta'), { recursive: true });
   await writeFile(join(path, 'package.json'), JSON.stringify({ devDependencies: { 'drizzle-kit': '^0.31.1' } }));
   await writeFile(join(path, 'drizzle.config.ts'), `import { defineConfig } from 'drizzle-kit';
@@ -144,6 +151,30 @@ try {
   assert.doesNotMatch(JSON.stringify(divergentEf), /private_unknown_migration/);
   await query('DROP TABLE reporting."ReportHistory"; DROP SCHEMA reporting');
   const { id: alembicTarget } = initialDiscovery.alembicTargets.find(item => item.projectPostgres);
+  const sqlTarget = initialDiscovery.sqlMigrationTargets.find(item => item.projectPostgres);
+  const sqlHistory = (adapter, selection = {}, expected = 200) =>
+    api(id + '/database-' + adapter + '-preview', { sourceId: initialDiscovery.migrationSources.find(item => item.adapter === adapter).id,
+      targetId: sqlTarget.id, ...selection }, expected);
+  assert.equal((await sqlHistory('flyway')).database.status, 'history-missing');
+  assert.equal((await sqlHistory('liquibase')).database.status, 'history-missing');
+  await sqlHistory('liquibase', { table: 'bad"; DROP TABLE x;' }, 409);
+  await query(`CREATE SCHEMA migration_tracking;
+    CREATE TABLE migration_tracking.flyway_log (installed_rank integer PRIMARY KEY, version varchar(50), script varchar(1000),
+      type varchar(20), checksum integer, success boolean);
+    INSERT INTO migration_tracking.flyway_log VALUES (1, '1', 'V01_0__create.sql', 'SQL',
+      ${crc32('CREATE TABLE flyway_example(id int);') | 0}, true), (2, NULL, 'R__refresh.sql', 'SQL', 0, true);
+    CREATE TABLE databasechangelog (id varchar(255), author varchar(255), filename varchar(255), exectype varchar(10));
+    INSERT INTO databasechangelog VALUES ('first', 'app', 'changes.xml', 'MARK_RAN');`);
+  const flywayTable = { schema: 'migration_tracking', table: 'flyway_log' };
+  assert.deepEqual((await sqlHistory('flyway', flywayTable)).database.items, [{ state: 'applied' }, { state: 'outdated' }]);
+  assert.deepEqual((await sqlHistory('liquibase')).database.items, [{ state: 'marked' }, { state: 'pending' }]);
+  await query(`UPDATE migration_tracking.flyway_log SET checksum = 0 WHERE installed_rank = 1;
+    INSERT INTO databasechangelog VALUES ('different', 'app', 'other.xml', 'EXECUTED');`);
+  assert.equal((await sqlHistory('flyway', flywayTable)).database.status, 'history-conflict');
+  assert.equal((await sqlHistory('liquibase')).database.status, 'history-conflict');
+  await query(`ALTER TABLE databasechangelog ENABLE ROW LEVEL SECURITY;`);
+  assert.equal((await sqlHistory('liquibase')).database.status, 'history-unavailable');
+  await query('DROP TABLE databasechangelog, migration_tracking.flyway_log; DROP SCHEMA migration_tracking;');
   const alembic = (target = alembicTarget, expected = 200) => api(id + '/database-alembic-preview', { sourceId, targetId: target }, expected);
   await alembic('a'.repeat(64), 409);
   const emptyHistory = (await alembic()).database;
@@ -160,6 +191,10 @@ try {
   assert.deepEqual(branches.revisions.filter(item => item.state === 'pending').map(item => item.revision), ['tip']);
   await query("TRUNCATE alembic_version; INSERT INTO alembic_version VALUES ('tip');");
   const checked = (await alembic()).database;
+  await query('ALTER TABLE alembic_version RENAME TO app_alembic_history;');
+  const customAlembic = await api(id + '/database-alembic-preview', { sourceId, targetId: alembicTarget, table: 'app_alembic_history' });
+  assert.equal(customAlembic.database.status, 'current');
+  await query('ALTER TABLE app_alembic_history RENAME TO alembic_version;');
   assert.equal(checked.status, 'current');
   assert.deepEqual(checked.heads, ['tip']);
   assert.ok(checked.revisions.every(item => item.state === 'applied'));

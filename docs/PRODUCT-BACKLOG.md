@@ -6,7 +6,7 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 2. **Engine-aware development database setup** (completed in v0.39.0). Use service-level discovery to recommend PostgreSQL or MySQL and offer eligible connection and Compose controls. Recheck the service, engine, and connection settings when confirming creation.
 3. **FastAPI startup detection for imports and clones** (completed in v0.39.0). Recognize declared entrypoints, named application objects, and supported local factories through static service scans.
 4. **Project-scoped MySQL** (completed in v0.39.0). Manage a dedicated Docker MySQL database, configure eligible connection settings, and verify backup, restore, and volume ownership. Dedicated Docker PostgreSQL shipped in v0.34.0.
-5. **Additional migration adapters** (completed through v0.43.0). Drizzle and Alembic shipped in v0.35.0–v0.38.0. EF Core source preview shipped in v0.40.0 and PostgreSQL history verification in v0.41.0. Flyway and Liquibase source previews shipped in v0.42.0 and v0.43.0.
+5. **Additional migration adapters** (in progress). All five provide source preview and read-only history for supported local targets as of v0.44.0. Continue with reviewed apply and recovery flows before starting project activity history.
 6. **Project activity history.** Record installation, check, and database outcomes per project.
 7. **Global task history and queue.** Evaluate a cross-project task view and queue after the individual workflows expose compatible state.
 8. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases, and Tasks.
@@ -16,6 +16,14 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 12. **Additional local database operations.** Evaluate backup, restore, and lifecycle controls for MongoDB, Redis, and SQL Server individually.
 13. **Native PostgreSQL and MySQL provisioning.** Evaluate setup for supported local operating systems with their existing server and permissions model.
 14. **Cloud database lifecycle.** Evaluate provider-specific provisioning, lifecycle, and deletion with separate provider permissions.
+
+## Migration adapter acceptance criteria
+
+- [x] Preview detected migration files and report unresolved declarations per service, configuration or DbContext.
+- [x] Provide a read-only history check for each adapter. v0.44.0 adds Flyway and Liquibase history on PostgreSQL and MySQL, EF Core history on SQL Server, and custom Alembic version tables. Distinguish recorded entries from verified file checksums.
+- [ ] Prepare an explicit apply plan for every adapter. Show the tool, version, working directory, selected database, migration range and reviewed files or SQL. Revalidate the source and target on confirmation, reject shared or replaced targets, and verify history after execution.
+- [ ] Prepare a rollback plan when the tool, edition and migration definitions support it. Show the downgrade target and destructive operations. Support checksum-verified recovery to an eligible empty database when the adapter cannot reverse its migrations.
+- [ ] Exercise apply, rollback, cancelled and failed executions, stale approval, and recovery against real development databases. Verify both languages and imported and cloned projects. Record unsupported engines, runtime configurations or migration layouts explicitly.
 
 ## v0.43.0 Liquibase changelog preview
 

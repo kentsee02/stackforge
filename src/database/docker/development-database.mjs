@@ -177,13 +177,14 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
     return passwords[0].slice(prefix.length);
   }
 
-  async function historyTarget(project) {
+  async function historyTarget(project, engine = 'postgres') {
     await registry.ready;
     const record = current(project);
-    if (!record?.container || !record.created || record.deleting || engineOf(record) !== 'postgres') return;
+    if (!record?.container || !record.created || record.deleting || engineOf(record) !== engine) return;
     assertProject(project);
     valid(record, project, record.daemon);
-    return { id: historyTargetId(project, record), name: record.name, port: record.port, host, projectPostgres: true };
+    return { id: historyTargetId(project, record), name: record.name, port: record.port, host, engine,
+      ...(engine === 'postgres' ? { projectPostgres: true } : { projectMysql: true }) };
   }
   function summary(record, target, accepting) {
     const status = target.status === 'running' ? accepting ? 'ready' : 'starting' :

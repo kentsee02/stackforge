@@ -22,6 +22,10 @@ import { compareEfCoreHistory, efCoreHistoryTable } from './migrations/ef-core-h
 import { postgresHistoryTargets } from './migrations/postgres-history.mjs';
 import { previewFlyway } from './migrations/flyway-preview.mjs';
 import { previewLiquibase } from './migrations/liquibase-preview.mjs';
+import { postgresHistoryTable } from './migrations/postgres-history-table.mjs';
+import { compareSqlMigrationHistory } from './migrations/sql-migration-history.mjs';
+import { sqlServerHistoryTable, sqlServerHistoryTargets } from './migrations/sql-server-history.mjs';
+import { mysqlHistoryTable, mysqlHistoryTargets } from './migrations/mysql-history.mjs';
 
 export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
   runtime, removals, configWrites, localDatabase, isClosing }) {
@@ -128,20 +132,27 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
         scanEfCore(project)
       ]);
       const discovery = await scanDatabases(project, scanned, activeIds);
-      const alembicTargets = [], efCoreTargets = [];
+      const alembicTargets = [], efCoreTargets = [], sqlMigrationTargets = [];
       const hasAlembic = scanned.migrationSources.some(source => source.adapter === 'alembic');
-      if (hasAlembic || ef.sources.length) {
+      const hasSqlMigrations = scanned.migrationSources.some(source => ['flyway', 'liquibase'].includes(source.adapter));
+      if (hasAlembic || ef.sources.length || hasSqlMigrations) {
         const container = await development.historyTarget(project).catch(() => undefined);
-        if (hasAlembic) {
-          if (container) alembicTargets.push(container);
-          alembicTargets.push(...postgresHistoryTargets(scanned).map(item => item.public));
+        if (hasAlembic || hasSqlMigrations) {
+          const targets = postgresHistoryTargets(scanned).map(item => item.public);
+          if (container) targets.unshift(container);
+          if (hasAlembic) alembicTargets.push(...targets);
+          if (hasSqlMigrations) {
+            const mysql = await development.historyTarget(project, 'mysql').catch(() => undefined);
+            sqlMigrationTargets.push(...targets, ...(mysql ? [mysql] : []), ...mysqlHistoryTargets(scanned).map(item => item.public));
+          }
         }
         if (ef.sources.length) {
           if (container) efCoreTargets.push(container);
           efCoreTargets.push(...postgresHistoryTargets(scanned, { efCore: true }).map(item => item.public));
+          efCoreTargets.push(...sqlServerHistoryTargets(scanned).map(item => item.public));
         }
       }
-      return { ...discovery, alembicTargets, efCoreTargets, migrationSources: [...scanned.migrationSources, ...ef.sources], migrationScanLimited: ef.limited,
+      return { ...discovery, alembicTargets, efCoreTargets, sqlMigrationTargets, migrationSources: [...scanned.migrationSources, ...ef.sources], migrationScanLimited: ef.limited,
         bindings: discovery.bindings.map(item => ({
         ...item, ...(item.instance.provider === 'remote' && {
           profileSaved: Boolean(databaseRegistry.profile(project.id, item.instanceId))
@@ -254,8 +265,29 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     if (databaseWrites.size || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
       throw new Error('Wait for the current project operation to finish.');
     }
-    if (action === 'database-flyway-preview') return previewFlyway(project, payload.sourceId, controller.signal);
-    if (action === 'database-liquibase-preview') return previewLiquibase(project, payload.sourceId, controller.signal);
+    if (action === 'database-flyway-preview' || action === 'database-liquibase-preview') {
+      const flyway = action === 'database-flyway-preview';
+      const { sourceId, targetId, schema, table } = payload;
+      const { signal } = controller;
+      if (targetId === undefined) return (flyway ? previewFlyway : previewLiquibase)(project, sourceId, signal);
+      const scanned = await discoverDatabases(project, { includeMigrations: true, includeConnections: true });
+      const source = scanned.migrationSources.find(item => item.id === sourceId && item.adapter === (flyway ? 'flyway' : 'liquibase'));
+      if (!source) throw new Error('Choose a detected migration configuration.');
+      const scan = await (flyway ? previewFlyway : previewLiquibase)(project, sourceId, signal, { history: flyway, scanned });
+      const preview = scan.result ?? scan;
+      if (preview.status !== 'ready') return preview;
+      const invalid = 'Choose an available migration database and rescan if it changed.';
+      const options = await historySelection(project, targetId, signal, scanned, invalid, { mysql: true });
+      const defaultTable = flyway ? 'flyway_schema_history' :
+        options.selection.engine === 'mysql' ? 'DATABASECHANGELOG' : 'databasechangelog';
+      const history = options.selection.engine === 'mysql' ?
+        mysqlHistoryTable(options.selection.name, table === undefined ? defaultTable : table) :
+        postgresHistoryTable(schema, table, defaultTable);
+      const resourcePrefix = [source.directory === '.' ? '' : source.directory, source.resourceRoot].filter(Boolean).join('/');
+      const database = await compareSqlMigrationHistory({ adapter: source.adapter, preview, history, checksums: scan.checksums,
+        resourcePrefix: resourcePrefix ? resourcePrefix + '/' : '', ...options });
+      return { ...preview, database };
+    }
     if (action === 'database-ef-core-preview') {
       const { signal } = controller;
       const { targetId, groupId, schema, table } = payload;
@@ -263,16 +295,16 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       if (targetId === undefined || preview.status !== 'ready') return preview;
       const group = preview.groups.find(item => item.id === groupId);
       if (!group) throw new Error('Choose a verified EF Core DbContext and rescan if it changed.');
-      const history = efCoreHistoryTable(schema, table);
-      const invalid = 'Choose an available EF Core PostgreSQL target and rescan if it changed.';
+      const invalid = 'Choose an available EF Core database target and rescan if it changed.';
       const scanned = await discoverDatabases(project, { includeConnections: true });
       const options = await historySelection(project, targetId, signal, scanned, invalid, { efCore: true });
+      const history = (options.selection.engine === 'sqlserver' ? sqlServerHistoryTable : efCoreHistoryTable)(schema, table);
       const database = await compareEfCoreHistory({ group, history, ...options });
       return { ...preview, database };
     }
     if (action === 'database-alembic-preview') {
       const { signal } = controller;
-      const { sourceId, targetId } = payload;
+      const { sourceId, targetId, schema, table } = payload;
       if (targetId === undefined) return previewAlembic(project, sourceId, signal);
       const invalid = 'Choose an available Alembic PostgreSQL target and rescan if it changed.';
       if (typeof targetId !== 'string' || !/^[a-f0-9]{64}$/.test(targetId)) throw new Error(invalid);
@@ -280,7 +312,8 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       const preview = await previewAlembic(project, sourceId, signal, scanned);
       if (preview.status !== 'ready') return preview;
       const options = await historySelection(project, targetId, signal, scanned, invalid);
-      const database = await compareAlembicHistory({ revisions: preview.revisions, ...options });
+      const history = postgresHistoryTable(schema, table, 'alembic_version');
+      const database = await compareAlembicHistory({ revisions: preview.revisions, history, ...options });
       return { ...preview, database };
     }
     if (action === 'database-drizzle-preview' || action === 'database-drizzle-apply') {
@@ -370,14 +403,21 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
 
   async function historySelection(project, targetId, signal, scanned, invalid, options) {
     if (typeof targetId !== 'string' || !/^[a-f0-9]{64}$/.test(targetId)) throw new Error(invalid);
-    const local = postgresHistoryTargets(scanned, options).find(item => item.public.id === targetId);
-    const container = local ? undefined : await development.historyTarget(project).catch(() => undefined);
-    const selection = local?.public ?? (container?.id === targetId ? container : undefined);
+    const local = [...postgresHistoryTargets(scanned, options),
+      ...(options?.efCore ? sqlServerHistoryTargets(scanned) : []),
+      ...(options?.mysql ? mysqlHistoryTargets(scanned) : [])].find(item => item.public.id === targetId);
+    let selection = local?.public;
+    if (!selection) {
+      for (const engine of options?.mysql ? ['postgres', 'mysql'] : ['postgres']) {
+        const container = await development.historyTarget(project, engine).catch(() => undefined);
+        if (container?.id === targetId) { selection = container; break; }
+      }
+    }
     if (!selection) throw new Error(invalid);
     return { selection, credentials: local?.credentials, sslmode: local?.sslmode,
       command: localDatabase.command, probe: localDatabase.probe, signal,
       async resolveClient(target) {
-        try { return await development.client(project, target, signal, selection.projectPostgres ? selection.id : undefined); }
+        try { return await development.client(project, target, signal, selection.projectPostgres || selection.projectMysql ? selection.id : undefined); }
         catch (error) {
           if (error.name === 'AbortError') throw error;
           throw Object.assign(new Error(invalid), { code: 'target-changed' });

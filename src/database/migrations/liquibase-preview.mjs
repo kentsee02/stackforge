@@ -143,11 +143,11 @@ async function scanChangelog(root, start, resourceRoot, signal) {
   return { files: [...files], changes, issues: [...issues].slice(0, 30) };
 }
 
-export async function previewLiquibase(project, sourceId, signal) {
+export async function previewLiquibase(project, sourceId, signal, { scanned } = {}) {
   const invalid = 'Choose a detected Liquibase changelog.';
   if (typeof sourceId !== 'string' || !/^[a-f0-9]{64}$/.test(sourceId)) throw new Error(invalid);
   throwIfCancelled(signal);
-  const { root, identity, migrationSources } = await discoverDatabases(project, { includeMigrations: true });
+  const { root, identity, migrationSources } = scanned ?? await discoverDatabases(project, { includeMigrations: true });
   const config = migrationSources.find(item => item.adapter === 'liquibase' && item.id === sourceId);
   if (!config) throw new Error(invalid);
   throwIfCancelled(signal);

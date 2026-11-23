@@ -1,4 +1,5 @@
 import { setText } from '/i18n.js';
+import { labelledMigrationControl, migrationHistoryName, postgresHistoryMessages } from '/projects/migration-history.js';
 
 const messages = {
   ready: 'Local Alembic revisions found. Database status is unverified.',
@@ -8,26 +9,13 @@ const messages = {
   unverified: 'Some revisions could not be linked. Check for missing files, duplicate revisions, or dynamic declarations.'
 };
 
-export const postgresHistoryMessages = {
-  'target-changed': 'The PostgreSQL target could not be verified. Rescan database configuration and select it again.',
-  'container-stopped': 'Start Project PostgreSQL and check the migration history again.',
-  'loopback-ambiguous': 'Both IPv4 and IPv6 are listening. Use an explicit loopback address in the database URL.',
-  authentication: 'PostgreSQL rejected the username or password.',
-  database: 'The configured PostgreSQL database is missing.',
-  server: 'No server responded on this port. Start PostgreSQL and check again.',
-  permission: 'PostgreSQL denied access. Check the account permissions or server access rules.',
-  tls: 'PostgreSQL could not establish the requested TLS connection.',
-  client: 'Install psql and add it to PATH to check this database.',
-  connection: 'Could not verify the PostgreSQL connection.'
-};
-
 const databaseMessages = {
   ...postgresHistoryMessages,
   current: 'The recorded revision history covers every local revision.',
   pending: 'Some local revisions are pending on the selected database.',
   'history-missing': 'This database has existing objects but no recorded Alembic revisions. Check the target and version table.',
   'history-conflict': 'The recorded Alembic revisions do not match the local graph. Check the target and revision files.',
-  'history-unavailable': 'The default Alembic version table could not be verified. Check its structure or use the project’s configured table.'
+  'history-unavailable': 'The selected table does not have a supported migration history layout.'
 };
 
 const address = ({ host, port, name }) => `${host.includes(':') ? '[' + host + ']' : host}:${port}/${name}`;
@@ -50,6 +38,10 @@ export function alembicPreview(projectId, source, targets, { request, post }) {
   const labelText = document.createElement('span');
   const select = document.createElement('select');
   const check = document.createElement('button');
+  const location = document.createElement('details');
+  const locationSummary = document.createElement('summary');
+  const schema = migrationHistoryName('public');
+  const table = migrationHistoryName('alembic_version');
   const databaseStatus = document.createElement('p');
   const databaseTarget = document.createElement('p');
   const databaseHeads = document.createElement('p');
@@ -88,7 +80,10 @@ export function alembicPreview(projectId, source, targets, { request, post }) {
   setText(labelText, 'Database for public.alembic_version');
   setText(check, 'Check database history');
   label.append(labelText, select);
-  controls.append(label, check);
+  location.className = 'migration-history-location';
+  setText(locationSummary, 'History table');
+  location.append(locationSummary, labelledMigrationControl('History schema', schema), labelledMigrationControl('History table name', table));
+  controls.append(label, location, check);
   form.append(controls);
   databaseStatus.setAttribute('role', 'status');
   setText(databaseHeadsLabel, 'Recorded revisions');
@@ -98,7 +93,8 @@ export function alembicPreview(projectId, source, targets, { request, post }) {
   let loading = false;
   function showDatabase(result) {
     databaseTarget.hidden = !result?.target;
-    databaseTarget.textContent = result?.target ? address(result.target) + ' · public.alembic_version' : '';
+    databaseTarget.textContent = result?.target ? address(result.target) + ' · ' +
+      [result.history?.schema ?? 'public', result.history?.table ?? 'alembic_version'].join('.') : '';
     setText(databaseStatus, databaseMessages[result?.status] ?? '');
     databaseHeads.hidden = !result?.heads?.length;
     databaseHeadIds.textContent = result?.heads?.join(', ') ?? '';
@@ -108,13 +104,15 @@ export function alembicPreview(projectId, source, targets, { request, post }) {
     if (loading) return;
     loading = true;
     select.disabled = check.disabled = true;
+    schema.disabled = table.disabled = true;
     directory.hidden = heads.hidden = refresh.hidden = true;
     revisions.replaceChildren();
     showDatabase();
     setText(status, targetId ? 'Checking PostgreSQL migration history…' : 'Reading Alembic revision files…');
     try {
       const { token } = await request('/api/state');
-      const result = await post(`/api/projects/${projectId}/database-alembic-preview`, token, { sourceId: source.id, targetId }, 40000);
+      const selection = targetId ? { targetId, schema: schema.value, table: table.value } : {};
+      const result = await post(`/api/projects/${projectId}/database-alembic-preview`, token, { sourceId: source.id, ...selection }, 40000);
       form.hidden = result.status !== 'ready' || !targets.length;
       guide.hidden = result.status !== 'ready' || Boolean(targets.length);
       setText(status, result.database ? 'Local Alembic revisions found.' : messages[result.status]);
@@ -152,10 +150,11 @@ export function alembicPreview(projectId, source, targets, { request, post }) {
       refresh.hidden = false;
       loading = false;
       select.disabled = false;
+      schema.disabled = table.disabled = false;
       check.disabled = !select.value;
     }
   }
-  select.addEventListener('change', () => {
+  form.addEventListener('input', () => {
     check.disabled = !select.value;
     showDatabase();
     setText(status, messages.ready);

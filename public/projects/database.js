@@ -257,8 +257,8 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       for (const source of data.migrationSources ?? []) {
         const preview = source.adapter === 'alembic' ? alembicPreview(view.id, source, data.alembicTargets ?? [], { request, post }) :
           source.adapter === 'ef-core' ? efCorePreview(view.id, source, data.efCoreTargets ?? [], { request, post }) :
-          source.adapter === 'flyway' ? flywayPreview(view.id, source, { request, post }) :
-          source.adapter === 'liquibase' ? liquibasePreview(view.id, source, { request, post }) : undefined;
+          source.adapter === 'flyway' ? flywayPreview(view.id, source, { request, post, historyTargets: data.sqlMigrationTargets }) :
+          source.adapter === 'liquibase' ? liquibasePreview(view.id, source, { request, post, historyTargets: data.sqlMigrationTargets }) : undefined;
         if (!preview) continue;
         const row = document.createElement('li');
         row.append(preview);

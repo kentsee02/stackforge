@@ -36,16 +36,20 @@ export function postgresHistoryTargets({ requirements, connections }, { efCore =
   return targets;
 }
 
-export async function readPostgresHistory({ selection, credentials, sslmode, command, probe, resolveClient, signal }, sql) {
+export async function readPostgresHistory(options, sql) {
+  return readLocalMigrationHistory(options, sql, 'postgres');
+}
+
+export async function readLocalMigrationHistory({ selection, credentials, sslmode, command, probe, resolveClient, signal }, sql, engine) {
   const { host, port, name } = selection;
-  const target = { host, port, name };
+  const target = { host, port, name, engine };
   try {
     const address = host === 'localhost' ? await localhostEndpoint(port, probe) : host;
     if (!address) return { target, status: 'loopback-ambiguous' };
     target.host = address;
-    const endpoint = validateLocalTarget({ host: address, port }, { engine: 'postgres', name });
+    const endpoint = validateLocalTarget({ host: address, port }, { engine, name });
     const client = await resolveClient(endpoint);
-    if (selection.projectPostgres && !client) return { target, status: 'target-changed' };
+    if ((selection.projectPostgres || selection.projectMysql) && !client) return { target, status: 'target-changed' };
     const auth = credentials ?? await client.credentials();
     const session = localSession({ ...endpoint, sslmode }, auth, client?.command ?? command, signal);
     const snapshot = JSON.parse(await session.query(sql, name));

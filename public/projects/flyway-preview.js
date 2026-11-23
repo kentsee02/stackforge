@@ -1,5 +1,5 @@
 import { setText } from '/i18n.js';
-import { markUnverified, migrationSourcePreview } from '/projects/migration-source-preview.js';
+import { markUnverified, migrationHistoryState, migrationSourcePreview } from '/projects/migration-source-preview.js';
 
 const messages = {
   ready: 'Local Flyway SQL migrations found. Database history is unverified.',
@@ -13,7 +13,7 @@ const scopes = { standalone: 'Flyway CLI', spring: 'Spring Boot', maven: 'Maven'
 
 export function flywayPreview(projectId, source, services) {
   return migrationSourcePreview(projectId, source, services, {
-    adapter: 'flyway', title: 'Preview Flyway migrations', reading: 'Reading Flyway migration files…',
+    adapter: 'flyway', tableName: 'flyway_schema_history', title: 'Preview Flyway migrations', reading: 'Reading Flyway migration files…',
     rescan: 'Rescan Flyway files', scope: scopes[source.scope], messages,
     render(result, relativePath) {
       const folders = document.createElement('p');
@@ -22,7 +22,7 @@ export function flywayPreview(projectId, source, services) {
       folders.hidden = result.locations.length === 0;
       const list = document.createElement('ul');
       list.className = 'check-list';
-      for (const item of result.migrations) {
+      for (const [index, item] of result.migrations.entries()) {
         const row = document.createElement('li');
         const kind = document.createElement('span');
         setText(kind, types[item.kind]);
@@ -30,6 +30,7 @@ export function flywayPreview(projectId, source, services) {
         file.textContent = relativePath(item.file);
         row.append(kind, ' · ', file);
         if (!item.verified) markUnverified(row);
+        migrationHistoryState(row, result.database?.items?.[index]?.state);
         list.append(row);
       }
       return [folders, list];

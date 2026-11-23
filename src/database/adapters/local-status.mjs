@@ -1,5 +1,6 @@
 import { databaseName, discoverDatabases } from '../discovery.mjs';
 import { run } from '../../platform/process.mjs';
+import { queryLocalSqlServer, sqlServerAuth } from './sql-server-session.mjs';
 
 const clients = { mongodb: 'mongosh', redis: 'redis-cli', sqlserver: 'sqlcmd' };
 const unsupported = 'Configure a supported direct local database connection before checking it.';
@@ -47,13 +48,18 @@ export async function inspectLocalConnection(project, binding, command = run, si
     args = ['-e', '--raw', '-h', host, '-p', String(port), '-n', name,
       ...(credentials.user && credentials.password ? ['--user', credentials.user] : []), 'PING'];
   } else {
-    if (!credentials || url?.search || (!credentials.integrated && (!validUser.test(credentials.user ?? '') ||
-        !credentials.password || !safePassword(credentials.password)))) throw new Error(unsupported);
-    if (!credentials.integrated) env.SQLCMDPASSWORD = credentials.password;
-    const address = host.includes(':') ? `[${host}]` : host;
-    args = ['-S', `tcp:${address},${port}`, '-d', name, '-l', '5', '-t', '8', '-C', '-b', '-h', '-1', '-W', '-s', '\t',
-      ...(credentials.integrated ? ['-E'] : ['-U', credentials.user]),
-      '-Q', "SET NOCOUNT ON; SELECT CONVERT(varchar(64), SERVERPROPERTY('ProductVersion')), DB_NAME();"];
+    const auth = sqlServerAuth(credentials);
+    if (!auth || url?.search) throw new Error(unsupported);
+    try {
+      const output = await queryLocalSqlServer({ host, port, name }, auth,
+        "SET NOCOUNT ON; SELECT CONVERT(varchar(64), SERVERPROPERTY('ProductVersion')), DB_NAME();", { command, signal });
+      const [version, database] = output.split('\t');
+      if (database !== name || !/^\d+(?:\.\d+){1,3}$/.test(version)) throw new Error(failed);
+      return { version, capabilities: { connect: true, backup: false, restore: false } };
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      throw new Error(error.issue === 'client' ? 'Install sqlcmd and add it to PATH to check this database.' : failed);
+    }
   }
   let output;
   try {
@@ -62,9 +68,7 @@ export async function inspectLocalConnection(project, binding, command = run, si
     if (error.name === 'AbortError') throw error;
     throw new Error(/ENOENT|not recognized/i.test(error.message) ? `Install ${clients[engine]} and add it to PATH to check this database.` : failed);
   }
-  const [version, database] = output.split('\t');
-  const connected = engine === 'mongodb' ? output.endsWith('STACKFORGE_CONNECTED') :
-    engine === 'redis' ? output === 'PONG' : database === name && /^\d+(?:\.\d+){1,3}$/.test(version);
+  const connected = engine === 'mongodb' ? output.endsWith('STACKFORGE_CONNECTED') : output === 'PONG';
   if (!connected) throw new Error(failed);
-  return { ...(engine === 'sqlserver' && { version }), capabilities: { connect: true, backup: false, restore: false } };
+  return { capabilities: { connect: true, backup: false, restore: false } };
 }

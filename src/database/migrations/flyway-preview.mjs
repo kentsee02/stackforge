@@ -1,11 +1,19 @@
 import { lstat, opendir, realpath } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { crc32 } from 'node:zlib';
 import { throwIfCancelled } from '../../platform/process.mjs';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { discoverDatabases } from '../discovery.mjs';
+import { readMigrationFile } from './migration-files.mjs';
 
 const kinds = { V: 'versioned', R: 'repeatable', B: 'baseline', U: 'undo' };
 const priority = { versioned: 0, repeatable: 1, baseline: 2, undo: 3 };
+export const versionKey = version => {
+  if (typeof version !== 'string' || !/^\d+(?:[._]\d+)*$/.test(version)) return;
+  const segments = version.split(/[._]/).map(part => part.replace(/^0+(?=\d)/, ''));
+  while (segments.length > 1 && segments.at(-1) === '0') segments.pop();
+  return segments.join('.');
+};
 
 function migrationFile(filename, file) {
   // Flyway treats dots and underscores alike and compares numeric version segments.
@@ -14,8 +22,7 @@ function migrationFile(filename, file) {
   if (!versioned && !repeatable || filename.length > 240) return;
   const kind = versioned ? kinds[versioned[1]] : kinds.R;
   const version = versioned?.[2];
-  const segments = version?.split(/[._]/).map(part => part.replace(/^0+(?=\d)/, ''));
-  if (segments) while (segments.length > 1 && segments.at(-1) === '0') segments.pop();
+  const segments = versionKey(version)?.split('.');
   const description = (versioned?.[3] ?? repeatable[1]).replaceAll('_', ' ').trim();
   if (!description) return;
   return { kind, version, file, description, segments, verified: true };
@@ -69,11 +76,11 @@ async function migrationFiles(root, locations, signal) {
   return { files, limited, unrecognized };
 }
 
-export async function previewFlyway(project, sourceId, signal) {
+export async function previewFlyway(project, sourceId, signal, { history = false, scanned } = {}) {
   const invalid = 'Choose a detected Flyway configuration.';
   if (typeof sourceId !== 'string' || !/^[a-f0-9]{64}$/.test(sourceId)) throw new Error(invalid);
   throwIfCancelled(signal);
-  const { root, identity, migrationSources } = await discoverDatabases(project, { includeMigrations: true });
+  const { root, identity, migrationSources } = scanned ?? await discoverDatabases(project, { includeMigrations: true });
   throwIfCancelled(signal);
   const config = migrationSources.find(item => item.adapter === 'flyway' && item.id === sourceId);
   if (!config) throw new Error(invalid);
@@ -95,5 +102,22 @@ export async function previewFlyway(project, sourceId, signal) {
   files.sort((a, b) => priority[a.kind] - priority[b.kind] ||
     (a.segments && b.segments ? compareVersion(a.segments, b.segments) : a.description.localeCompare(b.description)) || a.file.localeCompare(b.file));
   const status = limited || unrecognized || duplicates.length ? 'partial' : files.length ? 'ready' : 'empty';
-  return { ...base, status, locations: paths, limited, unrecognized, migrations: files.map(({ segments, ...file }) => file) };
+  const migrations = files.map(({ segments, ...file }) => file);
+  const result = { ...base, status, locations: paths, limited, unrecognized, migrations };
+  if (!history) return result;
+  const checksums = new Map();
+  let budget = 8 * 1024 * 1024;
+  for (const item of migrations) {
+    throwIfCancelled(signal);
+    if (budget <= 0 || !item.verified) break;
+    try {
+      const sql = await readMigrationFile(join(root, item.file), Math.min(budget, 512 * 1024));
+      budget -= Buffer.byteLength(sql);
+      // Repeatable migrations may use environment-specific placeholder replacement.
+      if (item.kind === 'repeatable' && /\$\{|#\{/.test(sql)) continue;
+      checksums.set(basename(item.file), crc32(Buffer.from(sql.replace(/^\uFEFF/, '').replace(/[\r\n]/g, ''))) | 0);
+    } catch { /* Unsupported encodings and replaced files leave the checksum unverified. */ }
+  }
+  await resolveStartup(project, [], identity);
+  return { result, checksums };
 }

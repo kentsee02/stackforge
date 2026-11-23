@@ -122,7 +122,13 @@ try {
       assert.equal(args[args.indexOf('-d') + 1], 'browser_alembic');
       return JSON.stringify({ name: 'browser_alembic', table: 'readable', rows: ['20260102123456_CreateReports'] });
     }
-    if (!sql.includes('public.alembic_version')) throw new Error('ENOENT');
+    if (sql.includes('"public"."flyway_schema_history"')) return JSON.stringify({
+      name: 'browser_alembic', table: 'readable', rows: [[1, '1', 'V1__Create_invoice.sql', 'SQL', 0, true]]
+    });
+    if (sql.includes('"public"."databasechangelog"')) return JSON.stringify({
+      name: 'browser_alembic', table: 'readable', rows: [['invoice-init', 'billing', 'liquibase/invoice.sql', 'MARK_RAN']]
+    });
+    if (!sql.includes('"public"."alembic_version"')) throw new Error('ENOENT');
     alembicChecks++;
     assert.match(sql, /BEGIN READ ONLY/);
     assert.equal(args[args.indexOf('-d') + 1], 'browser_alembic');
@@ -355,7 +361,7 @@ try {
   await contains('.ef-core-preview [role="status"]', '数据库状态未验证。');
   await page.locator('#language').selectOption('en');
   const efTarget = ef.locator('select[name="targetId"]');
-  await efTarget.selectOption({ label: targetLabel });
+  await efTarget.selectOption({ label: 'PostgreSQL · ' + targetLabel });
   await ef.getByText('History table', { exact: true }).click();
   await ef.getByLabel('History schema').fill('reporting');
   await ef.getByLabel('History table name').fill('ReportHistory');
@@ -371,13 +377,13 @@ try {
   const flyway = page.locator('.flyway-preview');
   await flyway.locator('summary').press('Enter');
   await contains('.flyway-preview summary', '预览 Flyway 迁移');
-  await contains('.flyway-preview [role="status"]', '数据库历史尚未核对。');
+  await contains('.flyway-preview [role="status"]:first-of-type', '数据库历史尚未核对。');
   await contains('.flyway-preview', '可重复迁移 · changes/R__Refresh_totals.sql');
   assert.equal(await flyway.evaluate(panel => panel.scrollWidth <= panel.clientWidth), true);
   const liquibase = page.locator('.liquibase-preview');
   await liquibase.locator('summary').press('Enter');
   await contains('.liquibase-preview summary', '预览 Liquibase 变更集');
-  await contains('.liquibase-preview [role="status"]', '数据库应用记录未核对。');
+  await contains('.liquibase-preview [role="status"]:first-of-type', '数据库应用记录未核对。');
   await contains('.liquibase-preview li', 'invoice-init · billing · liquibase/invoice.sql');
   assert.equal(await liquibase.evaluate(panel => panel.scrollWidth <= panel.clientWidth), true);
   await page.setViewportSize({ width: 1280, height: 820 });
@@ -388,7 +394,17 @@ try {
   await contains('.liquibase-preview summary', 'Preview Liquibase changesets');
   await liquibase.getByRole('button', { name: 'Rescan Liquibase files' }).click();
   await contains('.liquibase-preview [role="status"]', 'Database history is unverified.');
-  await alembic.locator('summary').press('Enter');
+  for (const panel of [flyway, liquibase]) {
+    await panel.locator('select').selectOption({ label: targetLabel });
+    await panel.getByRole('button', { name: 'Check database history' }).click();
+  }
+  await contains('.flyway-preview', 'Checksum changed');
+  await contains('.liquibase-preview', 'Marked as run');
+  await page.locator('#language').selectOption('zh-CN');
+  await contains('.flyway-preview', '校验和已变化');
+  await contains('.liquibase-preview', '标记为已运行');
+  await page.locator('#language').selectOption('en');
+  await alembic.locator(':scope > summary').press('Enter');
   await contains('.alembic-preview [role="status"]', 'Database status is unverified.');
   await contains('.alembic-preview', 'Declared heads · start');
   await contains('.alembic-preview', 'services/api/alembic/versions');

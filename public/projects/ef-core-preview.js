@@ -1,5 +1,5 @@
 import { setText } from '/i18n.js';
-import { postgresHistoryMessages } from '/projects/alembic-preview.js';
+import { labelledMigrationControl, migrationHistoryName, postgresHistoryMessages } from '/projects/migration-history.js';
 
 const messages = {
   ready: 'Local EF Core migrations found. Database status is unverified.',
@@ -15,16 +15,18 @@ const databaseMessages = {
   'history-unavailable': 'The selected table does not have a supported EF Core history layout.',
   'history-conflict': 'The recorded migration IDs differ from this DbContext. Check the selected database, table and migration files.'
 };
+const sqlServerMessages = {
+  'target-changed': 'The SQL Server target changed. Rescan database configuration and select it again.',
+  authentication: 'SQL Server rejected the saved credentials.',
+  database: 'The selected SQL Server database is unavailable.',
+  server: 'SQL Server did not respond on this port.',
+  permission: 'SQL Server denied access to migration history.',
+  tls: 'Could not establish the SQL Server TLS connection.',
+  client: 'Install sqlcmd and add it to PATH to check this database.',
+  connection: 'Could not verify the SQL Server connection.'
+};
 
 const address = ({ host, port, name }) => (host.includes(':') ? '[' + host + ']' : host) + ':' + port + '/' + name;
-
-function labelledControl(text, control) {
-  const label = document.createElement('label');
-  const caption = document.createElement('span');
-  setText(caption, text);
-  label.append(caption, control);
-  return label;
-}
 
 export function efCorePreview(projectId, source, targets, { request, post }) {
   const folder = source.source.slice(0, source.source.lastIndexOf('/') + 1);
@@ -53,39 +55,31 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
   target.name = 'targetId';
   context.required = target.required = true;
   const targetPlaceholder = new Option('', '');
-  setText(targetPlaceholder, 'Choose a PostgreSQL database');
+  setText(targetPlaceholder, 'Choose a migration database');
   target.append(targetPlaceholder);
   for (const item of targets) {
     const option = new Option('', item.id);
     if (item.projectPostgres) setText(option, ['Project PostgreSQL', address(item)]);
-    else option.textContent = [address(item), item.source, item.variable].filter(Boolean).join(' · ');
+    else option.textContent = [item.engine === 'sqlserver' ? 'SQL Server' : 'PostgreSQL', address(item), item.source, item.variable].filter(Boolean).join(' · ');
     target.append(option);
   }
   const location = document.createElement('details');
   location.className = 'migration-history-location';
   const locationSummary = document.createElement('summary');
   setText(locationSummary, 'History table');
-  const schema = document.createElement('input');
-  const table = document.createElement('input');
-  for (const input of [schema, table]) {
-    input.maxLength = 63;
-    input.pattern = '[A-Za-z_][A-Za-z0-9_]{0,62}';
-    input.required = true;
-    input.spellcheck = false;
-  }
-  schema.value = 'public';
-  table.value = '__EFMigrationsHistory';
-  location.append(locationSummary, labelledControl('History schema', schema), labelledControl('History table name', table));
+  const schema = migrationHistoryName('public');
+  const table = migrationHistoryName('__EFMigrationsHistory');
+  location.append(locationSummary, labelledMigrationControl('History schema', schema), labelledMigrationControl('History table name', table));
   const check = document.createElement('button');
   check.className = 'secondary';
   check.type = 'submit';
   setText(check, 'Check database history');
-  controls.append(labelledControl('DbContext', context), labelledControl('PostgreSQL database', target), location, check);
+  controls.append(labelledMigrationControl('DbContext', context), labelledMigrationControl('Migration database', target), location, check);
   form.append(controls);
   const guide = document.createElement('p');
   guide.className = 'hint';
   guide.hidden = true;
-  setText(guide, 'Set up Project PostgreSQL or save a local PostgreSQL connection, then rescan database configuration.');
+  setText(guide, 'Set up Project PostgreSQL or save a local PostgreSQL or SQL Server connection, then rescan database configuration.');
   const databaseStatus = document.createElement('p');
   databaseStatus.className = 'hint';
   databaseStatus.setAttribute('role', 'status');
@@ -126,7 +120,8 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
   let loading = false, groups = [], showingHistory = false;
   function showDatabase(database) {
     showingHistory = Boolean(database);
-    setText(databaseStatus, databaseMessages[database?.status] ?? '');
+    const message = database?.target?.engine === 'sqlserver' && sqlServerMessages[database.status];
+    setText(databaseStatus, message || databaseMessages[database?.status] || '');
     checkedTable.hidden = !database?.target;
     checkedTable.textContent = database ? address(database.target) + ' · ' + database.history.schema + '.' + database.history.table : '';
     results.replaceChildren(...groups.map(group => groupView(group, database)));
@@ -138,7 +133,7 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
     refresh.hidden = true;
     for (const control of [context, target, schema, table, check]) control.disabled = true;
     showDatabase();
-    if (selection) setText(databaseStatus, 'Checking PostgreSQL migration history…');
+    if (selection) setText(databaseStatus, 'Checking migration history…');
     else setText(status, 'Reading EF Core migration files…');
     try {
       const { token } = await request('/api/state');
@@ -166,6 +161,12 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
   }
   details.addEventListener('toggle', () => { if (details.open) void load(); });
   refresh.addEventListener('click', () => void load());
+  let defaultSchema = 'public';
+  target.addEventListener('input', () => {
+    const next = targets.find(item => item.id === target.value)?.engine === 'sqlserver' ? 'dbo' : 'public';
+    if (schema.value === defaultSchema) schema.value = next;
+    defaultSchema = next;
+  });
   form.addEventListener('input', () => {
     if (showingHistory) {
       setText(status, messages.ready);

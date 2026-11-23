@@ -1,5 +1,5 @@
 import { setText } from '/i18n.js';
-import { markUnverified, migrationSourcePreview } from '/projects/migration-source-preview.js';
+import { markUnverified, migrationHistoryState, migrationSourcePreview } from '/projects/migration-source-preview.js';
 
 const messages = {
   ready: 'Local Liquibase changesets found. Database history is unverified.',
@@ -12,7 +12,7 @@ const scopes = { standalone: 'Liquibase CLI', spring: 'Spring Boot', maven: 'Mav
 
 export function liquibasePreview(projectId, source, services) {
   return migrationSourcePreview(projectId, source, services, {
-    adapter: 'liquibase', title: 'Preview Liquibase changesets', reading: 'Reading Liquibase changelogs…',
+    adapter: 'liquibase', tableName: 'databasechangelog', title: 'Preview Liquibase changesets', reading: 'Reading Liquibase changelogs…',
     rescan: 'Rescan Liquibase files', scope: scopes[source.scope], messages,
     render(result, relativePath) {
       const root = document.createElement('p');
@@ -25,12 +25,13 @@ export function liquibasePreview(projectId, source, services) {
       if (result.issues.length) setText(issues, ['Files to review', result.issues.map(relativePath).join(' · ')]);
       const rows = document.createElement('ul');
       rows.className = 'check-list';
-      for (const item of result.changes) {
+      for (const [index, item] of result.changes.entries()) {
         const row = document.createElement('li');
         const id = document.createElement('code');
         id.textContent = item.id;
         row.append(id, ' · ', item.author, ' · ', relativePath(item.file));
         if (!item.verified) markUnverified(row);
+        migrationHistoryState(row, result.database?.items?.[index]?.state);
         rows.append(row);
       }
       return [root, issues, rows];

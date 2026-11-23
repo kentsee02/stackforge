@@ -41,6 +41,7 @@ jobs:
           npm run test:database-integration
           npm run test:development-postgres
           npm run test:development-mysql
+          npm run test:migration-sql-server
           npm run test:prisma-integration -- --large
       - if: runner.os == 'Windows'
         shell: pwsh
