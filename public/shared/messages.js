@@ -531,6 +531,7 @@ export const messages = [
   ['要回滚的变更集数量', 'Changesets to roll back'],
   ['请选择不超过 Liquibase 已应用变更集的回滚数量。', 'Choose a rollback count within the applied Liquibase changesets.'],
   ['每个选定的变更集都需要显式回滚语句。', 'Each selected changeset needs an explicit rollback statement.'],
+  ['Liquibase 无法为此范围生成可供审核的回滚 SQL。', 'Liquibase could not generate reviewable rollback SQL for this range.'],
   ['Flyway 来源包含可重复迁移时，请使用自动选择。', 'Use Automatic when the Flyway source contains repeatable migrations.'],
   ['请选择用于原生迁移的项目专属 PostgreSQL。', 'Choose the project-owned PostgreSQL database for native migrations.'],
   ['请启用项目数据库，再准备迁移。', 'Start the project database before preparing a migration.'],

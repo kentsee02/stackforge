@@ -86,10 +86,12 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
 
   async function send(mode, operation, targetSelection) {
     const { token } = await request('/api/state');
+    const liquibaseRollback = source.adapter === 'liquibase' && operation === 'rollback';
+    const timeout = liquibaseRollback ? 360000 : mode === 'preview' ? 220000 : 240000;
     return post('/api/projects/' + projectId + '/database-native-migration', token, {
       sourceId: source.id, adapter: source.adapter, operation, mode, ...targetSelection,
       ...(mode === 'execute' && { planId: plan.planId, confirmName: confirm.value })
-    }, mode === 'preview' ? 220000 : 240000, active.signal);
+    }, timeout, active.signal);
   }
 
   async function work(callback) {

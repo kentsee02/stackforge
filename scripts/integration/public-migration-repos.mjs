@@ -18,7 +18,7 @@ const cases = [
   { repo: 'I-RzR-I/ModularMonolithSharedDbContextSample', commit: 'aa79eeffb5a4a02785e24c500d2524a3095d3adb', adapter: 'ef-core', efExport: true },
   { repo: 'nanotaboada/java.samples.spring.boot', commit: '2cbc59f0d968951a5f80b6624ec1fd27c93363ed', adapter: 'flyway', live: true },
   { repo: 'BootcampToProd/flyway-with-spring-boot-maven', commit: '046d4ae118e99f9197bea434daf870873c789b2e', adapter: 'flyway' },
-  { repo: 'h3yzack/springboot3-liquibase-example', commit: 'baa98678824b59476bf09805ac516e4aa8729916', adapter: 'liquibase' },
+  { repo: 'h3yzack/springboot3-liquibase-example', commit: 'baa98678824b59476bf09805ac516e4aa8729916', adapter: 'liquibase', live: true },
   { repo: 'jhipster/jhipster-sample-app', commit: '6b000b5d23a36c45e01472471b84a44fa2464044', adapter: 'liquibase' }
 ];
 const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12]];
@@ -88,7 +88,7 @@ async function assertPostgresMigration(api, project, adapter) {
   const discovery = await api(project.id + '/database-discovery');
   if (adapter === 'ef-core') return assertEfCoreExport(api, project, discovery, name);
   if (['flyway', 'liquibase'].includes(adapter)) {
-    const { id: sourceId } = discovery.migrationSources.find(item => item.adapter === adapter);
+    const { id: sourceId } = discovery.migrationSources.find(item => item.adapter === adapter && ['standalone', 'spring'].includes(item.scope));
     const { id: targetId } = discovery.sqlMigrationTargets.find(item => item.projectPostgres);
     const endpoint = project.id + '/database-native-migration';
     const selection = { adapter, sourceId, targetId, operation: 'apply' };

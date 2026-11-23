@@ -8,6 +8,7 @@ import { migrationImage, runMigrationContainer } from '../docker/migration-conta
 import { databaseKey, discoverDatabases } from '../discovery.mjs';
 import { flywayChecksum, previewFlyway } from './flyway-preview.mjs';
 import { previewLiquibase } from './liquibase-preview.mjs';
+import { reviewedStructuredLiquibase } from './liquibase-execution-source.mjs';
 import { readMigrationFile } from './migration-files.mjs';
 import { postgresHistoryTable } from './postgres-history-table.mjs';
 import { compareSqlMigrationHistory } from './sql-migration-history.mjs';
@@ -32,16 +33,18 @@ function reviewedConfig(adapter, source, text) {
   let lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map(line => line.trim());
   if (source.scope === 'spring') {
     if (lines.some(line => /^#---$|^spring\.config\.(?:import|activate)\b/i.test(line))) return false;
-    lines = lines.filter(line => /^spring\.flyway\b/i.test(line)).map(line => line.slice('spring.'.length));
+    const prefix = 'spring.' + adapter + '.';
+    lines = lines.filter(line => line.toLowerCase().startsWith(prefix)).map(line => line.slice('spring.'.length));
     if (!lines.length) return false;
   } else lines = lines.filter(line => line && !/^[#!]/.test(line));
   if (adapter === 'flyway' && source.source.endsWith('flyway.toml')) {
     return lines.length === 2 && lines[0] === '[flyway]' && /^locations\s*=/.test(lines[1]);
   }
   return lines.every(line => {
-    const match = /^([\w.]+)\s*[:=]\s*(.*)$/.exec(line);
+    const match = /^([\w.-]+)\s*[:=]\s*(.*)$/.exec(line);
     return match && !match[2].endsWith('\\') && (tools[adapter].config.test(match[1]) ||
-      source.scope === 'spring' && match[1] === 'flyway.enabled' && match[2].trim() === 'true');
+      source.scope === 'spring' && (match[1] === adapter + '.enabled' && match[2].trim() === 'true' ||
+        adapter === 'liquibase' && /^liquibase\.change-?log$/i.test(match[1])));
   });
 }
 
@@ -64,24 +67,26 @@ async function readSource(project, adapter, sourceId, scanned, signal) {
   const { root, migrationSources } = scanned;
   const source = migrationSources.find(item => item.adapter === adapter && item.id === sourceId);
   const flyway = adapter === 'flyway';
-  const spring = flyway && source?.scope === 'spring' && !source.profile && /(?:^|\/)application\.properties$/i.test(source.source);
+  const spring = source?.scope === 'spring' && !source.profile && /(?:^|\/)application\.properties$/i.test(source.source);
   if (source?.scope !== 'standalone' && !spring) throw new Error(badSource);
   const preview = await (flyway ? previewFlyway : previewLiquibase)(project, sourceId, signal, { scanned });
   if (preview.status !== 'ready') throw new Error(badSource);
-  const folder = source.directory === '.' ? '' : source.directory + '/';
+  const folder = [source.directory === '.' ? '' : source.directory, source.resourceRoot].filter(Boolean).map(dir => dir + '/').join('');
+  const entrypoint = preview.changelog?.slice(folder.length);
   const files = new Map(), checksums = new Map();
-  let rollback, remaining = 8 * 1024 ** 2;
+  const undoByFile = new Map();
+  let structured = false, remaining = 8 * 1024 ** 2;
   let config;
   try {
     config = await readMigrationFile(join(root, source.source), 64 * 1024);
     if (!reviewedConfig(adapter, source, config)) throw new Error();
     const paths = flyway ? preview.migrations.map(item => item.file) : preview.files;
-    if (!flyway && (paths.length !== 1 || !/\.sql$/i.test(paths[0]) || source.resourceRoot)) throw new Error();
+    if (!flyway && (!entrypoint || !preview.changelog.startsWith(folder))) throw new Error();
     if (flyway && preview.migrations.some(item => !['versioned', 'repeatable'].includes(item.kind))) throw new Error();
     for (const file of paths) {
       throwIfCancelled(signal);
       const path = flyway ? posix.basename(file) : file.slice(folder.length);
-      if (!path.split('/').every(part => portableName.test(part)) || files.has(path) || remaining <= 0) throw new Error();
+      if (!file.startsWith(folder) || !path.split('/').every(part => portableName.test(part)) || files.has(path) || remaining <= 0) throw new Error();
       const sql = await readMigrationFile(join(root, file), Math.min(remaining, 512 * 1024));
       if (flyway && (/\$\{/.test(sql) || await lstat(join(root, file + '.conf')).catch(error => {
         if (error.code !== 'ENOENT') throw error;
@@ -89,13 +94,19 @@ async function readSource(project, adapter, sourceId, scanned, signal) {
       remaining -= Buffer.byteLength(sql);
       files.set(path, sql);
       if (flyway) checksums.set(path, flywayChecksum(sql));
-      else rollback = formattedChanges(sql, preview.changes);
+      else if (/\.sql$/i.test(path)) {
+        undoByFile.set(file, formattedChanges(sql, preview.changes.filter(item => item.file === file)).slice());
+      } else {
+        if (!reviewedStructuredLiquibase(path, sql)) throw new Error();
+        structured = true;
+      }
     }
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     throw new Error(badSource);
   }
-  return { directory: source.directory, folder, preview, checksums, files, rollback,
+  const rollback = preview.changes?.map(item => undoByFile.get(item.file)?.shift());
+  return { directory: source.directory, folder, preview, checksums, files, rollback, structured, entrypoint,
     fingerprint: databaseKey(source, config, [...files]) };
 }
 
@@ -151,6 +162,25 @@ async function rollbackOrder(session, target, history, migrations, applied, fold
   return databaseKey(rows);
 }
 
+function liquibaseInvocation({ credentials, jdbc, history, entrypoint, command, count, readOnly = false }) {
+  const url = readOnly ? jdbc + '&options=-c%20default_transaction_read_only%3Don' : jdbc;
+  return {
+    env: { LIQUIBASE_COMMAND_URL: url, LIQUIBASE_COMMAND_USERNAME: credentials.user, LIQUIBASE_COMMAND_PASSWORD: credentials.password },
+    args: ['--secure-parsing=true', '--search-path=/stackforge', '--database-changelog-table-name=' + history.table,
+      command, '--changelog-file=' + entrypoint, '--default-schema-name=' + history.schema,
+      '--liquibase-schema-name=' + history.schema, ...(count ? ['--count=' + count] : [])]
+  };
+}
+
+function rollbackSql(output, range, folder) {
+  const start = output.search(/^-- Rollback \d+ Change\(s\) Script[ \t]*\r?$/m);
+  const rows = [...output.matchAll(/^-- Rolling Back ChangeSet:\s+([^\r\n]+)/gm)].map(item => item[1].trimEnd());
+  const expected = range.map(item => [item.file.slice(folder.length), item.id, item.author].join('::'));
+  if (start < 0 || output.length > 256 * 1024 || rows.length !== expected.length ||
+      rows.some((row, index) => row !== expected[index])) throw new Error('Liquibase could not generate reviewable rollback SQL for this range.');
+  return output.slice(start).replace(/^-- (?:Ran at|Against):[^\r\n]*\r?\n/gm, '').trim();
+}
+
 export async function nativeSqlMigration({ project, payload, target, client, signal, directory, verifyShared }) {
   const { adapter, operation, mode, sourceId } = payload;
   if (!Object.hasOwn(tools, adapter) || !['apply', 'rollback'].includes(operation) || !['preview', 'execute'].includes(mode) ||
@@ -191,15 +221,35 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
     flywayTarget ? pending.slice(0, expected - applied) : pending;
   if (!range.length || expected < 0) throw new Error(noChanges);
   const undoGroups = rollback ? source.rollback?.slice(expected, applied).reverse() : undefined;
-  if (rollback && (!undoGroups || undoGroups.length !== count || undoGroups.some(group => !group))) {
-    throw new Error('Each selected changeset needs an explicit rollback statement.');
+  const explicit = undoGroups?.length === count && undoGroups.every(group => group);
+  const order = rollback ? await rollbackOrder(session, target, history, migrations, applied, source.folder) : undefined;
+  async function verify() {
+    await scope.verify();
+    const current = await readIdentity();
+    const currentState = await compare();
+    if (databaseKey(current) !== databaseKey(before) || currentState.fingerprint !== state.fingerprint) throw new Error(changed);
+    if (rollback && order !== await rollbackOrder(session, target, history, migrations, applied, source.folder)) throw new Error(changed);
   }
-  const undo = undoGroups?.flat();
-  const order = undo ? await rollbackOrder(session, target, history, migrations, applied, source.folder) : undefined;
+  const application = 'stackforge_migration_' + randomBytes(12).toString('hex');
+  const jdbc = 'jdbc:postgresql://127.0.0.1:' + scope.port + '/' + target.name + '?ApplicationName=' + application;
+  const runJob = invocation => runMigrationContainer({ ...scope, ...invocation, image, files: source.files, directory, signal, verify,
+    cancel: () => scope.cancel(application) });
+  const liquibase = ({ command, readOnly }) => liquibaseInvocation({ credentials, jdbc, history, entrypoint: source.entrypoint, command, count, readOnly });
+  let undo = explicit ? undoGroups.flat() : undefined;
+  if (rollback && !undo) {
+    if (!source.structured) throw new Error('Each selected changeset needs an explicit rollback statement.');
+    try {
+      undo = [rollbackSql(await runJob(liquibase({ command: 'rollback-count-sql', readOnly: true })), range, source.folder)];
+    } catch (error) {
+      if (error.name === 'AbortError' || error.message === changed) throw error;
+      throw new Error('Liquibase could not generate reviewable rollback SQL for this range.');
+    }
+    await verify();
+  }
   const expires = mode === 'preview' ? String(Date.now() + 5 * 60_000) : /^(\d{13})\.[a-f\d]{64}$/.exec(payload.planId ?? '')?.[1];
   const signature = createHmac('sha256', key).update(JSON.stringify([
     expires, project.id, identity, sourceId, source.fingerprint, operation, target, scope.container, image,
-    history, before, state.fingerprint, applied, expected, order
+    history, before, state.fingerprint, applied, expected, order, undo
   ])).digest('hex');
   const planId = expires + '.' + signature;
   const plan = { target, tool: tool.name, version: tool.version, history, directory: source.directory,
@@ -212,30 +262,14 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
   const latest = await discoverDatabases(project, { includeMigrations: true, includeConnections: true });
   if ((await readSource(project, adapter, sourceId, latest, signal)).fingerprint !== source.fingerprint) throw new Error(changed);
   await resolveStartup(project, [], identity);
-  async function verify() {
-    await scope.verify();
-    const current = await readIdentity();
-    const currentState = await compare();
-    if (databaseKey(current) !== databaseKey(before) || currentState.fingerprint !== state.fingerprint) throw new Error(changed);
-    if (undo && order !== await rollbackOrder(session, target, history, migrations, applied, source.folder)) throw new Error(changed);
-  }
-  const application = 'stackforge_migration_' + randomBytes(12).toString('hex');
-  const jdbc = 'jdbc:postgresql://127.0.0.1:' + scope.port + '/' + target.name + '?ApplicationName=' + application;
   const invocation = adapter === 'flyway' ? {
     env: { FLYWAY_URL: jdbc, FLYWAY_USER: credentials.user, FLYWAY_PASSWORD: credentials.password },
     args: ['-locations=filesystem:/stackforge', '-defaultSchema=' + history.schema, '-table=' + history.table,
       '-baselineOnMigrate=false', '-validateOnMigrate=true', '-group=true', '-cleanDisabled=true', '-placeholderReplacement=false',
       ...(flywayTarget ? ['-target=' + payload.revision] : []), 'migrate']
-  } : {
-    env: { LIQUIBASE_COMMAND_URL: jdbc, LIQUIBASE_COMMAND_USERNAME: credentials.user, LIQUIBASE_COMMAND_PASSWORD: credentials.password },
-    args: ['--search-path=/stackforge', '--database-changelog-table-name=' + history.table,
-      operation === 'apply' ? 'update' : 'rollback-count',
-      '--changelog-file=' + [...source.files.keys()][0], '--default-schema-name=' + history.schema,
-      '--liquibase-schema-name=' + history.schema, ...(rollback ? ['--count=' + count] : [])]
-  };
+  } : liquibase({ command: rollback ? 'rollback-count' : 'update' });
   try {
-    await runMigrationContainer({ ...scope, ...invocation, image, files: source.files, directory, signal, verify,
-      cancel: () => scope.cancel(application) });
+    await runJob(invocation);
   } catch (error) {
     if (error.name === 'AbortError' || error.message === changed) throw error;
     return { status: 'execution-failed' };

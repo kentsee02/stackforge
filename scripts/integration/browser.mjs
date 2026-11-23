@@ -376,6 +376,12 @@ try {
       return route.fulfill({ json: { ...reviewedPlan, tool: 'EF Core', version: '', fromRevision: '20260102123456_CreateReports',
         toRevision: 'base', scriptFile: payload.scriptFile, sql: 'DROP TABLE reports;' } });
     }
+    if (payload.adapter === 'liquibase') {
+      assert.equal(payload.operation, 'rollback');
+      assert.equal(payload.rollbackCount, 2);
+      return route.fulfill({ json: { ...reviewedPlan, tool: 'Liquibase', version: '4.33.0',
+        undo: ['DROP TABLE invoice;'] } });
+    }
     assert.equal(payload.adapter, 'flyway');
     assert.equal(payload.operation, 'apply');
     if (payload.mode === 'execute') {
@@ -443,6 +449,12 @@ try {
   await page.locator('#language').selectOption('zh-CN');
   await contains('.flyway-preview', '校验和已变化');
   await contains('.liquibase-preview', '标记为已运行');
+  await liquibase.locator(':scope > form select').selectOption(ownedTarget.id);
+  const liquibaseNative = liquibase.locator('.native-migration');
+  await liquibaseNative.getByLabel('要回滚的变更集数量').fill('2');
+  await liquibaseNative.getByRole('button', { name: '预览回滚计划' }).click();
+  await contains('.liquibase-preview .native-migration pre', 'DROP TABLE invoice;');
+  assert.equal(await liquibaseNative.getByRole('button', { name: '执行已审核的回滚' }).isDisabled(), true);
   await flyway.locator(':scope > form select').selectOption(ownedTarget.id);
   const native = flyway.locator('.native-migration');
   await native.getByRole('button', { name: '预览迁移计划' }).click();

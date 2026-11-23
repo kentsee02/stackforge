@@ -76,7 +76,7 @@ async function archive(id, path = '', bindingId, body = '{}', extra = {}) {
       'X-StackForge-Token': token, 'X-StackForge-Binding': bindingId, ...extra } });
 }
 
-try {
+async function testExistingAdapters() {
   for (const adapter of ['flyway', 'liquibase']) {
     const project = join(root, adapter);
     const name = adapter + '_fixture';
@@ -325,6 +325,64 @@ def downgrade():
   })).status, 'rolled-back');
   assert.equal((await branchQuery('SELECT count(*) FROM alembic_version;')).trim(), '0');
   console.log('Verified Alembic multiple heads, explicit branched rollback, and version history.');
+}
+
+async function testStructuredLiquibase() {
+  const structured = join(root, 'liquibase-structured');
+  await mkdir(join(structured, 'prisma'), { recursive: true });
+  await writeFile(join(structured, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
+  await mkdir(join(structured, 'changes'));
+  await writeFile(join(structured, 'liquibase.properties'), 'changeLogFile=changes/main.json\n');
+  await writeFile(join(structured, 'changes/main.json'), JSON.stringify({ databaseChangeLog: [
+    { include: { file: 'from-yaml.yaml', relativeToChangelogFile: true } },
+    { include: { file: 'from-xml.xml', relativeToChangelogFile: true } },
+    { changeSet: { id: 'json', author: 'fixture', changes: [
+      { createTable: { tableName: 'json_fixture', columns: [{ column: { name: 'id', type: 'int' } }] } }
+    ] } }
+  ] }));
+  await writeFile(join(structured, 'changes/from-yaml.yaml'), `databaseChangeLog:
+  - changeSet:
+      id: yaml
+      author: fixture
+      changes:
+        - createTable:
+            tableName: yaml_fixture
+            columns:
+              - column:
+                  name: id
+                  type: int
+`);
+  await writeFile(join(structured, 'changes/from-xml.xml'), `<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.33.xsd">
+  <changeSet id="xml" author="fixture">
+    <createTable tableName="xml_fixture"><column name="id" type="int"/></createTable>
+  </changeSet>
+</databaseChangeLog>`);
+  const { id: structuredId } = await api('import', { path: structured }, 201);
+  const structuredName = 'liquibase_structured_fixture';
+  const structuredQuery = await database(structuredId, structuredName);
+  const structuredDiscovery = await api(structuredId + '/database-discovery');
+  const input = { adapter: 'liquibase', sourceId: structuredDiscovery.migrationSources.find(item => item.adapter === 'liquibase').id,
+    targetId: structuredDiscovery.sqlMigrationTargets.find(item => item.projectPostgres).id };
+  const structuredEndpoint = structuredId + '/database-native-migration';
+  const requestPlan = (mode, operation, fields = {}) => api(structuredEndpoint, { ...input, mode, operation, ...fields });
+  const approved = await requestPlan('preview', 'apply');
+  assert.deepEqual(approved.migrations.map(item => item.revision), ['fixture:yaml', 'fixture:xml', 'fixture:json']);
+  assert.equal((await requestPlan('execute', 'apply', { planId: approved.planId, confirmName: structuredName })).status, 'applied');
+  assert.equal((await structuredQuery('SELECT count(*) FROM databasechangelog;')).trim(), '3');
+  const structuredUndo = await requestPlan('preview', 'rollback', { rollbackCount: 3 });
+  assert.match(structuredUndo.undo.join('\n'), /DROP TABLE[^;]*json_fixture[\s\S]*DROP TABLE[^;]*xml_fixture[\s\S]*DROP TABLE[^;]*yaml_fixture/i);
+  assert.equal((await structuredQuery('SELECT count(*) FROM databasechangelog;')).trim(), '3');
+  const result = await requestPlan('execute', 'rollback', { rollbackCount: 3, planId: structuredUndo.planId, confirmName: structuredName });
+  assert.equal(result.status, 'rolled-back');
+  assert.equal((await structuredQuery('SELECT count(*) FROM databasechangelog;')).trim(), '0');
+  console.log('Verified structured Liquibase JSON, YAML and XML with read-only rollback preview and native rollback.');
+}
+
+try {
+  if (!process.argv.includes('--structured-only')) await testExistingAdapters();
+  await testStructuredLiquibase();
 } finally {
   for (const id of records) await removeDatabase(id);
   await app.shutdownTasks();

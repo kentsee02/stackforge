@@ -3,14 +3,14 @@ const otherEntries = new Set(['property', 'preConditions', 'logicalFilePath']);
 const fields = new Set(['id', 'author', 'file', 'path', 'logicalFilePath', 'relativeToChangelogFile',
   'ignore', 'errorIfMissing', 'errorIfMissingOrEmpty', 'minDepth', 'maxDepth', 'endsWithFilter', 'filter', 'resourceComparator']);
 
-function xmlAttributes(text) {
+export function liquibaseXmlAttributes(text, all = false) {
   const attributes = Object.create(null);
   const pattern = /\s+([A-Za-z_][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/gy;
   while (text.slice(pattern.lastIndex).trim()) {
     const match = pattern.exec(text);
     if (!match || Object.hasOwn(attributes, match[1])) return;
     const [, key, double, single] = match;
-    if (!fields.has(key)) continue;
+    if (!all && !fields.has(key)) continue;
     const value = double ?? single;
     if (/&(?!amp;|quot;|apos;|lt;|gt;)/.test(value)) return;
     attributes[key] = value.replace(/&(amp|quot|apos|lt|gt);/g,
@@ -19,11 +19,12 @@ function xmlAttributes(text) {
   return attributes;
 }
 
+export const liquibaseXmlTokens = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<\/?[A-Za-z_][\w:.-]*(?:[^<>"']|"[^"]*"|'[^']*')*>|[^<]+/g;
+
 function xmlChangelog(text) {
-  const tokens = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<\/?[A-Za-z_][\w:.-]*(?:[^<>"']|"[^"]*"|'[^']*')*>|[^<]+/g;
   const stack = [], entries = [];
   let offset = 0, root, partial = false;
-  for (const token of text.matchAll(tokens)) {
+  for (const token of text.matchAll(liquibaseXmlTokens)) {
     if (token.index !== offset) return;
     const value = token[0];
     offset += value.length;
@@ -41,7 +42,7 @@ function xmlChangelog(text) {
       continue;
     }
     if (!stack.length || stack.length === 1 && declarations.has(name)) {
-      const attributes = xmlAttributes(rest.replace(/\/$/, ''));
+      const attributes = liquibaseXmlAttributes(rest.replace(/\/$/, ''));
       if (!stack.length) {
         if (root || name !== 'databaseChangeLog' || !attributes) return;
         root = attributes;

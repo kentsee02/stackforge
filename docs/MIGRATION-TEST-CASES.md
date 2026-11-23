@@ -23,6 +23,8 @@ The public live suite exercises original upstream migrations on disposable proje
 ```sh
 npm run test:public-migrations -- --postgres --ef-cli
 npm run test:public-migrations -- --postgres --case=PUB-05 --case=PUB-09
+npm run test:public-migrations -- --postgres --case=PUB-07
+npm run test:native-migrations -- --structured-only
 ```
 
 ## Public repositories and expected results
@@ -35,7 +37,7 @@ npm run test:public-migrations -- --postgres --case=PUB-05 --case=PUB-09
 | PUB-04 EF Core | [ModularMonolithSharedDbContextSample](https://github.com/I-RzR-I/ModularMonolithSharedDbContextSample/tree/aa79eeffb5a4a02785e24c500d2524a3095d3adb) | Find ten assemblies with separate Identity and Document contexts across five layouts. | Export the real v1 Document migration and its reverse SQL with `dotnet ef`. Apply and roll back on PostgreSQL using the custom `doc` history schema. |
 | PUB-05 Flyway | [Java Spring Boot samples](https://github.com/nanotaboada/java.samples.spring.boot/tree/2cbc59f0d968951a5f80b6624ec1fd27c93363ed) | Find three SQL migrations from Spring Boot's classpath location. | Add a test-only PostgreSQL declaration. Keep the native Spring configuration and SQL intact. The full run must fail as a group because the seed migrations insert SQLite-style integer values into PostgreSQL Boolean columns. Apply to V1 and verify its checksum and that V2 and V3 remain pending. |
 | PUB-06 Flyway | [Maven profile example](https://github.com/BootcampToProd/flyway-with-spring-boot-maven/tree/046d4ae118e99f9197bea434daf870873c789b2e) | Keep the dev, stage and prod configurations separate and retain the disabled runtime source. | Source coverage. |
-| PUB-07 Liquibase | [Spring Boot Liquibase example](https://github.com/h3yzack/springboot3-liquibase-example/tree/baa98678824b59476bf09805ac516e4aa8729916) | Find four changesets through both the Maven and Spring declarations. | Source coverage. |
+| PUB-07 Liquibase | [Spring Boot Liquibase example](https://github.com/h3yzack/springboot3-liquibase-example/tree/baa98678824b59476bf09805ac516e4aa8729916) | Find four changesets through both the Maven and Spring declarations. | Apply all four unchanged changesets through the original Spring Boot YAML changelog and its classpath `includeAll`. Verify all four recorded identities. |
 | PUB-08 Liquibase | [JHipster sample app](https://github.com/jhipster/jhipster-sample-app/tree/6b000b5d23a36c45e01472471b84a44fa2464044) | Resolve the nested XML changelog and its 12 changesets. | Source coverage. |
 | PUB-09 Liquibase | [Liquibase PostgreSQL formatted SQL fixture](https://github.com/liquibase/liquibase/blob/75773ed9b45b0a5adf3c42872d2e5494da669427/liquibase-integration-tests/src/test/resources/changelogs/pgsql/complete/basic.formatted.sql) | Import the upstream SQL file with a test-only properties file that points to it. | Apply the original changeset and check its recorded history. The native suite separately tests rollback. |
 
@@ -61,6 +63,8 @@ npm run test:public-migrations -- --postgres --case=PUB-05 --case=PUB-09
 | LIQ-01 | Structured and formatted changelogs, includes and logical paths | Inspect supported declarations and flag repeated identities, cycles and unreadable files. | `test`, `test:public-migrations` |
 | LIQ-02 | PostgreSQL and MySQL history with executed and marked-ran entries | Match changeset identity and distinguish marked-ran records. Reject incompatible history tables. | `test:development-postgres`, `test:development-mysql` |
 | LIQ-03 | Native apply, rollback of one or several changesets, and replay | Preview rollback statements in reverse apply order. Reject an invalid or altered count. Verify history after each operation. | `test:native-migrations`, PUB-09 |
+| LIQ-04 | A JSON root includes YAML and XML changelogs | Preserve declaration order and file identities. Generate the rollback SQL on a read-only connection, verify history stays unchanged during preview, then verify the approved native rollback. | `test:native-migrations -- --structured-only` |
+| LIQ-05 | Unsafe includes, external data-file declarations and custom runtime change types | Refuse to stage execution. Keep supported read-only discovery evidence. | `test` |
 | FLOW-01 | Mismatched confirmation, altered files, shared or replaced target | Refuse the write. Use a fresh approval after changes. | `test:native-migrations`, `test:development-postgres` |
 | FLOW-02 | Verified backup recovery to a fresh PostgreSQL database | Refuse a populated restore target. On an eligible empty target, restore the archive and verify migration history. | `test:native-migrations` |
 | FLOW-03 | Imported and cloned Projects views in English and Chinese | Render file previews, statuses and confirmation controls. Exact database-name matching gates execution. | `test:browser` |
@@ -71,5 +75,5 @@ npm run test:public-migrations -- --postgres --case=PUB-05 --case=PUB-09
 - Alembic writes cover supported revisions that use the staged runtime and version graph. Project-specific `env.py`, project imports, external dependencies, `depends_on` and nontransactional migrations need their own execution path.
 - EF Core executes reviewed PostgreSQL SQL exports. Direct project-tool invocation and SQL Server writes remain separate coverage. The real SQL Server test currently checks history.
 - Flyway writes cover supported standalone and literal Spring Boot properties configurations on project PostgreSQL. Maven and Gradle runtime integration, MySQL native execution and licensed Undo remain open.
-- Liquibase writes cover supported standalone formatted SQL on project PostgreSQL. Structured changelog execution, context and label filters, rollback by tag and MySQL native execution remain open.
+- Liquibase writes cover supported formatted SQL and declarative XML, YAML and JSON changelogs on project PostgreSQL. Runtime-dependent migrations, external CSV or SQL resources, context and label filters, rollback by tag and MySQL native execution remain open. PUB-08 still covers source discovery.
 - A history match verifies recorded migrations. Schema drift and data correctness need separate checks.

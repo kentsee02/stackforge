@@ -76,8 +76,8 @@ export function migrationSourcePreview(projectId, source, { request, post, histo
   refresh.hidden = true;
   setText(refresh, rescan);
   details.append(summary, status, guide, form, historyStatus, results, refresh);
-  const eligible = source.scope === 'standalone' && (adapter === 'flyway' || /\.sql$/i.test(source.changelog ?? '')) ||
-    adapter === 'flyway' && source.scope === 'spring' && !source.profile && /(?:^|\/)application\.properties$/i.test(source.source);
+  const eligible = source.scope === 'standalone' ||
+    source.scope === 'spring' && !source.profile && /(?:^|\/)application\.properties$/i.test(source.source);
   const selected = () => ({ targetId: select.value, schema: schema.value, table: table.value });
   const canMigrate = () => eligible && historyTargets.some(target => target.id === select.value && target.projectPostgres);
   let nativeWorking = false;
