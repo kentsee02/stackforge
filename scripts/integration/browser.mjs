@@ -350,10 +350,12 @@ try {
   await page.locator('#language').selectOption('en');
   await writeFile(join(cloned.path, '.env'), 'ALEMBIC_DATABASE_URL=postgresql://browseruser:browser_test_only@127.0.0.1:5432/browser_alembic\n');
   const ownedTarget = { id: 'f'.repeat(64), host: '127.0.0.1', port: 55432, name: 'project_fixture', engine: 'postgres', projectPostgres: true };
+  const ownedMysql = { id: 'b'.repeat(64), host: '127.0.0.1', port: 53306, name: 'mysql_fixture', engine: 'mysql', projectMysql: true };
   await page.route('**/api/projects/' + cloned.id + '/database-discovery', async route => {
     const response = await route.fetch();
     const data = await response.json();
     for (const key of ['sqlMigrationTargets', 'alembicTargets', 'efCoreTargets']) data[key].unshift(ownedTarget);
+    data.sqlMigrationTargets.unshift(ownedMysql);
     return route.fulfill({ response, json: data });
   });
   let nativeExecutions = 0;
@@ -362,7 +364,7 @@ try {
     migrations: [{ revision: '1', file: 'services/billing/storage/changes/V1__Create_invoice.sql' }], planId: 'fixture-plan' };
   await page.route('**/api/projects/' + cloned.id + '/database-native-migration', route => {
     const payload = route.request().postDataJSON();
-    assert.equal(payload.targetId, ownedTarget.id);
+    assert.equal(payload.targetId, payload.adapter === 'liquibase' ? ownedMysql.id : ownedTarget.id);
     if (payload.adapter === 'alembic') {
       assert.equal(payload.operation, 'apply');
       assert.equal(payload.revision, 'start');
@@ -379,7 +381,8 @@ try {
     if (payload.adapter === 'liquibase') {
       assert.equal(payload.operation, 'rollback');
       assert.equal(payload.rollbackCount, 2);
-      return route.fulfill({ json: { ...reviewedPlan, tool: 'Liquibase', version: '4.33.0',
+      assert.equal(payload.table, 'DATABASECHANGELOG');
+      return route.fulfill({ json: { ...reviewedPlan, target: ownedMysql, tool: 'Liquibase', version: '4.33.0',
         undo: ['DROP TABLE invoice;'] } });
     }
     assert.equal(payload.adapter, 'flyway');
@@ -449,11 +452,12 @@ try {
   await page.locator('#language').selectOption('zh-CN');
   await contains('.flyway-preview', '校验和已变化');
   await contains('.liquibase-preview', '标记为已运行');
-  await liquibase.locator(':scope > form select').selectOption(ownedTarget.id);
+  await liquibase.locator(':scope > form select').selectOption(ownedMysql.id);
   const liquibaseNative = liquibase.locator('.native-migration');
   await liquibaseNative.getByLabel('要回滚的变更集数量').fill('2');
   await liquibaseNative.getByRole('button', { name: '预览回滚计划' }).click();
   await contains('.liquibase-preview .native-migration pre', 'DROP TABLE invoice;');
+  await contains('.liquibase-preview .native-migration form', '执行计划前请备份 MySQL。');
   assert.equal(await liquibaseNative.getByRole('button', { name: '执行已审核的回滚' }).isDisabled(), true);
   await flyway.locator(':scope > form select').selectOption(ownedTarget.id);
   const native = flyway.locator('.native-migration');
@@ -462,6 +466,7 @@ try {
   await contains('.flyway-preview .native-migration form', 'services/billing/storage/changes/V1__Create_invoice.sql');
   assert.equal(await native.getByRole('button', { name: '应用已审核的迁移' }).isDisabled(), true);
   await page.locator('#language').selectOption('en');
+  await contains('.liquibase-preview .native-migration form', 'A failed or cancelled migration can leave schema changes committed.');
   const confirm = native.locator('input');
   await confirm.fill('Project_fixture');
   assert.equal(await native.getByRole('button', { name: 'Apply reviewed migrations' }).isDisabled(), true);

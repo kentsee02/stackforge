@@ -7,9 +7,11 @@ import { localSession } from '../adapters/local.mjs';
 import { migrationImage, runMigrationContainer } from '../docker/migration-container.mjs';
 import { databaseKey, discoverDatabases } from '../discovery.mjs';
 import { flywayChecksum, previewFlyway } from './flyway-preview.mjs';
+import { implicitSpringFlywayProperties } from './flyway-config.mjs';
 import { previewLiquibase } from './liquibase-preview.mjs';
 import { reviewedStructuredLiquibase } from './liquibase-execution-source.mjs';
 import { readMigrationFile } from './migration-files.mjs';
+import { mysqlHistoryTable } from './mysql-history.mjs';
 import { postgresHistoryTable } from './postgres-history-table.mjs';
 import { compareSqlMigrationHistory } from './sql-migration-history.mjs';
 
@@ -30,9 +32,10 @@ const projectId = /^[a-f\d]{64}$/;
 const portableName = /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/;
 
 function reviewedConfig(adapter, source, text) {
+  if (adapter === 'flyway' && source.implicitLocations) return implicitSpringFlywayProperties(text);
   let lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map(line => line.trim());
   if (source.scope === 'spring') {
-    if (lines.some(line => /^#---$|^spring\.config\.(?:import|activate)\b/i.test(line))) return false;
+    if (lines.some(line => /^[#!]---$|^spring\.config\.(?:import|activate)\b/i.test(line))) return false;
     const prefix = 'spring.' + adapter + '.';
     lines = lines.filter(line => line.toLowerCase().startsWith(prefix)).map(line => line.slice('spring.'.length));
     if (!lines.length) return false;
@@ -127,6 +130,21 @@ export async function migrationDatabaseIdentity(session, name, { schema, table }
   return { id: databaseKey(result.slice(0, 3)), startedAt: result[1], oid: result[2], populated: result[3] };
 }
 
+async function mysqlDatabaseIdentity(session, scope, name, history, adapter) {
+  const first = await scope.snapshot();
+  const tracked = adapter === 'liquibase' ? "'DATABASECHANGELOGLOCK','" + history.table + "'" : "'" + history.table + "'";
+  const raw = await session.query("SELECT JSON_ARRAY(DATABASE(), @@server_uuid, CAST(EXISTS(" +
+    "SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND BINARY table_name NOT IN (" + tracked + ") " +
+    "UNION ALL SELECT 1 FROM information_schema.routines WHERE routine_schema = DATABASE() " +
+    "UNION ALL SELECT 1 FROM information_schema.events WHERE event_schema = DATABASE() " +
+    "UNION ALL SELECT 1 FROM information_schema.triggers WHERE trigger_schema = DATABASE()) AS UNSIGNED));", name);
+  const [database, uuid, populated] = JSON.parse(raw);
+  const last = await scope.snapshot();
+  if (database !== name || uuid !== first.uuid || uuid !== last.uuid || ![0, 1].includes(populated)) throw new Error(unsafeHistory);
+  if (first.cursor !== last.cursor) throw new Error(changed);
+  return { id: databaseKey(uuid, name), cursor: last.cursor, populated: populated === 1 };
+}
+
 function reviewedHistory(state, migrations, adapter) {
   if (state.status === 'history-missing') return { applied: 0, pending: migrations };
   if (!['recorded', 'pending'].includes(state.status) || state.items?.length !== migrations.length) throw new Error(unsafeHistory);
@@ -148,8 +166,13 @@ function reviewedHistory(state, migrations, adapter) {
 }
 
 async function rollbackOrder(session, target, history, migrations, applied, folder) {
-  const table = '"' + history.schema + '"."' + history.table + '"';
-  const rows = JSON.parse(await session.query(`BEGIN READ ONLY; SET LOCAL search_path = pg_catalog;
+  const mysql = target.engine === 'mysql';
+  const table = mysql ? '`' + history.table + '`' : '"' + history.schema + '"."' + history.table + '"';
+  const rows = mysql ? (await session.query(`START TRANSACTION READ ONLY;
+    SELECT JSON_ARRAY(id, author, filename, orderexecuted, CAST(dateexecuted AS CHAR))
+    FROM ${table} ORDER BY dateexecuted, orderexecuted LIMIT ${applied + 1}; COMMIT;`, target.name))
+    .split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)) :
+    JSON.parse(await session.query(`BEGIN READ ONLY; SET LOCAL search_path = pg_catalog;
     SELECT coalesce(jsonb_agg(jsonb_build_array(id, author, filename, orderexecuted, dateexecuted::text)
       ORDER BY dateexecuted, orderexecuted), '[]')
     FROM (SELECT id, author, filename, dateexecuted, orderexecuted FROM ONLY ${table}
@@ -157,40 +180,44 @@ async function rollbackOrder(session, target, history, migrations, applied, fold
   if (!Array.isArray(rows) || rows.length !== applied || rows.some(([id, author, file, order, date], index) => {
     const migration = migrations[index];
     return id !== migration.id || author !== migration.author || file !== migration.file.slice(folder.length) ||
-      !Number.isInteger(order) || (index && order <= rows[index - 1][3]) || !date;
+      !Number.isInteger(order) || !date || (index && date === rows[index - 1][4] && order === rows[index - 1][3]);
   })) throw new Error(unsafeHistory);
   return databaseKey(rows);
 }
 
-function liquibaseInvocation({ credentials, jdbc, history, entrypoint, command, count, readOnly = false }) {
-  const url = readOnly ? jdbc + '&options=-c%20default_transaction_read_only%3Don' : jdbc;
+function liquibaseInvocation({ credentials, jdbc, history, entrypoint, command, count, mysql, readOnly = false }) {
+  const readOnlyOption = mysql ? '&sessionVariables=transaction_read_only=1' : '&options=-c%20default_transaction_read_only%3Don';
+  const url = readOnly ? jdbc + readOnlyOption : jdbc;
   return {
     env: { LIQUIBASE_COMMAND_URL: url, LIQUIBASE_COMMAND_USERNAME: credentials.user, LIQUIBASE_COMMAND_PASSWORD: credentials.password },
     args: ['--secure-parsing=true', '--search-path=/stackforge', '--database-changelog-table-name=' + history.table,
-      command, '--changelog-file=' + entrypoint, '--default-schema-name=' + history.schema,
-      '--liquibase-schema-name=' + history.schema, ...(count ? ['--count=' + count] : [])]
+      command, '--changelog-file=' + entrypoint, ...(mysql ? ['--driver=org.mariadb.jdbc.Driver'] :
+        ['--default-schema-name=' + history.schema, '--liquibase-schema-name=' + history.schema]),
+      ...(count ? ['--count=' + count] : [])]
   };
 }
 
 function rollbackSql(output, range, folder) {
-  const start = output.search(/^-- Rollback \d+ Change\(s\) Script[ \t]*\r?$/m);
-  const rows = [...output.matchAll(/^-- Rolling Back ChangeSet:\s+([^\r\n]+)/gm)].map(item => item[1].trimEnd());
+  const start = output.search(/^--[ \t]+Rollback \d+ Change\(s\) Script[ \t]*\r?$/m);
+  const rows = [...output.matchAll(/^--[ \t]+Rolling Back ChangeSet:[ \t]+([^\r\n]+)/gm)].map(item => item[1].trimEnd());
   const expected = range.map(item => [item.file.slice(folder.length), item.id, item.author].join('::'));
   if (start < 0 || output.length > 256 * 1024 || rows.length !== expected.length ||
       rows.some((row, index) => row !== expected[index])) throw new Error('Liquibase could not generate reviewable rollback SQL for this range.');
-  return output.slice(start).replace(/^-- (?:Ran at|Against):[^\r\n]*\r?\n/gm, '').trim();
+  return output.slice(start).replace(/^--[ \t]+(?:Ran at|Against):[^\r\n]*\r?\n/gm, '').trim();
 }
 
 export async function nativeSqlMigration({ project, payload, target, client, signal, directory, verifyShared }) {
   const { adapter, operation, mode, sourceId } = payload;
   if (!Object.hasOwn(tools, adapter) || !['apply', 'rollback'].includes(operation) || !['preview', 'execute'].includes(mode) ||
-      !projectId.test(sourceId ?? '') || target.engine !== 'postgres') throw new Error(badSource);
+      !projectId.test(sourceId ?? '') || !['mysql', 'postgres'].includes(target.engine)) throw new Error(badSource);
+  const mysql = target.engine === 'mysql';
   if (adapter === 'flyway' && operation === 'rollback') throw new Error('Flyway rollback requires an eligible Undo tool and migration.');
   const tool = tools[adapter];
   const scanned = await discoverDatabases(project, { includeMigrations: true, includeConnections: true });
   const { identity } = scanned;
   const source = await readSource(project, adapter, sourceId, scanned, signal);
-  const history = postgresHistoryTable(payload.schema, payload.table, tool.table);
+  const history = mysql ? mysqlHistoryTable(target.name, payload.table ?? (adapter === 'liquibase' ? 'DATABASECHANGELOG' : tool.table)) :
+    postgresHistoryTable(payload.schema, payload.table, tool.table);
   const scope = await client.migrationScope();
   const image = await migrationImage(scope.cli, tool.image, mode === 'preview');
   if (!image) throw new Error(changed);
@@ -198,7 +225,8 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
   const session = localSession(target, credentials, client.command, signal);
   const compare = () => compareSqlMigrationHistory({ adapter, preview: source.preview, history, checksums: source.checksums,
     resourcePrefix: source.folder, selection: target, credentials, resolveClient: async () => client, signal, includeFingerprint: true });
-  const readIdentity = () => migrationDatabaseIdentity(session, target.name, history, adapter);
+  const readIdentity = () => mysql ? mysqlDatabaseIdentity(session, scope, target.name, history, adapter) :
+    migrationDatabaseIdentity(session, target.name, history, adapter);
   const before = await readIdentity();
   const state = await compare();
   const migrations = source.preview.migrations ?? source.preview.changes;
@@ -231,10 +259,13 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
     if (rollback && order !== await rollbackOrder(session, target, history, migrations, applied, source.folder)) throw new Error(changed);
   }
   const application = 'stackforge_migration_' + randomBytes(12).toString('hex');
-  const jdbc = 'jdbc:postgresql://127.0.0.1:' + scope.port + '/' + target.name + '?ApplicationName=' + application;
+  const location = '://127.0.0.1:' + scope.port + '/' + target.name;
+  const jdbc = mysql ? 'jdbc:mysql' + location + '?permitMysqlScheme=true&sslMode=trust&useSsl=true&trustServerCertificate=true' +
+    '&allowLocalInfile=false&connectionAttributes=stackforgeMigration:' + application :
+    'jdbc:postgresql' + location + '?ApplicationName=' + application;
   const runJob = invocation => runMigrationContainer({ ...scope, ...invocation, image, files: source.files, directory, signal, verify,
     cancel: () => scope.cancel(application) });
-  const liquibase = ({ command, readOnly }) => liquibaseInvocation({ credentials, jdbc, history, entrypoint: source.entrypoint, command, count, readOnly });
+  const liquibase = ({ command, readOnly }) => liquibaseInvocation({ credentials, jdbc, history, entrypoint: source.entrypoint, command, count, mysql, readOnly });
   let undo = explicit ? undoGroups.flat() : undefined;
   if (rollback && !undo) {
     if (!source.structured) throw new Error('Each selected changeset needs an explicit rollback statement.');
@@ -267,7 +298,8 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
   const invocation = adapter === 'flyway' ? {
     env: { FLYWAY_URL: jdbc, FLYWAY_USER: credentials.user, FLYWAY_PASSWORD: credentials.password },
     args: ['-locations=filesystem:/stackforge', '-defaultSchema=' + history.schema, '-table=' + history.table,
-      '-baselineOnMigrate=false', '-validateOnMigrate=true', '-group=true', '-cleanDisabled=true', '-placeholderReplacement=false',
+      '-baselineOnMigrate=false', '-validateOnMigrate=true', '-group=' + !mysql, '-cleanDisabled=true', '-placeholderReplacement=false',
+      ...(mysql ? ['-driver=org.mariadb.jdbc.Driver'] : []),
       ...(flywayTarget ? ['-target=' + payload.revision] : []), 'migrate']
   } : liquibase({ command: rollback ? 'rollback-count' : 'update' });
   try {
@@ -277,6 +309,7 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
     return { status: 'execution-failed' };
   }
   try {
+    await scope.verify();
     const after = await readIdentity();
     const historyAfter = await compare();
     const verified = reviewedHistory(historyAfter, migrations, adapter);

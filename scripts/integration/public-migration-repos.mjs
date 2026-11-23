@@ -19,19 +19,21 @@ const cases = [
   { repo: 'nanotaboada/java.samples.spring.boot', commit: '2cbc59f0d968951a5f80b6624ec1fd27c93363ed', adapter: 'flyway', live: true },
   { repo: 'BootcampToProd/flyway-with-spring-boot-maven', commit: '046d4ae118e99f9197bea434daf870873c789b2e', adapter: 'flyway' },
   { repo: 'h3yzack/springboot3-liquibase-example', commit: 'baa98678824b59476bf09805ac516e4aa8729916', adapter: 'liquibase', live: true },
-  { repo: 'jhipster/jhipster-sample-app', commit: '6b000b5d23a36c45e01472471b84a44fa2464044', adapter: 'liquibase' }
+  { repo: 'jhipster/jhipster-sample-app', commit: '6b000b5d23a36c45e01472471b84a44fa2464044', adapter: 'liquibase' },
+  { repo: 'talenteddeveloper/spring-boot-flyway-demo', commit: '77403a2a10af102452b6f026bf6473021decbf99', adapter: 'flyway', number: 10 }
 ];
-const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12]];
+const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12], [2]];
 const selectedCases = new Set(process.argv.filter(arg => arg.startsWith('--case=')).map(arg => arg.slice('--case='.length)));
-assert.ok([...selectedCases].every(value => /^PUB-0[1-9]$/.test(value)), 'Select a case from PUB-01 through PUB-09.');
-const selected = number => !selectedCases.size || selectedCases.has('PUB-0' + number);
+assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|10|11)$/.test(value)), 'Select a case from PUB-01 through PUB-11.');
+const selected = number => !selectedCases.size || selectedCases.has('PUB-' + String(number).padStart(2, '0'));
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-public-migrations-')));
 const repositories = new Map();
 const live = process.argv.includes('--postgres');
+const liveMysql = process.argv.includes('--mysql');
 const efCli = process.argv.includes('--ef-cli');
 const databaseProjects = new Set();
 const app = createApp({
-  stateDir: live ? join(root, 'state', 'jobs') : false,
+  stateDir: live || liveMysql ? join(root, 'state', 'jobs') : false,
   clone(url, parent, options) {
     return cloneGithub(url, parent, { ...options, command(program, args, config) {
       const separator = args.indexOf('--');
@@ -43,22 +45,22 @@ const app = createApp({
   }
 });
 
-async function assertPostgresMigration(api, project, adapter) {
+async function assertLiveMigration(api, project, adapter, engine = 'postgres') {
   const server = createServer().listen(0, '127.0.0.1');
   await once(server, 'listening');
   const { port } = server.address();
   await new Promise(resolve => server.close(resolve));
   const endpoint = project.id + '/database-development';
-  const readTarget = async () => (await api(endpoint)).options.find(item => item.engine === 'postgres' && item.canCreate);
+  const readTarget = async () => (await api(endpoint)).options.find(item => item.engine === engine && item.canCreate);
   let eligible = await readTarget();
-  if (!eligible && adapter === 'flyway') {
+  if (!eligible && adapter === 'flyway' && engine === 'postgres') {
     // The public Spring sample defaults to SQLite. Keep its migration files and
     // Flyway config intact, and declare the disposable PostgreSQL test target.
     await mkdir(join(project.path, 'prisma'), { recursive: true });
     await writeFile(join(project.path, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }', { flag: 'wx' });
     eligible = await readTarget();
   }
-  assert.ok(eligible, 'Project PostgreSQL was not available for ' + adapter);
+  assert.ok(eligible, 'Project ' + engine + ' was not available for ' + adapter);
   const name = 'public_' + adapter.replaceAll('-', '_');
   const input = { targetId: eligible.id, port, name };
   const { plan } = await api(endpoint, { mode: 'preview', ...input });
@@ -89,14 +91,14 @@ async function assertPostgresMigration(api, project, adapter) {
   if (adapter === 'ef-core') return assertEfCoreExport(api, project, discovery, name);
   if (['flyway', 'liquibase'].includes(adapter)) {
     const { id: sourceId } = discovery.migrationSources.find(item => item.adapter === adapter && ['standalone', 'spring'].includes(item.scope));
-    const { id: targetId } = discovery.sqlMigrationTargets.find(item => item.projectPostgres);
+    const { id: targetId } = discovery.sqlMigrationTargets.find(item => engine === 'mysql' ? item.projectMysql : item.projectPostgres);
     const endpoint = project.id + '/database-native-migration';
     const selection = { adapter, sourceId, targetId, operation: 'apply' };
     const check = () => api(project.id + '/database-' + adapter + '-preview', { sourceId, targetId });
     const previewPlan = extras => api(endpoint, { ...selection, ...extras, mode: 'preview' });
     const execute = (planId, extras) => api(endpoint, { ...selection, ...extras, mode: 'execute', planId, confirmName: name });
     const plan = await previewPlan();
-    if (adapter === 'flyway') {
+    if (adapter === 'flyway' && engine === 'postgres') {
       // The upstream seed scripts insert integer literals into a Boolean column.
       // The native PostgreSQL attempt should fail as a group. V1 itself is portable.
       assert.equal((await execute(plan.planId)).status, 'execution-failed');
@@ -115,6 +117,16 @@ async function assertPostgresMigration(api, project, adapter) {
     const after = await check();
     assert.equal(after.database.status, 'recorded');
     assert.ok(after.database.items.every(item => item.state === (adapter === 'flyway' ? 'applied' : 'recorded')));
+    if (adapter === 'liquibase' && engine === 'mysql') {
+      const rollback = { ...selection, operation: 'rollback', rollbackCount: plan.migrations.length };
+      const undo = await api(endpoint, { ...rollback, mode: 'preview' });
+      assert.match(undo.undo.join('\n'), /DROP VIEW[^;]*testView[\s\S]*DROP TABLE[^;]*test_table/i);
+      assert.equal((await check()).database.status, 'recorded');
+      const rolledBack = await api(endpoint, { ...rollback, mode: 'execute', planId: undo.planId, confirmName: name });
+      assert.equal(rolledBack.status, 'rolled-back');
+      assert.ok((await check()).database.items.every(item => item.state === 'pending'));
+      return ['apply', 'rollback-view-and-table', 'history'];
+    }
     return ['apply', 'history'];
   }
   const sourceId = discovery.migrationSources.find(item => item.adapter === 'alembic').id;
@@ -210,8 +222,8 @@ try {
     assert.equal(response.status, expected, data.error);
     return data;
   };
-  const downloads = await Promise.allSettled(cases.map(async ({ repo, commit }, index) => {
-    if (!selected(index + 1)) return;
+  const downloads = await Promise.allSettled(cases.map(async ({ repo, commit, number }, index) => {
+    if (!selected(number ?? index + 1)) return;
     const path = join(root, 'upstream-' + index);
     const url = 'https://github.com/' + repo;
     await mkdir(path);
@@ -227,7 +239,7 @@ try {
     return { path, url };
   }));
   for (const [index, item] of cases.entries()) {
-    if (!selected(index + 1)) continue;
+    if (!selected(item.number ?? index + 1)) continue;
     const download = downloads[index];
     if (download.status === 'rejected') throw new Error('Could not fetch pinned repository ' + item.repo, { cause: download.reason });
     const { path, url } = download.value;
@@ -242,27 +254,34 @@ try {
     assert.ok(importedResults.some(result => ['ready', 'configuration-needed'].includes(result.status) && result.count > 0),
       'The expected public repository migration preview is unavailable: ' + item.repo);
     if (live && (item.live || ['drizzle', 'alembic'].includes(item.adapter) || efCli && item.efExport)) {
-      console.log(JSON.stringify({ repository: item.repo, postgres: await assertPostgresMigration(api, cloned, item.adapter) }));
+      console.log(JSON.stringify({ repository: item.repo, postgres: await assertLiveMigration(api, cloned, item.adapter) }));
+    }
+    if (liveMysql && item.number === 10) {
+      console.log(JSON.stringify({ repository: item.repo, mysql: await assertLiveMigration(api, cloned, item.adapter, 'mysql') }));
     }
   }
-  if (live && selected(9)) {
+  for (const { number, engine, path } of [
+    { number: 9, engine: 'postgres', path: 'liquibase-integration-tests/src/test/resources/changelogs/pgsql/complete/basic.formatted.sql' },
+    { number: 11, engine: 'mysql', path: 'liquibase-integration-tests/src/test/resources/changelogs/mysql/complete/createtable.and.view.changelog.xml' }
+  ]) {
+    if (!(engine === 'mysql' ? liveMysql : live) || !selected(number)) continue;
     const commit = '75773ed9b45b0a5adf3c42872d2e5494da669427';
-    const path = 'liquibase-integration-tests/src/test/resources/changelogs/pgsql/complete/basic.formatted.sql';
-    const checkout = join(root, 'liquibase-upstream');
+    const checkout = join(root, 'liquibase-upstream-' + engine);
     await mkdir(checkout);
     const git = args => run('git', args, { cwd: checkout, timeout: 120000 });
     await git(['init']);
     await git(['fetch', '--depth=1', 'https://github.com/liquibase/liquibase.git', commit]);
-    const sql = await git(['show', commit + ':' + path]);
-    assert.match(sql, /^--liquibase formatted sql/);
-    const wrapper = join(root, 'liquibase-official-postgres-fixture');
+    const contents = await git(['show', commit + ':' + path]);
+    const filename = path.split('/').at(-1);
+    assert.match(contents, engine === 'mysql' ? /<databaseChangeLog\b/ : /^--liquibase formatted sql/);
+    const wrapper = join(root, 'liquibase-official-' + engine + '-fixture');
     await mkdir(join(wrapper, 'prisma'), { recursive: true });
-    await writeFile(join(wrapper, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
-    await writeFile(join(wrapper, 'liquibase.properties'), 'changeLogFile=basic.formatted.sql\n');
-    await writeFile(join(wrapper, 'basic.formatted.sql'), sql);
+    await writeFile(join(wrapper, 'prisma/schema.prisma'), 'datasource db { provider = "' + (engine === 'postgres' ? 'postgresql' : engine) + '" }');
+    await writeFile(join(wrapper, 'liquibase.properties'), 'changeLogFile=' + filename + '\n');
+    await writeFile(join(wrapper, filename), contents);
     const imported = await api('import', { path: wrapper }, 201);
     console.log(JSON.stringify({ repository: 'liquibase/liquibase', commit, file: path,
-      postgres: await assertPostgresMigration(api, imported, 'liquibase') }));
+      [engine]: await assertLiveMigration(api, imported, 'liquibase', engine) }));
   }
 } finally {
   for (const id of databaseProjects) {

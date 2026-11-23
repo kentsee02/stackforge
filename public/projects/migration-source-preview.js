@@ -79,7 +79,7 @@ export function migrationSourcePreview(projectId, source, { request, post, histo
   const eligible = source.scope === 'standalone' ||
     source.scope === 'spring' && !source.profile && /(?:^|\/)application\.properties$/i.test(source.source);
   const selected = () => ({ targetId: select.value, schema: schema.value, table: table.value });
-  const canMigrate = () => eligible && historyTargets.some(target => target.id === select.value && target.projectPostgres);
+  const canMigrate = () => eligible && historyTargets.some(target => target.id === select.value && (target.projectPostgres || target.projectMysql));
   let nativeWorking = false;
   const native = eligible ? nativeMigrationControls(projectId, source, { request, post }, {
     selection: selected,

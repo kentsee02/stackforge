@@ -6,12 +6,14 @@ const elements = new Set([
   'addNotNullConstraint', 'dropNotNullConstraint', 'addDefaultValue', 'dropDefaultValue',
   'createIndex', 'dropIndex', 'addUniqueConstraint', 'dropUniqueConstraint', 'addPrimaryKey', 'dropPrimaryKey',
   'addForeignKeyConstraint', 'dropForeignKeyConstraint', 'createSequence', 'dropSequence', 'alterSequence',
+  'createView', 'dropView', 'renameView',
   'column', 'columns', 'constraints', 'insert', 'update', 'delete', 'where', 'sql'
 ]);
 const simpleFields = new Set([
   'id', 'author', 'file', 'path', 'relativeToChangelogFile', 'errorIfMissing', 'errorIfMissingOrEmpty',
   'endsWithFilter', 'minDepth', 'maxDepth', 'tableName', 'oldTableName', 'newTableName', 'schemaName',
   'columnName', 'oldColumnName', 'newColumnName', 'newDataType', 'columnDataType', 'indexName', 'constraintName',
+  'viewName', 'oldViewName', 'newViewName', 'replaceIfExists', 'selectQuery',
   'sequenceName', 'name', 'type', 'unique', 'nullable', 'primaryKey', 'primaryKeyName', 'uniqueConstraintName', 'autoIncrement',
   'columnNames', 'baseTableName', 'baseColumnNames', 'baseTableSchemaName', 'referencedTableName',
   'referencedColumnNames', 'referencedTableSchemaName', 'onDelete', 'onUpdate', 'deferrable', 'initiallyDeferred',

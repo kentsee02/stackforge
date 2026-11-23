@@ -40,7 +40,7 @@ function properties(text) {
 function springSettings(file, text) {
   const yaml = /\.ya?ml$/i.test(file);
   const profileFile = /application-([\w-]{1,48})\.(?:properties|ya?ml)$/i.exec(file)?.[1];
-  return text.replace(/^\uFEFF/, '').split(yaml ? /^---[ \t]*(?:#.*)?\r?$/m : /^#---[ \t]*\r?$/m)
+  return text.replace(/^\uFEFF/, '').split(yaml ? /^---[ \t]*(?:#.*)?\r?$/m : /^[#!]---[ \t]*\r?$/m)
     .slice(0, 16).flatMap((document, index) => {
       const values = settings(yaml ? '' : document, yaml ? [document] : []);
       const changeLog = [...(values.get('spring.liquibase.change-log') ?? []), ...(values.get('spring.liquibase.changeLog') ?? [])];

@@ -10,6 +10,15 @@ const relevant = new Set(['locations', 'enabled', 'skip', 'configfiles', 'workin
 const normalized = key => key.toLowerCase().replaceAll('-', '');
 const unquote = value => /^(["'])([^"'\\]*)\1$/.exec(value.trim())?.[2] ?? value.trim();
 
+export function implicitSpringFlywayProperties(text) {
+  return Boolean(text) && text.replace(/^\uFEFF/, '').split(/\r?\n/).every(line => {
+    const value = line.trim();
+    if (!value || /^[#!]/.test(value)) return value !== '#---' && value !== '!---';
+    const entry = /^([\w.-]+)\s*[:=]\s*(.*)$/.exec(value);
+    return entry && !entry[2].endsWith('\\') && !/^spring[.-](?:flyway|config|profiles)(?:[.-]|$)/i.test(entry[1]);
+  });
+}
+
 function put(options, key, value) {
   key = normalized(key);
   if (relevant.has(key)) options.set(key, options.has(key) ? undefined : value);
@@ -64,7 +73,7 @@ function springSettings(file, text) {
   const yaml = /\.ya?ml$/i.test(file);
   const profileFile = /application-([\w-]+)\.(?:properties|ya?ml)$/i.exec(file)?.[1];
   const sources = [];
-  for (const [index, document] of text.replace(/^\uFEFF/, '').split(yaml ? /^---[ \t]*(?:#.*)?\r?$/m : /^#---[ \t]*\r?$/m).entries()) {
+  for (const [index, document] of text.replace(/^\uFEFF/, '').split(yaml ? /^---[ \t]*(?:#.*)?\r?$/m : /^[#!]---[ \t]*\r?$/m).entries()) {
     // Convert simple indented YAML lists to scalars for the shared JVM settings reader.
     const flat = yaml ? document.replace(/^( *)(locations|sql-migration-suffixes):[ \t]*(?:#.*)?\r?\n((?: +-[ \t]+[^\r\n]+(?:\r?\n|$))+)/gm,
       (_, indent, key, items) => indent + key + ': [' + items.trimEnd().split(/\r?\n/).map(item =>
@@ -157,7 +166,8 @@ export async function flywaySources({ files, pom, configs, read }) {
 
   if (runtimeFile || maven || configs.some(file => /application/.test(file))) {
     const spring = [];
-    for (const file of configs.filter(file => /(?:^|\/)application(?:-[\w-]+)?\.(?:properties|ya?ml)$/i.test(file)).slice(0, 24)) {
+    const applicationConfigs = configs.filter(file => /(?:^|\/)application(?:-[\w-]+)?\.(?:properties|ya?ml)$/i.test(file));
+    for (const file of applicationConfigs.slice(0, 24)) {
       const candidates = springSettings(file, await read(file));
       if (runtimeFile || maven) spring.push(...candidates);
       else spring.push(...candidates.filter(item => item.hasFlyway));
@@ -171,7 +181,13 @@ export async function flywaySources({ files, pom, configs, read }) {
         item.hasProfile && defaults.length > 1 && !item.options.has('locations');
       sources.push({ ...configuration(item.file, 'spring', inherited, { profile: item.profile, unsupported }), document: item.document });
     }
-    if (!defaults.length && runtimeFile) sources.push(configuration(runtimeFile, 'runtime', new Map()));
+    if (!defaults.length && runtimeFile) {
+      const file = 'src/main/resources/application.properties';
+      const implicit = !spring.length && applicationConfigs.length === 1 && applicationConfigs[0] === file &&
+        implicitSpringFlywayProperties(await read(file));
+      sources.push(implicit ? { ...configuration(file, 'spring', new Map()), implicitLocations: true } :
+        configuration(runtimeFile, 'runtime', new Map()));
+    }
   }
   return { sources: sources.slice(0, 32), limited: sources.length > 32 || profiles.length > 16 };
 }

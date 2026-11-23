@@ -146,6 +146,9 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
           operation === 'apply' ? 'Review the listed files. Applying the plan runs their SQL against the selected database.' :
           'Review the rollback SQL. It can remove schema objects or data.';
       setText(note, message);
+      setText(recovery, result.target.engine === 'mysql'
+        ? 'Back up the MySQL database before running this plan. A failed or cancelled migration can leave schema changes committed.'
+        : 'Download a verified backup from the project database controls before running the plan.');
       setText(submit, operation === 'apply' ? 'Apply reviewed migrations' : 'Run reviewed rollback');
       confirm.placeholder = name;
       submit.disabled = true;

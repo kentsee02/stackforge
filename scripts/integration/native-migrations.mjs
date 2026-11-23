@@ -40,14 +40,14 @@ async function api(endpoint, data, expected = 200, authorized = true) {
   return JSON.parse(text);
 }
 
-async function database(id, name) {
+async function database(id, name, engine = 'postgres') {
   const listener = createServer().listen(0, '127.0.0.1');
   await once(listener, 'listening');
   const { port } = listener.address();
   await new Promise(resolve => listener.close(resolve));
   const endpoint = id + '/database-development';
   const { options } = await api(endpoint);
-  const targetId = options.find(item => item.engine === 'postgres' && item.canCreate).id;
+  const targetId = options.find(item => item.engine === engine && item.canCreate).id;
   const input = { name, port, targetId };
   const { plan } = await api(endpoint, { mode: 'preview', ...input });
   records.add(id);
@@ -59,6 +59,9 @@ async function database(id, name) {
   assert.equal((await api(endpoint)).status, 'ready');
   const { development } = JSON.parse(await readFile(stateFile, 'utf8'));
   const { container } = development[id];
+  if (engine === 'mysql') return (sql, useDatabase = true) => docker(['exec', container, 'sh', '-c',
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --no-defaults --protocol=SOCKET -uroot --batch --raw --skip-column-names "$@"',
+    'stackforge', ...(useDatabase ? ['--database=' + name] : []), '-e', sql]);
   return sql => docker(['exec', container, 'psql', '-XqAt', '-U', 'stackforge', '-d', name, '-v', 'ON_ERROR_STOP=1', '-c', sql]);
 }
 
@@ -390,9 +393,108 @@ async function testStructuredLiquibase() {
   console.log('Verified structured Liquibase JSON, YAML and XML with read-only rollback preview and native rollback.');
 }
 
+async function testNativeMysql() {
+  for (const adapter of ['flyway', 'liquibase']) {
+    const project = join(root, adapter + '-mysql');
+    await mkdir(join(project, 'prisma'), { recursive: true });
+    await writeFile(join(project, 'prisma/schema.prisma'), 'datasource db { provider = "mysql" }');
+    const name = adapter + '_mysql_fixture';
+    if (adapter === 'flyway') {
+      await mkdir(join(project, 'sql'));
+      await writeFile(join(project, 'flyway.conf'), 'flyway.locations=filesystem:sql\n');
+      await writeFile(join(project, 'sql/V1__first.sql'), 'CREATE TABLE first_item (id int PRIMARY KEY);\n');
+      await writeFile(join(project, 'sql/V2__failing.sql'), 'CREATE TABLE partial_item (id int PRIMARY KEY);\nSELECT * FROM absent_table;\n');
+    } else {
+      await writeFile(join(project, 'liquibase.properties'), 'changeLogFile=changelog.json\n');
+      await writeFile(join(project, 'changelog.json'), JSON.stringify({ databaseChangeLog: ['first_item', 'second_item'].map((tableName, index) => ({
+        changeSet: { id: String(index + 1), author: 'fixture', changes: [{ createTable: { tableName, columns: [{ column: { name: 'id', type: 'int' } }] } }] }
+      })) }));
+    }
+    const { id } = await api('import', { path: project }, 201);
+    const query = await database(id, name, 'mysql');
+    const discovery = await api(id + '/database-discovery');
+    const targetId = discovery.sqlMigrationTargets.find(item => item.projectMysql).id;
+    const sourceId = discovery.migrationSources.find(item => item.adapter === adapter).id;
+    const request = (mode, operation, fields, expected) =>
+      api(id + '/database-native-migration', { adapter, targetId, sourceId, mode, operation, ...fields }, expected);
+    const revision = adapter === 'flyway' ? { revision: '1' } : {};
+    const beforeReplacement = await request('preview', 'apply', revision);
+    assert.equal(beforeReplacement.target.engine, 'mysql');
+    await query('DROP DATABASE ' + name + '; CREATE DATABASE ' + name + ';', false);
+    const stale = await request('execute', 'apply', { ...revision, planId: beforeReplacement.planId, confirmName: name }, 409);
+    assert.match(stale.error, /preview it again/i);
+    assert.equal((await query('SHOW TABLES;')).trim(), '');
+    const apply = await request('preview', 'apply', revision);
+    if (adapter === 'flyway') {
+      const shared = join(root, 'mysql-shared');
+      await mkdir(shared);
+      await writeFile(join(shared, '.env'), 'DATABASE_URL=mysql://fixture@127.0.0.1:' + apply.target.port + '/' + name + '\n');
+      await api('import', { path: shared }, 201);
+      const rejected = await request('execute', 'apply', { ...revision, planId: apply.planId, confirmName: name }, 409);
+      assert.match(rejected.error, /shared database/i);
+      await writeFile(join(shared, '.env'), '');
+    }
+    const applied = await request('execute', 'apply', { ...revision, planId: apply.planId, confirmName: name });
+    assert.equal(applied.status, 'applied');
+    if (adapter === 'flyway') {
+      assert.match(await query('SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL;'), /^1\t1/);
+      const failure = await request('preview', 'apply');
+      assert.equal((await request('execute', 'apply', { planId: failure.planId, confirmName: name })).status, 'execution-failed');
+      assert.match(await query("SHOW TABLES LIKE 'partial_item';"), /^partial_item/);
+      assert.match(await query("SELECT success FROM flyway_schema_history WHERE version='2';"), /^0/);
+      console.log('Verified Flyway MySQL target selection, stale database replacement, and partial DDL reporting.');
+    } else {
+      const undo = await request('preview', 'rollback', { rollbackCount: 2 });
+      assert.match(undo.undo.join('\n'), /DROP TABLE[^;]*second_item[\s\S]*DROP TABLE[^;]*first_item/i);
+      assert.equal((await query('SELECT count(*) FROM DATABASECHANGELOG;')).trim(), '2');
+      assert.match(await query("SHOW TABLES LIKE 'first_item';"), /^first_item/);
+      assert.equal((await request('execute', 'rollback', { rollbackCount: 2, planId: undo.planId, confirmName: name })).status, 'rolled-back');
+      assert.equal((await query('SELECT count(*) FROM DATABASECHANGELOG;')).trim(), '0');
+      assert.equal((await query("SHOW TABLES LIKE '%_item';")).trim(), '');
+      await writeFile(join(project, 'changelog.json'), JSON.stringify({ databaseChangeLog: [{
+        changeSet: { id: 'slow', author: 'fixture', changes: [{ sql: { sql: 'SELECT SLEEP(90)' } },
+          { createTable: { tableName: 'cancelled_item', columns: [{ column: { name: 'id', type: 'int' } }] } }] }
+      }] }));
+      const slow = await request('preview', 'apply');
+      const active = new AbortController();
+      const running = fetch(origin + '/api/projects/' + id + '/database-native-migration', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, signal: active.signal,
+        body: JSON.stringify({ adapter, targetId, sourceId, mode: 'execute', operation: 'apply', planId: slow.planId, confirmName: name })
+      }).catch(error => error);
+      const workerSessions = condition => query("SELECT count(*) FROM performance_schema.session_connect_attrs attr " +
+        "JOIN performance_schema.threads thread ON thread.PROCESSLIST_ID=attr.PROCESSLIST_ID " +
+        "WHERE attr.ATTR_NAME='stackforgeMigration' AND thread.PROCESSLIST_DB=DATABASE()" + condition + ';');
+      try {
+        let sleeping = false;
+        for (let retry = 0; retry < 60; retry++) {
+          sleeping = (await workerSessions(" AND thread.PROCESSLIST_INFO LIKE '%SLEEP(90)%'")).trim() === '1';
+          if (sleeping) break;
+          await delay(400);
+        }
+        assert.equal(sleeping, true);
+      } finally { active.abort(); }
+      assert.equal((await running).name, 'AbortError');
+      let cancelled;
+      for (let retry = 0; retry < 50; retry++) {
+        cancelled = (await readFile(operationFile, 'utf8')).split('\n').some(line =>
+          line && JSON.parse(line).projectId === id && JSON.parse(line).status === 'cancelled');
+        if (cancelled) break;
+        await delay(300);
+      }
+      assert.equal(cancelled, true);
+      assert.equal((await workerSessions('')).trim(), '0');
+      assert.equal((await query("SHOW TABLES LIKE 'cancelled_item';")).trim(), '');
+      console.log('Verified Liquibase MySQL update, read-only structured rollback preview, rollback, and cancellation.');
+    }
+  }
+}
+
 try {
-  if (!process.argv.includes('--structured-only')) await testExistingAdapters();
-  await testStructuredLiquibase();
+  const mysqlOnly = process.argv.includes('--mysql-only');
+  const structuredOnly = process.argv.includes('--structured-only');
+  if (!mysqlOnly && !structuredOnly) await testExistingAdapters();
+  if (!mysqlOnly) await testStructuredLiquibase();
+  if (!structuredOnly) await testNativeMysql();
 } finally {
   for (const id of records) await removeDatabase(id);
   await app.shutdownTasks();

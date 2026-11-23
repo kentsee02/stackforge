@@ -7,6 +7,7 @@ import { databaseKey, discoverDatabases } from '../discovery.mjs';
 import { mysqlEnvironmentOption, saveDatabaseEnvironment, saveMysqlEnvironment } from '../environment.mjs';
 import { developmentOptions } from '../development-setup.mjs';
 import { databaseReady, databaseTransferCapabilities } from '../backup/docker-transfer.mjs';
+import { mysqlMigrationScope } from './mysql-migration-scope.mjs';
 
 const user = 'stackforge';
 const host = '127.0.0.1';
@@ -240,10 +241,12 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
         if (latest.status !== 'running' || !latest.publishedOnLoopback) {
           throw Object.assign(new Error('Start the project database before preparing a migration.'), { code: 'container-stopped' });
         }
+        const scope = { cli, container: latest.container, port: detailsOf(record).port, verify };
+        if (engineOf(record) === 'mysql') return { ...scope, ...mysqlMigrationScope(cli, latest.container, record.name, user) };
         return {
-          cli, container: latest.container, port: detailsOf(record).port, verify,
+          ...scope,
           async cancel(application) {
-            if (engineOf(record) !== 'postgres' || !/^stackforge_migration_[a-f\d]{24}$/.test(application)) throw new Error(changed);
+            if (!/^stackforge_migration_[a-f\d]{24}$/.test(application)) throw new Error(changed);
             const sql = `SELECT pg_terminate_backend(pid, 3000) FROM pg_stat_activity
               WHERE datname = current_database() AND usename = current_user AND pid <> pg_backend_pid()
               AND backend_type = 'client backend' AND application_name = '${application}';`;
@@ -256,7 +259,7 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
       async credentials() {
         const latest = await verify();
         if (latest.status !== 'running' || !latest.publishedOnLoopback) {
-          throw Object.assign(new Error('Project PostgreSQL is not running.'), { code: 'container-stopped' });
+          throw Object.assign(new Error('Start the project database before preparing a migration.'), { code: 'container-stopped' });
         }
         return { user, password: await databasePassword(cli, latest.container, record) };
       },

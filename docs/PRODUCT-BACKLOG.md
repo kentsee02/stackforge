@@ -39,7 +39,14 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 - [x] Apply the public Spring Boot Liquibase example's YAML and included SQL on a disposable PostgreSQL database.
 - [x] Generate native rollback SQL for a reviewed structured changeset range and recheck the exact preview before writing.
 - [x] In v0.47.1, reject encoded variable expressions and prove that changing an included changelog invalidates its approval. Verify physical tables and history through rollback.
-- [ ] Cover runtime-dependent changelogs, referenced data files, rollback tags and MySQL writes.
+- [ ] Cover runtime-dependent changelogs, referenced data files and rollback tags.
+
+## v0.48.0 Flyway and Liquibase on project MySQL
+
+- [x] Apply reviewed Flyway migrations on the project's MySQL 8.4 database, including the conventional Spring Boot location.
+- [x] Apply and roll back supported Liquibase changelogs with read-only rollback previews.
+- [x] Invalidate approval on database replacement or intervening MySQL writes. Verify migration history and surface the possibility of partially committed MySQL DDL.
+- [x] Exercise source discovery and original upstream changes on real MySQL, plus stale approval, shared targets, failure, cancellation and bilingual controls.
 
 ## v0.46.1 Migration ranges
 

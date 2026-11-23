@@ -277,8 +277,12 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       const run = async () => {
         const record = execute ? databaseLog.begin(project, payload.operation === 'rollback' ? 'database-rollback' : 'database-migrate') : undefined;
         try {
-          const selection = await development.historyTarget(project);
-          if (!selection || selection.id !== payload.targetId) throw new Error('Choose the project-owned PostgreSQL database for native migrations.');
+          const postgres = await development.historyTarget(project);
+          const sqlAdapter = ['flyway', 'liquibase'].includes(payload.adapter);
+          const selection = postgres ?? (sqlAdapter ? await development.historyTarget(project, 'mysql') : undefined);
+          if (!selection || selection.id !== payload.targetId) throw new Error(sqlAdapter
+            ? 'Choose the project-owned PostgreSQL or MySQL database for native migrations.'
+            : 'Choose the project-owned PostgreSQL database for native migrations.');
           const { engine, host, name, port } = selection;
           const target = { engine, host, name, port };
           const client = await development.client(project, target, signal, selection.id);

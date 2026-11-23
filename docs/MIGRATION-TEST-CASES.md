@@ -18,13 +18,15 @@ npm run test:browser
 
 Use Node.js 22.12+ and Git. The public-repository suite needs GitHub access. Live database suites need Docker with Linux containers. The browser suite needs `npm ci` and `npx playwright install chromium`. The native suite may download pinned image and runtime packages on its first run.
 
-The public live suite exercises original upstream migrations on disposable project PostgreSQL instances. The EF Core option additionally runs the pinned example's design-time build in an SDK container. It copies the public checkout into the container and uses the EF CLI to generate the scripts. The selected Docker databases and local test checkouts are temporary.
+The public live suite exercises original upstream migrations on disposable project PostgreSQL and MySQL instances. The EF Core option additionally runs the pinned example's design-time build in an SDK container. It copies the public checkout into the container and uses the EF CLI to generate the scripts. The selected Docker databases and local test checkouts are temporary.
 
 ```sh
 npm run test:public-migrations -- --postgres --ef-cli
 npm run test:public-migrations -- --postgres --case=PUB-05 --case=PUB-09
 npm run test:public-migrations -- --postgres --case=PUB-07
 npm run test:native-migrations -- --structured-only
+npm run test:native-migrations -- --mysql-only
+npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
 ```
 
 ## Public repositories and expected results
@@ -40,6 +42,8 @@ npm run test:native-migrations -- --structured-only
 | PUB-07 Liquibase | [Spring Boot Liquibase example](https://github.com/h3yzack/springboot3-liquibase-example/tree/baa98678824b59476bf09805ac516e4aa8729916) | Find four changesets through both the Maven and Spring declarations. | Apply all four unchanged changesets through the original Spring Boot YAML changelog and its classpath `includeAll`. Verify all four recorded identities. |
 | PUB-08 Liquibase | [JHipster sample app](https://github.com/jhipster/jhipster-sample-app/tree/6b000b5d23a36c45e01472471b84a44fa2464044) | Resolve the nested XML changelog and its 12 changesets. | Source coverage. |
 | PUB-09 Liquibase | [Liquibase PostgreSQL formatted SQL fixture](https://github.com/liquibase/liquibase/blob/75773ed9b45b0a5adf3c42872d2e5494da669427/liquibase-integration-tests/src/test/resources/changelogs/pgsql/complete/basic.formatted.sql) | Import the upstream SQL file with a test-only properties file that points to it. | Apply the original changeset and check its recorded history. The native suite separately tests rollback. |
+| PUB-10 Flyway | [Spring Boot Flyway demo](https://github.com/talenteddeveloper/spring-boot-flyway-demo/tree/77403a2a10af102452b6f026bf6473021decbf99) | Detect the two versioned migrations in Spring Boot's default classpath location. | Apply the original table and seed migrations on MySQL 8.4 and verify both checksums. |
+| PUB-11 Liquibase | [Liquibase MySQL table and view fixture](https://github.com/liquibase/liquibase/blob/75773ed9b45b0a5adf3c42872d2e5494da669427/liquibase-integration-tests/src/test/resources/changelogs/mysql/complete/createtable.and.view.changelog.xml) | Import the original XML with a test-only properties file that points to it. | Create the table and view on MySQL 8.4, verify their history, then preview and roll them back in reverse order. |
 
 ## Adapter-specific cases
 
@@ -60,20 +64,23 @@ npm run test:native-migrations -- --structured-only
 | FLY-01 | CLI, Spring Boot, Maven profiles and Gradle paths | Discover local SQL in numeric version order. Report duplicates, unavailable files and unsupported settings. | `test`, `test:public-migrations` |
 | FLY-02 | PostgreSQL and MySQL history, versioned checksums and repeatables | Report applied, changed, outdated and unverifiable records with custom table support. | `test:development-postgres`, `test:development-mysql` |
 | FLY-03 | Native grouped apply, repeatable replay, error or cancellation | Confirm valid history after writes. Roll back a failing group and clear the cancelled session. | `test:native-migrations`, PUB-05 |
+| FLY-04 | Native MySQL version target and a later failing migration | Verify the first version. Report failure when DDL committed before a later statement failed, and retain the failed Flyway history row for diagnosis. | `test:native-migrations -- --mysql-only`, PUB-10 |
 | LIQ-01 | Structured and formatted changelogs, includes and logical paths | Inspect supported declarations and flag repeated identities, cycles and unreadable files. | `test`, `test:public-migrations` |
 | LIQ-02 | PostgreSQL and MySQL history with executed and marked-ran entries | Match changeset identity and distinguish marked-ran records. Reject incompatible history tables. | `test:development-postgres`, `test:development-mysql` |
 | LIQ-03 | Native apply, rollback of one or several changesets, and replay | Preview rollback statements in reverse apply order. Reject an invalid or altered count. Verify history after each operation. | `test:native-migrations`, PUB-09 |
 | LIQ-04 | A JSON root includes YAML and XML changelogs | Preserve declaration order and file identities. Reject approval after an included resource changes. Verify that rollback preview leaves the tables and history intact, then confirm that native rollback removes both the tables and their history rows. | `test:native-migrations -- --structured-only` |
 | LIQ-05 | Unsafe includes, external data-file declarations, custom runtime change types and encoded property expressions | Refuse to stage execution. Keep supported read-only discovery evidence. | `test` |
+| LIQ-06 | Native MySQL structured rollback and cancellation | Keep the database unchanged during SQL preview. Verify rolled-back tables and history. Cancel a running worker and check that its MySQL session and remaining changes are gone. | `test:native-migrations -- --mysql-only`, PUB-11 |
 | FLOW-01 | Mismatched confirmation, altered files, shared or replaced target | Refuse the write. Use a fresh approval after changes. | `test:native-migrations`, `test:development-postgres` |
 | FLOW-02 | Verified backup recovery to a fresh PostgreSQL database | Refuse a populated restore target. On an eligible empty target, restore the archive and verify migration history. | `test:native-migrations` |
 | FLOW-03 | Imported and cloned Projects views in English and Chinese | Render file previews, statuses and confirmation controls. Exact database-name matching gates execution. | `test:browser` |
+| FLOW-04 | MySQL database is recreated with the same name, or shared by another project | Reject the old plan after recreation. Reject execution against a shared endpoint. | `test:native-migrations -- --mysql-only` |
 
 ## Remaining coverage
 
 - Drizzle writes cover supported additive SQL for PostgreSQL journal v7. Recovery uses a verified database archive. Additional SQL shapes, engines and migration-level reversal need separate cases.
 - Alembic writes cover supported revisions that use the staged runtime and version graph. Project-specific `env.py`, project imports, external dependencies, `depends_on` and nontransactional migrations need their own execution path.
 - EF Core executes reviewed PostgreSQL SQL exports. Direct project-tool invocation and SQL Server writes remain separate coverage. The real SQL Server test currently checks history.
-- Flyway writes cover supported standalone and literal Spring Boot properties configurations on project PostgreSQL. Maven and Gradle runtime integration, MySQL native execution and licensed Undo remain open.
-- Liquibase writes cover supported formatted SQL and declarative XML, YAML and JSON changelogs on project PostgreSQL. Runtime-dependent migrations, external CSV or SQL resources, context and label filters, rollback by tag and MySQL native execution remain open. PUB-08 still covers source discovery.
+- Flyway writes cover supported standalone and Spring Boot properties configurations on project PostgreSQL and MySQL. Maven and Gradle runtime integration and licensed Undo remain open.
+- Liquibase writes cover supported formatted SQL and declarative XML, YAML and JSON changelogs on project PostgreSQL and MySQL. Runtime-dependent migrations, external CSV or SQL resources, context and label filters, and rollback by tag remain open. PUB-08 covers source discovery.
 - A history match verifies recorded migrations. Schema drift and data correctness need separate checks.

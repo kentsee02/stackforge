@@ -67,6 +67,7 @@ jobs:
         with:
           node-version: 24
       - run: npm run test:public-migrations
+      - run: npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
   browser-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 12

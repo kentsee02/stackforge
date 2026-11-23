@@ -120,3 +120,22 @@ test('Flyway recognizes Gradle location settings and the standalone CLI default'
     assert.equal(preview.migrations[0].version, version);
   }
 });
+
+test('Flyway recognizes conventional Spring locations and keeps dynamic configuration outside that scope', async t => {
+  const properties = 'src/main/resources/application.properties';
+  const project = await fixture(t, {
+    'pom.xml': '<project><dependencies><dependency><groupId>org.flywaydb</groupId><artifactId>flyway-core</artifactId></dependency></dependencies></project>',
+    [properties]: 'spring.datasource.url=jdbc:mysql://localhost:3306/catalog\n',
+    'src/main/resources/db/migration/V1__Catalog.sql': 'CREATE TABLE catalog(id INT);'
+  });
+  const [implicit] = await sources(project);
+  assert.equal(implicit.scope, 'spring');
+  assert.equal(implicit.implicitLocations, true);
+  assert.equal((await previewFlyway(project, implicit.id)).migrations[0].version, '1');
+  await writeFile(join(project.path, properties), 'spring.profiles.active=dev\n');
+  assert.ok((await sources(project)).every(source => !source.implicitLocations));
+  await writeFile(join(project.path, properties), 'spring.config.import=optional:file:extra.properties\n');
+  assert.ok((await sources(project)).every(source => !source.implicitLocations));
+  await writeFile(join(project.path, properties), 'spring.datasource.url=jdbc:mysql://localhost:3306/catalog\n!---\nspring.config.activate.on-profile=dev\n');
+  assert.ok((await sources(project)).every(source => !source.implicitLocations));
+});
