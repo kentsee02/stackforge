@@ -46,8 +46,10 @@ async function request(url, options) {
   return data;
 }
 
-function post(url, token, data, timeout = 5000) {
-  return request(url, { method: 'POST', signal: AbortSignal.timeout(timeout), headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, body: JSON.stringify(data) });
+function post(url, token, data, timeout = 5000, signal) {
+  const deadline = AbortSignal.timeout(timeout);
+  return request(url, { method: 'POST', signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
+    headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, body: JSON.stringify(data) });
 }
 
 function showState(element, status) {

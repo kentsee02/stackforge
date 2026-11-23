@@ -3,6 +3,7 @@ import { versionKey } from './flyway-preview.mjs';
 import { readLocalMigrationHistory } from './postgres-history.mjs';
 import { postgresHistoryQuery } from './postgres-history-table.mjs';
 import { mysqlHistoryQuery } from './mysql-history.mjs';
+import { databaseKey } from '../discovery.mjs';
 
 const maxRows = 1024;
 const flywayColumns = { installed_rank: 'integer', version: 'text', script: 'text', type: 'text', checksum: 'integer', success: 'boolean' };
@@ -71,7 +72,7 @@ function liquibaseState({ changes }, rows, resourcePrefix) {
   return { items, conflict };
 }
 
-export async function compareSqlMigrationHistory({ adapter, preview, history, checksums, resourcePrefix, ...options }) {
+export async function compareSqlMigrationHistory({ adapter, preview, history, checksums, resourcePrefix, includeFingerprint, ...options }) {
   const flyway = adapter === 'flyway';
   const engine = options.selection.engine ?? 'postgres';
   const mysql = engine === 'mysql';
@@ -80,9 +81,12 @@ export async function compareSqlMigrationHistory({ adapter, preview, history, ch
   const row = flyway
     ? `${array}(installed_rank, ${bounded('version')}, ${bounded('script')}, ${bounded('type')}, checksum, ${mysql ? 'CAST(success AS UNSIGNED)' : 'success'})`
     : `${array}(${bounded('id')}, ${bounded('author')}, ${bounded('filename')}, ${bounded('exectype')})`;
-  const query = (mysql ? mysqlHistoryQuery : postgresHistoryQuery)(history, columns, { maxRows, row, order: flyway ? 'ORDER BY installed_rank' : '' });
+  const query = (mysql ? mysqlHistoryQuery : postgresHistoryQuery)(history, columns, {
+    maxRows, row, order: flyway ? 'ORDER BY installed_rank' : 'ORDER BY filename, author, id'
+  });
   const { target, snapshot, status } = await readLocalMigrationHistory(options, query, engine);
-  const respond = (status, fields) => ({ target, history, status, ...fields });
+  const respond = (status, fields) => ({ target, history, status, ...fields,
+    ...(includeFingerprint && snapshot && { fingerprint: databaseKey(snapshot) }) });
   if (!snapshot) return respond(status);
   if (snapshot.table === 'absent') return respond('history-missing');
   if (snapshot.table !== 'readable' || !Array.isArray(snapshot.rows) || snapshot.rows.length > maxRows ||

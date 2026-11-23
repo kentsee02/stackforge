@@ -8,6 +8,7 @@ import { readMigrationFile } from './migration-files.mjs';
 
 const kinds = { V: 'versioned', R: 'repeatable', B: 'baseline', U: 'undo' };
 const priority = { versioned: 0, repeatable: 1, baseline: 2, undo: 3 };
+export const flywayChecksum = sql => crc32(Buffer.from(sql.replace(/^\uFEFF/, '').replace(/[\r\n]/g, ''))) | 0;
 export const versionKey = version => {
   if (typeof version !== 'string' || !/^\d+(?:[._]\d+)*$/.test(version)) return;
   const segments = version.split(/[._]/).map(part => part.replace(/^0+(?=\d)/, ''));
@@ -115,7 +116,7 @@ export async function previewFlyway(project, sourceId, signal, { history = false
       budget -= Buffer.byteLength(sql);
       // Repeatable migrations may use environment-specific placeholder replacement.
       if (item.kind === 'repeatable' && /\$\{|#\{/.test(sql)) continue;
-      checksums.set(basename(item.file), crc32(Buffer.from(sql.replace(/^\uFEFF/, '').replace(/[\r\n]/g, ''))) | 0);
+      checksums.set(basename(item.file), flywayChecksum(sql));
     } catch { /* Unsupported encodings and replaced files leave the checksum unverified. */ }
   }
   await resolveStartup(project, [], identity);

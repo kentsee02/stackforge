@@ -103,9 +103,13 @@ The Alembic adapter discovers service-level migration configurations through the
 
 Migration support is capability-based. Detecting an ORM or a migration tool does not authorize its execution. Applying migrations uses reviewed files and a confirmed target. Schema reset, schema replacement, and destructive SQL require separate explicit support and approval.
 
+Standalone Flyway versioned and repeatable SQL and standalone Liquibase formatted SQL can run on verified project-owned PostgreSQL. A plan identifies the reviewed files, tool version, migration range and exact database. It expires after five minutes and is bound to the source bytes, target identity and migration history. StackForge stages only the reviewed files for a digest-pinned tool container that uses the database container's network namespace. History is checked again before and after the write. Liquibase can roll back the last recorded changeset when it declares explicit rollback SQL. Flyway Community recovery uses a verified backup.
+
 #### 3.4.4 Backup and restore
 
 Backup archives describe the engine, source version, and checksum. PostgreSQL supports streaming through temporary files. SQL backup verification and restore preview use eligible Docker images. See the baseline for size limits and engine-specific permissions.
+
+Project-owned PostgreSQL and MySQL expose the archive controls directly in the project database panel.
 
 Restore checks compatibility and integrity, previews the exact target, and checks ownership or access and shared use before writing. SQL restore requires an empty verified database. SQLite restore requires a missing destination file. Verify the result after writing. The current UI does not offer a restore that replaces an existing populated database.
 

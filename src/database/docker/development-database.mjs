@@ -211,10 +211,10 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
     const target = await owned(cli, record);
     const accepting = await ready(cli, record, target);
     const options = accepting ? await connections(project, record.directory, engineOf(record)).catch(() => []) : [];
-    const archive = accepting && engineOf(record) === 'mysql' ? await archiveTarget(project, archiveId(project, record), signal) : undefined;
-    const capabilities = archive && await databaseTransferCapabilities({ ...archive, container: archive.container.id });
+    const capabilities = accepting && await databaseTransferCapabilities({ engine: engineOf(record), container: target.container,
+      command: (_, args, options) => cli(args, options), signal });
     return { ...summary(record, target, accepting), connections: options,
-      ...(archive && { archive: { id: archiveId(project, record), ...capabilities } }) };
+      ...(capabilities && { archive: { id: archiveId(project, record), ...capabilities } }) };
   }
 
   async function client(project, endpoint, signal, expectedTargetId) {
@@ -235,6 +235,24 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
     }
     const target = await verify();
     return {
+      async migrationScope() {
+        const latest = await verify();
+        if (latest.status !== 'running' || !latest.publishedOnLoopback) {
+          throw Object.assign(new Error('Start the project database before preparing a migration.'), { code: 'container-stopped' });
+        }
+        return {
+          cli, container: latest.container, port: detailsOf(record).port, verify,
+          async cancel(application) {
+            if (engineOf(record) !== 'postgres' || !/^stackforge_migration_[a-f\d]{24}$/.test(application)) throw new Error(changed);
+            const sql = `SELECT pg_terminate_backend(pid, 3000) FROM pg_stat_activity
+              WHERE datname = current_database() AND usename = current_user AND pid <> pg_backend_pid()
+              AND backend_type = 'client backend' AND application_name = '${application}';`;
+            await cli(['exec', latest.container, 'sh', '-c',
+              'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -XAtw -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "$1"',
+              'stackforge', sql], { signal: null, timeout: 8000 });
+          }
+        };
+      },
       async credentials() {
         const latest = await verify();
         if (latest.status !== 'running' || !latest.publishedOnLoopback) {
@@ -280,14 +298,15 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
   async function archiveBinding(project, bindingId) {
     await registry.ready;
     const record = current(project);
-    if (!record || engineOf(record) !== 'mysql' || bindingId !== archiveId(project, record)) return;
-    return { id: bindingId, instanceId: bindingId, instance: { name: record.name, engine: 'mysql', provider: 'development' } };
+    if (!record || bindingId !== archiveId(project, record)) return;
+    return { id: bindingId, instanceId: bindingId, instance: { name: record.name, engine: engineOf(record), provider: 'development' } };
   }
 
   async function archiveTarget(project, bindingId, signal) {
     await registry.ready;
     const record = current(project);
-    if (!record || engineOf(record) !== 'mysql' || bindingId !== archiveId(project, record)) throw new Error(changed);
+    if (!record || bindingId !== archiveId(project, record)) throw new Error(changed);
+    const engine = engineOf(record);
     const { cli, daemon } = await dockerSession(command, signal);
     async function verify() {
       await resolveStartup(project, []);
@@ -298,8 +317,8 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
       return target;
     }
     const checked = await verify();
-    return { engine: 'mysql', name: record.name, container: { id: checked.container, status: checked.status },
-      endpoints: [{ host, engine: 'mysql', port: record.port, name: record.name }],
+    return { engine, name: record.name, container: { id: checked.container, status: checked.status },
+      endpoints: [{ host, engine, port: record.port, name: record.name }],
       async command(program, args, options) {
         const { container } = await verify();
         if (program !== 'docker' || args[0] !== 'exec' || args[args[1] === '-i' ? 2 : 1] !== container) throw new Error(changed);

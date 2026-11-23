@@ -1,5 +1,6 @@
 import { setText } from '/i18n.js';
 import { labelledMigrationControl, migrationHistoryName, postgresHistoryMessages } from '/projects/migration-history.js';
+import { nativeMigrationControls } from '/projects/native-migration.js';
 
 const historyMessages = {
   ...postgresHistoryMessages,
@@ -75,6 +76,16 @@ export function migrationSourcePreview(projectId, source, { request, post, histo
   refresh.hidden = true;
   setText(refresh, rescan);
   details.append(summary, status, guide, form, historyStatus, results, refresh);
+  const eligible = source.scope === 'standalone' && (adapter === 'flyway' || /\.sql$/i.test(source.changelog ?? ''));
+  const selected = () => ({ targetId: select.value, schema: schema.value, table: table.value });
+  const canMigrate = () => eligible && historyTargets.some(target => target.id === select.value && target.projectPostgres);
+  let nativeWorking = false;
+  const native = eligible ? nativeMigrationControls(projectId, source, { request, post }, {
+    selection: selected,
+    lock(locked) { nativeWorking = controls.disabled = refresh.disabled = locked; },
+    refresh: () => load(select.value, true)
+  }) : undefined;
+  if (native) details.append(native.element);
 
   let loading = false, lastPreview, defaultTable = tableName;
   function showResult(result) {
@@ -83,8 +94,8 @@ export function migrationSourcePreview(projectId, source, { request, post, histo
     const message = result.database?.target?.engine === 'mysql' && mysqlMessages[result.database.status];
     setText(historyStatus, message || historyMessages[result.database?.status] || '');
   }
-  async function load(targetId) {
-    if (loading) return;
+  async function load(targetId, afterExecution = false) {
+    if (loading || nativeWorking && !afterExecution) return;
     loading = true;
     refresh.hidden = true;
     controls.disabled = true;
@@ -93,13 +104,14 @@ export function migrationSourcePreview(projectId, source, { request, post, histo
     setText(status, targetId ? 'Checking migration history…' : reading);
     try {
       const { token } = await request('/api/state');
-      const selection = targetId ? { targetId, schema: schema.value, table: table.value } : {};
+      const selection = targetId ? selected() : {};
       const result = await post('/api/projects/' + projectId + '/database-' + adapter + '-preview', token, { sourceId: source.id, ...selection }, 45000);
       const { database, ...preview } = result;
       lastPreview = preview;
       form.hidden = result.status !== 'ready' || !historyTargets.length;
       guide.hidden = result.status !== 'ready' || Boolean(historyTargets.length);
       showResult(result);
+      if (!afterExecution) native?.reset(result.status === 'ready' && canMigrate());
     } catch (error) {
       setText(status, error.message);
     } finally {
@@ -120,6 +132,7 @@ export function migrationSourcePreview(projectId, source, { request, post, histo
     if (table.value === defaultTable) table.value = nextTable;
     defaultTable = nextTable;
     if (lastPreview) showResult(lastPreview);
+    native?.reset(lastPreview?.status === 'ready' && canMigrate());
   });
   return details;
 }

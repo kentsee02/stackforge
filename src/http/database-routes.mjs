@@ -5,7 +5,7 @@ import { send } from './response.mjs';
 const resourceActions = new Set(['database-connection-config', 'database-postgres-setup', 'database-local-status',
   'database-remote-profile', 'database-sqlite-inspect', 'database-sqlite-create', 'database-development',
   'database-drizzle-preview', 'database-drizzle-apply', 'database-alembic-preview', 'database-ef-core-preview',
-  'database-flyway-preview', 'database-liquibase-preview']);
+  'database-flyway-preview', 'database-liquibase-preview', 'database-native-migration']);
 const localActions = new Set(['database-local-check', 'database-initialization-plan', 'database-initialize']);
 
 export function createDatabaseRoutes({ database, managedProjects, runtime }) {

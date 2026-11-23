@@ -269,9 +269,13 @@ try {
   await page.keyboard.press('Escape');
   await page.locator('#language').selectOption('en');
   await writeFile(join(project, '.env.local'), 'DATABASE_URL=postgresql://other@127.0.0.1:5432/other\n');
-  await page.locator('#database-discovery-refresh').click();
+  await Promise.all([
+    page.waitForResponse(response => response.url().endsWith('/database-discovery') && response.ok()),
+    page.locator('#database-discovery-refresh').click()
+  ]);
   await setup.getByRole('button', { name: 'Set up PostgreSQL' }).click();
-  await contains('#postgres-setup-status', 'Review .env, .env.local and rescan database configuration.');
+  await contains('#postgres-setup-status', 'Check the environment configuration.');
+  await contains('#postgres-setup-status', '.env.local');
   assert.equal(await page.locator('#postgres-setup-next').isVisible(), false);
   await page.keyboard.press('Escape');
   await page.locator('#project-delete').click();
@@ -345,6 +349,29 @@ try {
   assert.deepEqual(installCommands, Array(2).fill(['pnpm install --frozen-lockfile', [], frontend]));
   await page.locator('#language').selectOption('en');
   await writeFile(join(cloned.path, '.env'), 'ALEMBIC_DATABASE_URL=postgresql://browseruser:browser_test_only@127.0.0.1:5432/browser_alembic\n');
+  const ownedTarget = { id: 'f'.repeat(64), host: '127.0.0.1', port: 55432, name: 'project_fixture', engine: 'postgres', projectPostgres: true };
+  await page.route('**/api/projects/' + cloned.id + '/database-discovery', async route => {
+    const response = await route.fetch();
+    const data = await response.json();
+    data.sqlMigrationTargets.unshift(ownedTarget);
+    return route.fulfill({ response, json: data });
+  });
+  let nativeExecutions = 0;
+  const reviewedPlan = { status: 'planned', target: ownedTarget, tool: 'Flyway', version: '11.20.3',
+    directory: 'services/billing/storage', history: { schema: 'public', table: 'flyway_schema_history' },
+    migrations: [{ revision: '1', file: 'services/billing/storage/changes/V1__Create_invoice.sql' }], planId: 'fixture-plan' };
+  await page.route('**/api/projects/' + cloned.id + '/database-native-migration', route => {
+    const payload = route.request().postDataJSON();
+    assert.equal(payload.adapter, 'flyway');
+    assert.equal(payload.targetId, ownedTarget.id);
+    assert.equal(payload.operation, 'apply');
+    if (payload.mode === 'execute') {
+      assert.equal(payload.confirmName, ownedTarget.name);
+      assert.equal(payload.planId, reviewedPlan.planId);
+      nativeExecutions++;
+    }
+    return route.fulfill({ json: { ...reviewedPlan, ...(payload.mode === 'execute' && { status: 'applied' }) } });
+  });
   const databaseDiscovery = page.locator('#project-database-discovery');
   if (await databaseDiscovery.getAttribute('open') === null) await databaseDiscovery.locator(':scope > summary').click();
   await page.locator('#database-discovery-refresh').click();
@@ -403,6 +430,20 @@ try {
   await page.locator('#language').selectOption('zh-CN');
   await contains('.flyway-preview', '校验和已变化');
   await contains('.liquibase-preview', '标记为已运行');
+  await flyway.locator('select').selectOption(ownedTarget.id);
+  const native = flyway.locator('.native-migration');
+  await native.getByRole('button', { name: '预览迁移计划' }).click();
+  await contains('.native-migration form', 'Flyway 11.20.3');
+  await contains('.native-migration form', 'services/billing/storage/changes/V1__Create_invoice.sql');
+  assert.equal(await native.getByRole('button', { name: '应用已审核的迁移' }).isDisabled(), true);
+  await page.locator('#language').selectOption('en');
+  const confirm = native.locator('input');
+  await confirm.fill('Project_fixture');
+  assert.equal(await native.getByRole('button', { name: 'Apply reviewed migrations' }).isDisabled(), true);
+  await confirm.fill(ownedTarget.name);
+  await native.getByRole('button', { name: 'Apply reviewed migrations' }).click();
+  await contains('.native-migration [role="status"]', 'Migration finished and the database history was verified.');
+  assert.equal(nativeExecutions, 1);
   await page.locator('#language').selectOption('en');
   await alembic.locator(':scope > summary').press('Enter');
   await contains('.alembic-preview [role="status"]', 'Database status is unverified.');

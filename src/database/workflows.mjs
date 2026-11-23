@@ -26,6 +26,7 @@ import { postgresHistoryTable } from './migrations/postgres-history-table.mjs';
 import { compareSqlMigrationHistory } from './migrations/sql-migration-history.mjs';
 import { sqlServerHistoryTable, sqlServerHistoryTargets } from './migrations/sql-server-history.mjs';
 import { mysqlHistoryTable, mysqlHistoryTargets } from './migrations/mysql-history.mjs';
+import { nativeSqlMigration } from './migrations/native-sql-migrations.mjs';
 
 export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
   runtime, removals, configWrites, localDatabase, isClosing }) {
@@ -264,6 +265,34 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
   async function resourceAction(project, action, payload, controller) {
     if (databaseWrites.size || transfer || removals.has(project.path) || configWrites.has(project.path) || operations.active(project)) {
       throw new Error('Wait for the current project operation to finish.');
+    }
+    if (action === 'database-native-migration') {
+      const execute = payload.mode === 'execute';
+      if (execute && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
+        throw new Error('Stop the project before applying database migrations.');
+      }
+      const { signal } = controller;
+      const run = async () => {
+        const record = execute ? databaseLog.begin(project, payload.operation === 'rollback' ? 'database-rollback' : 'database-migrate') : undefined;
+        try {
+          const selection = await development.historyTarget(project);
+          if (!selection || selection.id !== payload.targetId) throw new Error('Choose the project-owned PostgreSQL database for native migrations.');
+          const { engine, host, name, port } = selection;
+          const target = { engine, host, name, port };
+          const client = await development.client(project, target, signal, selection.id);
+          const result = await nativeSqlMigration({ project, payload, target, client, signal, directory: stagingRoot,
+            async verifyShared(endpoint) {
+              const activeIds = await refreshDatabaseBindings(project.id, true);
+              if (databaseRegistry.usesEndpoint(project.id, endpoint, activeIds)) throw new Error('A shared database cannot be migrated from StackForge.');
+            } });
+          await record?.(['applied', 'rolled-back'].includes(result.status) ? 'succeeded' : 'failed');
+          return result;
+        } catch (error) {
+          await record?.(signal.aborted ? 'cancelled' : 'failed');
+          throw error;
+        }
+      };
+      return execute ? trackWrite(project, controller, run()) : run();
     }
     if (action === 'database-flyway-preview' || action === 'database-liquibase-preview') {
       const flyway = action === 'database-flyway-preview';

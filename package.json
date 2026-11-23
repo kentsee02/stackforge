@@ -1,6 +1,6 @@
 {
   "name": "stackforge-local",
-  "version": "0.44.1",
+  "version": "0.45.0",
   "description": "A local, open-source full-stack project generator",
   "type": "module",
   "private": true,
@@ -17,6 +17,7 @@
     "test:development-postgres": "node scripts/integration/development-postgres.mjs",
     "test:development-mysql": "node scripts/integration/development-mysql.mjs",
     "test:migration-sql-server": "node scripts/integration/migration-sql-server.mjs",
+    "test:native-migrations": "node scripts/integration/native-migrations.mjs",
     "test:secret-service": "node scripts/integration/secret-service.mjs",
     "test:browser": "node scripts/integration/browser.mjs",
     "test": "node --test \"test/**/*.test.mjs\"",

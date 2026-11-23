@@ -19,6 +19,7 @@ const assets = new Map([
   ['/projects/liquibase-preview.js', 'projects/liquibase-preview.js'],
   ['/projects/migration-source-preview.js', 'projects/migration-source-preview.js'],
   ['/projects/migration-history.js', 'projects/migration-history.js'],
+  ['/projects/native-migration.js', 'projects/native-migration.js'],
   ['/projects/development-postgres.js', 'projects/development-postgres.js'],
   ['/i18n.js', 'shared/i18n.js'],
   ['/messages.js', 'shared/messages.js'],

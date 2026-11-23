@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-const actions = new Set(['database-start', 'database-stop', 'database-delete', 'database-backup', 'database-restore', 'database-initialize', 'database-migrate', 'database-profile-cleanup']);
+const actions = new Set(['database-start', 'database-stop', 'database-delete', 'database-backup', 'database-restore', 'database-initialize', 'database-migrate', 'database-rollback', 'database-profile-cleanup']);
 for (const action of ['create', 'start', 'stop', 'save', 'delete']) actions.add('database-development-' + action);
 const projectId = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i;
 
