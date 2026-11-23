@@ -355,20 +355,22 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     }
     if (action === 'database-drizzle-preview' || action === 'database-drizzle-apply') {
       const { signal } = controller;
+      if (payload.operation !== undefined && !['apply', 'rollback'].includes(payload.operation)) throw new Error('Choose a valid migration operation.');
+      const rollback = payload.operation === 'rollback' ? { revision: payload.revision, scriptFile: payload.scriptFile } : undefined;
       const options = { project, requirementId: payload.requirementId, command: localDatabase.command,
-        resolveClient: target => development.client(project, target, signal), probe: localDatabase.probe, signal };
+        resolveClient: target => development.client(project, target, signal), probe: localDatabase.probe, signal, rollback };
       if (action === 'database-drizzle-preview') return previewDrizzle(options);
       if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
         throw new Error('Stop the project before applying database migrations.');
       }
-      const record = databaseLog.begin(project, 'database-migrate');
+      const record = databaseLog.begin(project, rollback ? 'database-rollback' : 'database-migrate');
       const done = previewDrizzle({ ...options, approval: payload, async verifyTarget(target) {
         const activeIds = await refreshDatabaseBindings(project.id, true);
         if (databaseRegistry.usesEndpoint(project.id, target, activeIds)) {
           throw new Error('Another project uses this PostgreSQL database. Choose a separate database for guided setup.');
         }
       } }).then(async result => {
-        await record(result.status === 'applied' ? 'succeeded' : 'failed');
+        await record(['applied', 'rolled-back'].includes(result.status) ? 'succeeded' : 'failed');
         return result;
       }, async error => {
         await record(signal.aborted ? 'cancelled' : 'failed');

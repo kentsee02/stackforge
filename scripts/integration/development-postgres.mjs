@@ -44,7 +44,10 @@ async function api(path, body, expected = 200, authorized = true) {
 }
 
 const definition = 'import "dotenv/config";\nexport default { datasource: { url: env("DATABASE_URL") } };\n';
-const migrationSql = ['CREATE TABLE drizzle_first (id integer);\n', 'CREATE TABLE drizzle_second (id integer);\n'];
+const migrationSql = ['CREATE TABLE drizzle_first (id integer);\n',
+  'CREATE TABLE drizzle_second (id integer, old_label text, obsolete text);\n' +
+  'ALTER TABLE drizzle_second RENAME COLUMN old_label TO label;\nALTER TABLE drizzle_second DROP COLUMN obsolete;\n' +
+  "INSERT INTO drizzle_second (id, label) VALUES (1, 'reviewed');\n"];
 const entries = migrationSql.map((_, idx) => ({ idx, version: '7', when: 1726443359662 + idx,
   tag: '000' + idx + '_create', breakpoints: true }));
 try {
@@ -245,7 +248,7 @@ try {
     api(id + '/database-drizzle-apply', { requirementId: drizzle.id, planId: preview.planId, confirmName }, expected);
   await applyDrizzle(pending, 'wrong', 409);
   const secondFile = join(path, 'db/migrations', entries[1].tag + '.sql');
-  await writeFile(secondFile, 'DROP TABLE drizzle_first;');
+  await writeFile(secondFile, "COPY drizzle_first FROM '/unavailable';");
   assert.equal((await drizzlePreview()).applyBlocked, true);
   await applyDrizzle(pending, 'portal', 409);
   await writeFile(secondFile, 'CREATE TABLE drizzle_second (id type_that_does_not_exist);');
@@ -257,8 +260,16 @@ try {
   await writeJournal(entries.slice(0, 1));
   assert.equal((await applyDrizzle(await drizzlePreview())).status, 'applied');
   await writeJournal(entries);
+  await writeFile(secondFile, "CREATE TABLE drizzle_second (id integer);\nUPDATE project_history.migrations SET hash = 'tampered';");
+  const tamperedPlan = await drizzlePreview();
+  assert.match(tamperedPlan.reviewSql, /UPDATE project_history\.migrations/);
+  assert.equal((await applyDrizzle(tamperedPlan)).status, 'apply-failed');
+  assert.equal((await query("SELECT to_regclass('public.drizzle_second') IS NULL AND count(*) = 1 AND every(hash <> 'tampered') " +
+    'FROM project_history.migrations')).trim(), 't');
+  await writeFile(secondFile, migrationSql[1]);
   const remaining = await drizzlePreview();
   assert.deepEqual(remaining.migrations.map(item => item.state), ['applied', 'pending']);
+  assert.match(remaining.reviewSql, /RENAME COLUMN[\s\S]*DROP COLUMN[\s\S]*INSERT INTO/);
   const sharedMigration = join(root, 'shared-migration');
   await mkdir(sharedMigration);
   await writeFile(join(sharedMigration, '.env'), stored);
@@ -270,8 +281,33 @@ try {
   assert.equal(applied.status, 'applied', JSON.stringify(applied));
   assert.deepEqual(applied.migrations.map(item => item.state), ['applied', 'applied']);
   assert.equal((await query("SELECT to_regclass('public.drizzle_first') IS NOT NULL AND to_regclass('public.drizzle_second') IS NOT NULL")).trim(), 't');
+  assert.equal((await query('SELECT label FROM drizzle_second WHERE id = 1')).trim(), 'reviewed');
+  assert.equal((await query("SELECT count(*) FROM information_schema.columns WHERE table_name='drizzle_second' AND column_name='obsolete'")).trim(), '0');
   await applyDrizzle(pending, 'portal', 409);
   assert.equal((await drizzlePreview()).status, 'current');
+  const rollbackInput = { operation: 'rollback', revision: entries[0].tag, scriptFile: 'drizzle-undo.sql' };
+  const rollbackPreview = (selection, expected = 200) =>
+    api(id + '/database-drizzle-preview', { requirementId: drizzle.id, ...selection }, expected);
+  const rollbackDrizzle = (plan, expected = 200) => api(id + '/database-drizzle-apply',
+    { requirementId: drizzle.id, ...rollbackInput, planId: plan.planId, confirmName: 'portal' }, expected);
+  await rollbackPreview({ ...rollbackInput, scriptFile: '../outside.sql' }, 409);
+  const rollbackFile = join(path, rollbackInput.scriptFile);
+  await writeFile(rollbackFile, 'DROP TABLE drizzle_second;\nALTER TABLE unavailable RENAME TO another;');
+  const failingRollback = await rollbackPreview(rollbackInput);
+  assert.equal((await rollbackDrizzle(failingRollback)).status, 'apply-failed');
+  assert.equal((await query("SELECT to_regclass('public.drizzle_second') IS NOT NULL AND count(*) = 2 FROM project_history.migrations")).trim(), 't');
+  await writeFile(rollbackFile, 'DROP TABLE drizzle_second;\n');
+  const approvedRollback = await rollbackPreview(rollbackInput);
+  assert.equal(approvedRollback.status, 'rollback-planned');
+  assert.deepEqual([approvedRollback.fromRevision, approvedRollback.toRevision], [entries[1].tag, entries[0].tag]);
+  assert.match(approvedRollback.reviewSql, /DROP TABLE drizzle_second/);
+  await writeFile(rollbackFile, '-- changed after review\n', { flag: 'a' });
+  await rollbackDrizzle(approvedRollback, 409);
+  const reverted = await rollbackDrizzle(await rollbackPreview(rollbackInput));
+  assert.equal(reverted.status, 'rolled-back');
+  assert.deepEqual(reverted.migrations.map(item => item.state), ['applied', 'pending']);
+  assert.equal((await query("SELECT to_regclass('public.drizzle_second') IS NULL AND count(*) = 1 FROM project_history.migrations")).trim(), 't');
+  assert.equal((await applyDrizzle(await drizzlePreview())).status, 'applied');
   const altered = join(path, 'db/migrations', entries[0].tag + '.sql');
   await writeFile(altered, migrationSql[0] + '-- changed after application\n');
   assert.equal((await drizzlePreview()).status, 'history-conflict');

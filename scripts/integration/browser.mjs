@@ -533,6 +533,31 @@ try {
   await contains('.drizzle-preview li', 'Unverified · drizzle/0000_create.sql');
   await page.locator('#language').selectOption('zh-CN');
   await contains('.drizzle-preview li', '未验证 · drizzle/0000_create.sql');
+  const drizzlePanel = page.locator('.drizzle-preview');
+  const drizzleState = { variable: 'POSTGRES_URL', target: ownedTarget, history: 'drizzle.__drizzle_migrations',
+    rollbackTargets: [null], migrations: [{ state: 'applied', file: 'drizzle/0000_create.sql' }] };
+  await page.route('**/api/projects/' + cloned.id + '/database-drizzle-preview', route => {
+    const selection = route.request().postDataJSON();
+    if (!selection.operation) return route.fulfill({ json: { ...drizzleState, status: 'current' } });
+    assert.deepEqual([selection.operation, selection.revision, selection.scriptFile], ['rollback', null, 'drizzle/revert.sql']);
+    return route.fulfill({ json: { ...drizzleState, status: 'rollback-planned', planId: 'drizzle-rollback',
+      fromRevision: '0000_create', toRevision: 'base', reviewSql: 'DROP TABLE example;' } });
+  });
+  await page.route('**/api/projects/' + cloned.id + '/database-drizzle-apply', route => {
+    const selection = route.request().postDataJSON();
+    assert.deepEqual([selection.operation, selection.planId, selection.confirmName], ['rollback', 'drizzle-rollback', ownedTarget.name]);
+    return route.fulfill({ json: { ...drizzleState, status: 'rolled-back', rollbackTargets: [],
+      migrations: [{ state: 'pending', file: 'drizzle/0000_create.sql' }] } });
+  });
+  await drizzlePanel.locator(':scope > button').click();
+  await drizzlePanel.getByLabel('项目内的回滚 SQL 文件相对路径').fill('drizzle/revert.sql');
+  await drizzlePanel.getByRole('button', { name: '预览回滚计划' }).click();
+  await contains('.drizzle-preview .drizzle-sql-review', 'DROP TABLE example;');
+  await contains('.drizzle-preview form', '0000_create → base');
+  assert.equal(await drizzlePanel.getByRole('button', { name: '执行已审核的回滚' }).isDisabled(), true);
+  await drizzlePanel.getByLabel('输入目标数据库名称以确认。').fill(ownedTarget.name);
+  await drizzlePanel.getByRole('button', { name: '执行已审核的回滚' }).click();
+  await contains('.drizzle-preview [role="status"]', '回滚已完成，数据库历史已验证。');
   await page.locator('#language').selectOption('en');
   const startup = page.locator('#project-startup');
   if (await startup.getAttribute('open') === null) await startup.locator('summary').click();

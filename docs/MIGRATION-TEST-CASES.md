@@ -54,6 +54,8 @@ npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
 | DRZ-02 | Pending, applied, altered or mismatched journal history | Timestamps and file hashes determine states. Unmatched history blocks the plan. | `test:development-postgres` |
 | DRZ-03 | Supported additive SQL and failing SQL in the same batch | Changes and history commit together. An error rolls back the entire batch. | `test:development-postgres` |
 | DRZ-04 | Unsupported SQL or an altered approval | Block execution. A fresh supported plan requires exact database-name confirmation. | `test`, `test:development-postgres` |
+| DRZ-05 | Project PostgreSQL migration renames and drops columns and inserts data | Display the full pending SQL and verify resulting columns, rows and Drizzle history. If SQL alters approved history, roll back the entire batch. | `test:development-postgres` |
+| DRZ-06 | Reviewed explicit rollback SQL to an earlier journal revision | Reject escaped paths and stale scripts. Preserve tables and history when the script fails. On success remove only the selected revision suffix and verify migrations can be reapplied. | `test:development-postgres`, `test:browser` |
 | ALE-01 | Linear, branching, merging, incomplete and dynamic Python revisions | Verify literal DAGs and flag unresolved, duplicate or linked sources. | `test` |
 | ALE-02 | Default or customized PostgreSQL version table | Compare the selected table. Report missing, restricted, conflicting or replaced targets. | `test:development-postgres`, `test:database-integration` |
 | ALE-03 | Upgrade a public sequence to a known revision; downgrade and replay | After each operation, recorded heads match the selected target. | `test:public-migrations -- --postgres` |
@@ -80,7 +82,7 @@ npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
 
 ## Remaining coverage
 
-- Drizzle writes cover supported additive SQL for PostgreSQL journal v7. Recovery uses a verified database archive. Additional SQL shapes, engines and migration-level reversal need separate cases.
+- Drizzle writes cover supported PostgreSQL journal v7 migrations, with common transactional changes and reviewed SQL rollback on project PostgreSQL. Additional engines, journal formats and arbitrary runtime SQL remain open. Recovery also supports a verified database archive.
 - Alembic writes cover supported revisions that use the staged runtime and version graph. Project-specific `env.py`, project imports, external dependencies, `depends_on` and nontransactional migrations need their own execution path.
 - EF Core executes reviewed PostgreSQL SQL exports. Direct project-tool invocation and SQL Server writes remain separate coverage. The real SQL Server test currently checks history.
 - Flyway writes cover supported standalone and Spring Boot properties configurations on project PostgreSQL and MySQL. Maven and Gradle runtime integration and licensed Undo remain open.

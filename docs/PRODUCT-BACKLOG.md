@@ -25,13 +25,21 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 - [ ] Prepare a rollback plan when the tool, edition and migration definitions support it. Show the downgrade target and destructive operations. Support checksum-verified recovery to an eligible empty database when the adapter cannot reverse its migrations.
 - [ ] Exercise apply, rollback, cancelled and failed executions, stale approval, and recovery against real development databases. Verify both languages and imported and cloned projects. Record unsupported engines, runtime configurations or migration layouts explicitly.
 
+### Remaining coverage in priority order
+
+1. EF Core SQL Server apply and downgrade against a verified project-owned target, including database replacement protection and transactional history verification.
+2. Drizzle folder-based v1 migrations and additional engines, checked against the history layout produced by each supported runtime.
+3. Alembic custom environments, project dependencies and nontransactional revisions, with explicit runtime and target isolation.
+4. Liquibase resolved external SQL and data files, contexts and labels. Test each runtime input against preserved changeset identity.
+5. Flyway Maven and Gradle runtime settings. Verify Undo with an eligible edition and matching undo migrations.
+
 ## v0.46.0 Alembic, EF Core, and public repository tests
 
 - [x] Apply Alembic revisions and downgrade to a reviewed target on project-owned PostgreSQL. Use a staged environment with the approved revision files and verify history inside the database transaction.
 - [x] Preview and run EF Core PostgreSQL SQL exports for the selected `DbContext` and migration range. Roll back the transaction if the script does not produce the expected history.
 - [x] Run supported Flyway SQL selected by literal Spring Boot properties on project-owned PostgreSQL.
 - [x] Add a reproducible [test matrix](MIGRATION-TEST-CASES.md) with fixed upstream commits plus live database and bilingual cases.
-- [ ] Extend writes to additional database engines and runtime layouts. Remaining items include EF Core SQL Server writes, project-specific Alembic runtimes, runtime-dependent Liquibase changelogs, licensed Flyway Undo, and broader Drizzle SQL.
+- [ ] Extend writes to additional database engines and runtime layouts. Remaining items include EF Core SQL Server writes, project-specific Alembic runtimes, runtime-dependent Liquibase changelogs, licensed Flyway Undo, and more Drizzle engines and journal layouts.
 
 ## v0.47.0 Structured Liquibase changelogs
 
@@ -46,6 +54,13 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 - [x] List unique recorded tags in the history panel and preview the selected tag on project PostgreSQL and MySQL.
 - [x] Show the exact rollback range and verify the retained history for both manually tagged rows and changelog tag changesets.
 - [x] Exercise missing and ambiguous tags, read-only preview, native rollback and bilingual controls.
+
+## v0.49.0 Drizzle transactional schema changes and rollback
+
+- [x] Review and apply common changes including rename, drop, type changes and data updates on a verified project PostgreSQL database.
+- [x] Review an explicit rollback SQL file and select a prior journal revision. Tie the approval to file content and the exact target and history.
+- [x] Check the expected history before commit. Verify failed scripts leave schema and history intact and that rolled-back revisions can be replayed.
+- [ ] Support additional Drizzle engines, journal layouts and operations that require the project's own runtime.
 
 ## v0.48.0 Flyway and Liquibase on project MySQL
 

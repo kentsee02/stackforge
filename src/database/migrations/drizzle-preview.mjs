@@ -11,6 +11,7 @@ const maxEntries = 200;
 const localHosts = ['127.0.0.1', '::1', 'localhost'];
 const invalid = 'Choose a detected Drizzle PostgreSQL configuration.';
 const changed = 'The Drizzle migration preview changed. Check again before applying.';
+const badRollback = 'Choose a verified project PostgreSQL database, a prior Drizzle revision, and a supported rollback SQL file inside the project.';
 const signingKey = randomBytes(32);
 
 async function migrationFiles(folder, out, signal) {
@@ -32,7 +33,7 @@ async function migrationFiles(folder, out, signal) {
     const sql = await readMigrationFile(join(directory, file), Math.min(bytes, 1024 * 1024));
     if (!sql.trim()) throw new Error();
     bytes -= Buffer.byteLength(sql);
-    result.push({ file: out + '/' + file, when, hash: createHash('sha256').update(sql).digest('hex'), sql });
+    result.push({ file: out + '/' + file, tag, when, hash: createHash('sha256').update(sql).digest('hex'), sql });
   }
   return result;
 }
@@ -76,20 +77,17 @@ async function historyState(session, target, config) {
 
 const pgText = text => "pg_catalog.convert_from(pg_catalog.decode('" + Buffer.from(text, 'utf8').toString('hex') + "', 'hex'), 'UTF8')";
 
-async function applyMigration(session, target, config, state, pending, statements) {
+async function writeMigration(session, target, config, state, operations, expectedRows) {
   const table = historyName(config);
   const existing = state.history === 'readable';
   const previous = pgText(JSON.stringify(state.rows)) + '::jsonb';
   const header = pgText(JSON.stringify(state.header)) + '::jsonb';
+  const expected = pgText(JSON.stringify(expectedRows)) + '::jsonb';
+  const readRows = `SELECT coalesce(jsonb_agg(jsonb_build_array(created_at::text, hash) ORDER BY created_at), '[]') FROM ONLY ${table}`;
   const prepareHistory = existing
-    ? `IF (SELECT coalesce(jsonb_agg(jsonb_build_array(created_at::text, hash) ORDER BY created_at), '[]') FROM ONLY ${table})
-         IS DISTINCT FROM ${previous} THEN RAISE EXCEPTION 'Drizzle migration history changed'; END IF;`
+    ? `IF (${readRows}) IS DISTINCT FROM ${previous} THEN RAISE EXCEPTION 'Drizzle migration history changed'; END IF;`
     : `CREATE SCHEMA IF NOT EXISTS "${config.historySchema}";
        CREATE TABLE ${table} (id serial PRIMARY KEY, hash text NOT NULL, created_at bigint);`;
-  const operations = pending.flatMap((file, index) => [
-    ...statements[index].map(sql => 'EXECUTE ' + pgText(sql) + ';'),
-    `INSERT INTO ${table} (hash, created_at) VALUES ('${file.hash}', ${file.when});`
-  ]);
   await session.query(`BEGIN;
     SET LOCAL search_path = pg_catalog;
     SET LOCAL standard_conforming_strings = on;
@@ -104,12 +102,39 @@ async function applyMigration(session, target, config, state, pending, statement
       ${prepareHistory}
       SET LOCAL search_path TO DEFAULT;
       ${operations.join('\n')}
+      SET LOCAL search_path = pg_catalog;
+      IF (${stateQuery(config)}) ->> 4 IS DISTINCT FROM 'readable'
+        ${existing ? `OR (${stateQuery(config)}) ->> 6 IS DISTINCT FROM (${header} ->> 6)` : ''} THEN
+        RAISE EXCEPTION 'Drizzle history table changed';
+      END IF;
+      IF (${readRows}) IS DISTINCT FROM ${expected} THEN
+        RAISE EXCEPTION 'Drizzle SQL did not record the expected history';
+      END IF;
     END;
     $stackforge_drizzle$;
     COMMIT;`, target.name, { timeout: 135000 });
 }
 
-export async function previewDrizzle({ project, requirementId, command, resolveClient, probe, signal, approval, verifyTarget }) {
+async function reviewedRollback(root, selection, revisions, applied, signal) {
+  const { revision, scriptFile } = selection;
+  const next = revision === null ? 0 : revisions.findIndex(item => item.tag === revision) + 1;
+  if ((!next && revision !== null) || next >= applied || typeof scriptFile !== 'string' || scriptFile.length > 380 ||
+      !/\.sql$/i.test(scriptFile) || !scriptFile.split('/').every(part => /^[\w][\w .-]*$/.test(part) && !/[. ]$/.test(part))) {
+    throw new Error(badRollback);
+  }
+  try {
+    throwIfCancelled(signal);
+    const sql = await readMigrationFile(join(root, scriptFile), 256 * 1024);
+    const statements = drizzleStatements(sql, { expanded: true });
+    if (!statements) throw new Error(badRollback);
+    return { sql, statements, next, scriptFile, revision };
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    throw new Error(badRollback);
+  }
+}
+
+export async function previewDrizzle({ project, requirementId, command, resolveClient, probe, signal, approval, rollback, verifyTarget }) {
   const { root, identity, requirements, connections } = await discoverDatabases(project, { includeConnections: true });
   const requirement = requirements.find(item => item.id === requirementId && item.migrationAdapter === 'drizzle');
   if (!requirement) throw new Error(invalid);
@@ -142,10 +167,11 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   await resolveStartup(project, [], identity);
   const client = await resolveClient?.(target);
   if (client && !(await client.installation(probe)).portOpen) return respond('docker-unreachable');
+  const applicationName = client && 'stackforge_migration_' + randomBytes(12).toString('hex');
   let state, session;
   try {
     const credentials = { user: decodeURIComponent(url.username), password: decodeURIComponent(url.password) };
-    session = localSession({ ...target, sslmode }, credentials, client?.command ?? command, signal);
+    session = localSession({ ...target, sslmode, applicationName }, credentials, client?.command ?? command, signal);
     state = await historyState(session, target, config);
   } catch (error) {
     if (error.name === 'AbortError') throw error;
@@ -158,40 +184,63 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
     return respond('history-conflict');
   }
   const migrations = result.migrations.map((item, index) => ({ ...item, state: index < rows.length ? 'applied' : 'pending' }));
+  if (rows.length && client?.migrationScope) result.rollbackTargets = [null, ...files.slice(0, rows.length - 1).map(file => file.tag)];
+  if (rollback && !result.rollbackTargets) throw new Error(badRollback);
+  const reverse = rollback && await reviewedRollback(root, rollback, files, rows.length, signal);
   const pending = files.slice(rows.length);
-  if (!pending.length) {
+  if (!reverse && !pending.length) {
     if (approval) throw new Error(changed);
     return respond('current', { migrations });
   }
-  const statements = pending.map(file => drizzleStatements(file.sql));
+  const additions = reverse ? [] : pending.map(file => drizzleStatements(file.sql));
+  const review = additions.some(items => !items) && Boolean(client?.migrationScope);
+  const statements = review ? pending.map(file => drizzleStatements(file.sql, { expanded: true })) : additions;
   if (statements.some(items => !items)) {
     if (approval) throw new Error(changed);
     return respond('pending', { migrations, applyBlocked: true });
   }
+  const reviewSql = reverse ? '-- ' + reverse.scriptFile + '\n' + reverse.sql :
+    review ? pending.map(({ file, sql }) => '-- ' + location + file + '\n' + sql).join('\n\n') : undefined;
+  if (reviewSql && Buffer.byteLength(reviewSql) > 256 * 1024) {
+    if (approval) throw new Error(changed);
+    return respond('pending', { migrations, applyBlocked: true });
+  }
+  const scope = client?.migrationScope && await client.migrationScope();
   const expiry = approval ? /^\d{13}(?=\.)/.exec(approval.planId ?? '')?.[0] : String(Date.now() + 300000);
   const signature = createHmac('sha256', signingKey).update(JSON.stringify([
-    expiry, project.id, identity, requirement.id, target, value, config.historySchema, config.historyTable,
-    state.header, rows, files.map(({ file, when, hash }) => [file, when, hash])
+    expiry, project.id, identity, requirement.id, target, value, config.historySchema, config.historyTable, scope?.container,
+    state.header, rows, files.map(({ file, when, hash }) => [file, when, hash]),
+    reverse && [reverse.revision, reverse.scriptFile, createHash('sha256').update(reverse.sql).digest('hex')]
   ])).digest('hex');
   const planId = expiry + '.' + signature;
-  if (!approval) return respond('pending', { migrations, planId });
+  const range = reverse && { fromRevision: files[rows.length - 1].tag, toRevision: reverse.revision ?? 'base' };
+  if (!approval) return respond(reverse ? 'rollback-planned' : 'pending', { migrations, planId, ...range, ...(reviewSql && { reviewSql }) });
   if (!expiry || Number(expiry) <= Date.now() || approval.planId !== planId || approval.confirmName !== target.name) throw new Error(changed);
   await verifyTarget(target);
   const latest = (await discoverDatabases(project, { includeConnections: true })).connections.get(requirement.id);
   if (!latest || latest.environmentConflict || latest.value !== value || latest.out !== config.out ||
       historyName(latest) !== historyName(config)) throw new Error(changed);
   await resolveStartup(project, [], identity);
+  await scope?.verify();
   throwIfCancelled(signal);
+  const execute = sql => 'EXECUTE ' + pgText(sql) + ';';
+  const table = historyName(config);
+  const last = reverse ? reverse.next : files.length;
+  const expectedRows = files.slice(0, last).map(file => [String(file.when), file.hash]);
+  const commands = reverse ? [...reverse.statements.map(execute), 'DELETE FROM ' + table + ' WHERE created_at >= ' + files[last].when + ';'] :
+    pending.flatMap((file, index) => [
+      ...statements[index].map(execute), `INSERT INTO ${table} (hash, created_at) VALUES ('${file.hash}', ${file.when});`
+    ]);
   try {
-    await applyMigration(session, target, config, state, pending, statements);
+    await writeMigration(session, target, config, state, commands, expectedRows);
   } catch (error) {
+    await scope?.cancel(applicationName).catch(() => {});
     if (error.name === 'AbortError') throw error;
     return respond('apply-failed');
   }
   try {
     const after = await historyState(session, target, config);
-    const expected = files.map(file => [String(file.when), file.hash]);
-    if (JSON.stringify(after.rows) !== JSON.stringify(expected) ||
+    if (JSON.stringify(after.rows) !== JSON.stringify(expectedRows) ||
         JSON.stringify(after.header?.slice(0, 4)) !== JSON.stringify(state.header.slice(0, 4))) {
       return respond('apply-unverified');
     }
@@ -199,5 +248,7 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
     if (error.name === 'AbortError') throw error;
     return respond('apply-unverified');
   }
-  return respond('applied', { migrations: migrations.map(item => ({ ...item, state: 'applied' })) });
+  if (scope) result.rollbackTargets = last ? [null, ...files.slice(0, last - 1).map(file => file.tag)] : [];
+  return respond(reverse ? 'rolled-back' : 'applied', { migrations: migrations.map((item, index) =>
+    ({ ...item, state: index < last ? 'applied' : 'pending' })) });
 }

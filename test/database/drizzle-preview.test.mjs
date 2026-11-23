@@ -35,6 +35,22 @@ test('Drizzle execution recognizes schema additions and rejects other SQL batche
   ]) assert.equal(drizzleStatements(sql), undefined);
 });
 
+test('Drizzle review accepts common transactional schema and data changes for a project-owned database', () => {
+  const sql = 'ALTER TABLE item RENAME COLUMN label TO title;\n' +
+    'ALTER TABLE item ALTER COLUMN title SET NOT NULL;\n' +
+    'UPDATE item SET title = \'unknown\' WHERE title IS NULL;\n' +
+    'ALTER TABLE item DROP COLUMN unused;\nCREATE VIEW active_items AS SELECT title FROM item;\nDROP INDEX obsolete_idx;';
+  assert.equal(drizzleStatements(sql), undefined);
+  assert.equal(drizzleStatements(sql, { expanded: true }).length, 6);
+  for (const unsupported of [
+    'ALTER TABLE item ADD COLUMN helper integer, DISABLE TRIGGER ALL;',
+    'CREATE INDEX CONCURRENTLY item_idx ON item(id);',
+    'COPY item FROM PROGRAM \'echo test\';',
+    'ALTER TABLE item ALTER COLUMN title SET DEFAULT 1; \\connect other',
+    'DO $$ BEGIN DROP TABLE item; END $$;'
+  ]) assert.equal(drizzleStatements(unsupported, { expanded: true }), undefined);
+});
+
 test('Drizzle configuration accepts a static PostgreSQL target and rejects ambiguous targets', async () => {
   const detect = (source, files = ['drizzle.config.ts']) => drizzleConfig('.', files, async () => source);
   assert.deepEqual(await detect(config), { file: 'drizzle.config.ts', variable: 'STACKFORGE_DRIZZLE_TEST_URL',
