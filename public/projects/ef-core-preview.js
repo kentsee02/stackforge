@@ -1,5 +1,6 @@
 import { setText } from '/i18n.js';
 import { labelledMigrationControl, migrationHistoryName, postgresHistoryMessages } from '/projects/migration-history.js';
+import { nativeMigrationControls } from '/projects/native-migration.js';
 
 const messages = {
   ready: 'Local EF Core migrations found. Database status is unverified.',
@@ -117,7 +118,19 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
     return section;
   }
 
-  let loading = false, groups = [], showingHistory = false;
+  let loading = false, groups = [], showingHistory = false, nativeWorking = false, ready = false;
+  const selection = () => ({ groupId: context.value, targetId: target.value, schema: schema.value, table: table.value });
+  const canMigrate = () => ready && context.value && targets.some(item => item.id === target.value && item.projectPostgres);
+  const native = nativeMigrationControls(projectId, source, { request, post }, {
+    selection,
+    lock(locked) { nativeWorking = controls.disabled = refresh.disabled = locked; },
+    refresh: () => load(selection(), true)
+  });
+  details.append(native.element);
+  function syncNative() {
+    native.setRevisions(groups.find(group => group.id === context.value)?.migrations.map(item => item.id) ?? []);
+    native.reset(canMigrate());
+  }
   function showDatabase(database) {
     showingHistory = Boolean(database);
     const message = database?.target?.engine === 'sqlserver' && sqlServerMessages[database.status];
@@ -127,8 +140,8 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
     results.replaceChildren(...groups.map(group => groupView(group, database)));
     check.disabled = loading || !context.value || !target.value;
   }
-  async function load(selection) {
-    if (loading) return;
+  async function load(selection, afterExecution = false) {
+    if (loading || nativeWorking && !afterExecution) return;
     loading = true;
     refresh.hidden = true;
     for (const control of [context, target, schema, table, check]) control.disabled = true;
@@ -139,6 +152,7 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
       const { token } = await request('/api/state');
       const result = await post(`/api/projects/${projectId}/database-ef-core-preview`, token, { sourceId: source.id, ...selection }, 45000);
       groups = result.groups;
+      ready = result.status === 'ready';
       const previous = context.value;
       const placeholder = new Option('', '');
       setText(placeholder, 'Choose a DbContext');
@@ -149,6 +163,7 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
       guide.hidden = result.status !== 'ready' || Boolean(targets.length);
       setText(status, result.database ? 'Local EF Core migrations found.' : messages[result.status]);
       showDatabase(result.database);
+      if (!afterExecution) syncNative();
     } catch (error) {
       setText(selection ? databaseStatus : status, error.message);
       if (!selection) form.hidden = guide.hidden = true;
@@ -175,10 +190,11 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
       setText(databaseStatus, '');
       check.disabled = !context.value || !target.value;
     }
+    syncNative();
   });
   form.addEventListener('submit', event => {
     event.preventDefault();
-    void load({ groupId: context.value, targetId: target.value, schema: schema.value, table: table.value });
+    void load(selection());
   });
   return details;
 }

@@ -222,6 +222,102 @@ try {
     }
     console.log('Verified real ' + adapter + ' native migration plans and target history.');
   }
+
+  const project = join(root, 'ef-core');
+  await mkdir(join(project, 'prisma'), { recursive: true });
+  await writeFile(join(project, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
+  await writeFile(join(project, 'Reports.csproj'), '<Project Sdk="Microsoft.NET.Sdk" />');
+  const migration = '20260102123456_CreateReports';
+  await writeFile(join(project, 'CreateReports.cs'), `using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+namespace Reports;
+[DbContext(typeof(ReportsContext))]
+[Migration("${migration}")]
+public class CreateReports : Migration { }`);
+  const { id } = await api('import', { path: project }, 201);
+  const name = 'ef_core_fixture';
+  const query = await database(id, name);
+  const discovery = await api(id + '/database-discovery');
+  const { id: sourceId } = discovery.migrationSources.find(item => item.adapter === 'ef-core');
+  const { id: targetId } = discovery.efCoreTargets.find(item => item.projectPostgres);
+  const preview = await api(id + '/database-ef-core-preview', { sourceId });
+  const groupId = preview.groups[0].id;
+  const endpoint = id + '/database-native-migration';
+  const request = (mode, scriptFile, overrides = {}, expected = 200) => api(endpoint, {
+    adapter: 'ef-core', operation: 'apply', sourceId, targetId, groupId, mode, scriptFile, ...overrides
+  }, expected);
+
+  const initHistory = `CREATE TABLE IF NOT EXISTS "__EFMigrationsHistory" (
+    "MigrationId" character varying(150) NOT NULL PRIMARY KEY, "ProductVersion" character varying(32) NOT NULL
+  );`;
+  const applySql = initHistory + `
+START TRANSACTION;
+CREATE TABLE report (id integer PRIMARY KEY);
+INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+VALUES ('${migration}', '8.0.15');
+COMMIT;
+`;
+  await writeFile(join(project, 'apply.sql'), applySql);
+  await writeFile(join(project, 'wrong.sql'), initHistory + '\nCREATE TABLE wrong (id int);');
+  await request('preview', '../apply.sql', {}, 409);
+  await writeFile(join(project, 'meta.sql'), '\\! unsafe-client-command\n');
+  await request('preview', 'meta.sql', {}, 409);
+  const wrong = await request('preview', 'wrong.sql');
+  assert.equal((await request('execute', 'wrong.sql', { planId: wrong.planId, confirmName: name })).status, 'execution-failed');
+  assert.equal((await query(`SELECT to_regclass('wrong') IS NULL AND to_regclass('"__EFMigrationsHistory"') IS NULL;`)).trim(), 't');
+  const plan = await request('preview', 'apply.sql');
+  assert.equal(plan.toRevision, migration);
+  assert.equal(plan.sql, applySql);
+  await writeFile(join(project, 'apply.sql'), applySql + '\n-- changed');
+  await request('execute', 'apply.sql', { planId: plan.planId, confirmName: name }, 409);
+  await writeFile(join(project, 'apply.sql'), applySql);
+  assert.equal((await request('execute', 'apply.sql', { planId: plan.planId, confirmName: name })).status, 'applied');
+  assert.equal((await query('SELECT to_regclass(\'report\') IS NOT NULL;')).trim(), 't');
+  await writeFile(join(project, 'rollback.sql'), `BEGIN;
+DROP TABLE report;
+DELETE FROM "__EFMigrationsHistory" WHERE "MigrationId" = '${migration}';
+COMMIT;`);
+  const rollback = await request('preview', 'rollback.sql', { operation: 'rollback', revision: 'base' });
+  assert.equal((await request('execute', 'rollback.sql', {
+    operation: 'rollback', revision: 'base', planId: rollback.planId, confirmName: name
+  })).status, 'rolled-back');
+  assert.equal((await query("SELECT to_regclass('report') IS NULL;")).trim(), 't');
+  console.log('Verified EF Core SQL apply, guarded transaction rollback, stale plan rejection, and downgrade on PostgreSQL.');
+
+  const branched = join(root, 'alembic-branches');
+  await mkdir(join(branched, 'prisma'), { recursive: true });
+  await writeFile(join(branched, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
+  await mkdir(join(branched, 'alembic/versions'), { recursive: true });
+  await writeFile(join(branched, 'alembic.ini'), '[alembic]\nscript_location = %(here)s/alembic\n');
+  for (const [revision, parent] of [['root_node', 'None'], ['branch_a', "'root_node'"], ['branch_b', "'root_node'"]]) {
+    await writeFile(join(branched, 'alembic/versions', revision + '.py'), `from alembic import op
+revision = '${revision}'
+down_revision = ${parent}
+def upgrade():
+    op.execute('CREATE TABLE ${revision} (id integer)')
+def downgrade():
+    op.execute('DROP TABLE ${revision}')
+`);
+  }
+  const { id: branchedId } = await api('import', { path: branched }, 201);
+  const branchDb = 'alembic_branch_fixture';
+  const branchQuery = await database(branchedId, branchDb);
+  const branchDiscovery = await api(branchedId + '/database-discovery');
+  const selection = { adapter: 'alembic', sourceId: branchDiscovery.migrationSources.find(item => item.adapter === 'alembic').id,
+    targetId: branchDiscovery.alembicTargets.find(item => item.projectPostgres).id };
+  const branchRequest = (mode, operation, data = {}, expected = 200) =>
+    api(branchedId + '/database-native-migration', { mode, operation, ...selection, ...data }, expected);
+  const upgrade = await branchRequest('preview', 'apply');
+  assert.equal(upgrade.toRevision, 'heads');
+  assert.equal((await branchRequest('execute', 'apply', { planId: upgrade.planId, confirmName: branchDb })).status, 'applied');
+  assert.equal((await branchQuery('SELECT count(*) FROM alembic_version;')).trim(), '2');
+  await branchRequest('preview', 'rollback', {}, 409);
+  const downgrade = await branchRequest('preview', 'rollback', { revision: 'base' });
+  assert.equal((await branchRequest('execute', 'rollback', {
+    revision: 'base', planId: downgrade.planId, confirmName: branchDb
+  })).status, 'rolled-back');
+  assert.equal((await branchQuery('SELECT count(*) FROM alembic_version;')).trim(), '0');
+  console.log('Verified Alembic multiple heads, explicit branched rollback, and version history.');
 } finally {
   for (const id of records) await removeDatabase(id);
   await app.shutdownTasks();

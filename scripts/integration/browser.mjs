@@ -353,7 +353,7 @@ try {
   await page.route('**/api/projects/' + cloned.id + '/database-discovery', async route => {
     const response = await route.fetch();
     const data = await response.json();
-    data.sqlMigrationTargets.unshift(ownedTarget);
+    for (const key of ['sqlMigrationTargets', 'alembicTargets', 'efCoreTargets']) data[key].unshift(ownedTarget);
     return route.fulfill({ response, json: data });
   });
   let nativeExecutions = 0;
@@ -362,8 +362,21 @@ try {
     migrations: [{ revision: '1', file: 'services/billing/storage/changes/V1__Create_invoice.sql' }], planId: 'fixture-plan' };
   await page.route('**/api/projects/' + cloned.id + '/database-native-migration', route => {
     const payload = route.request().postDataJSON();
-    assert.equal(payload.adapter, 'flyway');
     assert.equal(payload.targetId, ownedTarget.id);
+    if (payload.adapter === 'alembic') {
+      assert.equal(payload.operation, 'apply');
+      assert.equal(payload.revision, 'start');
+      return route.fulfill({ json: { ...reviewedPlan, tool: 'Alembic', version: '1.20.1', fromRevision: 'base', toRevision: 'start' } });
+    }
+    if (payload.adapter === 'ef-core') {
+      assert.equal(payload.operation, 'rollback');
+      assert.equal(payload.revision, 'base');
+      assert.equal(payload.scriptFile, 'artifacts/rollback.sql');
+      assert.match(payload.groupId, /^[a-f0-9]{64}$/);
+      return route.fulfill({ json: { ...reviewedPlan, tool: 'EF Core', version: '', fromRevision: '20260102123456_CreateReports',
+        toRevision: 'base', scriptFile: payload.scriptFile, sql: 'DROP TABLE reports;' } });
+    }
+    assert.equal(payload.adapter, 'flyway');
     assert.equal(payload.operation, 'apply');
     if (payload.mode === 'execute') {
       assert.equal(payload.confirmName, ownedTarget.name);
@@ -433,8 +446,8 @@ try {
   await flyway.locator('select').selectOption(ownedTarget.id);
   const native = flyway.locator('.native-migration');
   await native.getByRole('button', { name: '预览迁移计划' }).click();
-  await contains('.native-migration form', 'Flyway 11.20.3');
-  await contains('.native-migration form', 'services/billing/storage/changes/V1__Create_invoice.sql');
+  await contains('.flyway-preview .native-migration form', 'Flyway 11.20.3');
+  await contains('.flyway-preview .native-migration form', 'services/billing/storage/changes/V1__Create_invoice.sql');
   assert.equal(await native.getByRole('button', { name: '应用已审核的迁移' }).isDisabled(), true);
   await page.locator('#language').selectOption('en');
   const confirm = native.locator('input');
@@ -442,7 +455,7 @@ try {
   assert.equal(await native.getByRole('button', { name: 'Apply reviewed migrations' }).isDisabled(), true);
   await confirm.fill(ownedTarget.name);
   await native.getByRole('button', { name: 'Apply reviewed migrations' }).click();
-  await contains('.native-migration [role="status"]', 'Migration finished and the database history was verified.');
+  await contains('.flyway-preview .native-migration [role="status"]', 'Migration finished and the database history was verified.');
   assert.equal(nativeExecutions, 1);
   await page.locator('#language').selectOption('en');
   await alembic.locator(':scope > summary').press('Enter');
@@ -468,6 +481,20 @@ try {
   await alembic.getByLabel('Database for public.alembic_version').selectOption('');
   assert.equal(await alembic.getByRole('button', { name: 'Check database history' }).isDisabled(), true);
   assert.equal(await alembic.locator('.alembic-revision-state').count(), 0);
+  await alembic.getByLabel('Database for public.alembic_version').selectOption(ownedTarget.id);
+  await alembic.getByLabel('Target revision').selectOption('start');
+  await alembic.getByRole('button', { name: 'Preview migration plan' }).click();
+  await contains('.alembic-preview .native-migration form', 'base → start');
+  await efTarget.selectOption(ownedTarget.id);
+  await page.locator('#language').selectOption('zh-CN');
+  const efNative = ef.locator('.native-migration');
+  await efNative.getByLabel('目标版本').selectOption('base');
+  await efNative.getByLabel('EF Core SQL 文件的项目相对路径').fill('artifacts/rollback.sql');
+  await efNative.getByRole('button', { name: '预览回滚计划' }).click();
+  await contains('.ef-core-preview .native-migration pre', 'DROP TABLE reports;');
+  assert.equal(await efNative.getByRole('button', { name: '执行已审核的回滚' }).isDisabled(), true);
+  await page.locator('#language').selectOption('en');
+  await contains('.ef-core-preview .native-migration form', 'Review the exported SQL');
   await page.getByText('Preview Drizzle migrations', { exact: true }).click();
   await contains('.drizzle-preview [role="status"]', 'Save a supported direct PostgreSQL URL');
   await contains('.drizzle-preview li', 'Unverified · drizzle/0000_create.sql');

@@ -46,6 +46,24 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   section.append(actions, status, cancel, form);
 
   let plan, active;
+  const revision = document.createElement('select');
+  const revisionLabel = labelledMigrationControl('Target revision', revision);
+  const efCore = source.adapter === 'ef-core';
+  const script = document.createElement('input');
+  script.maxLength = 380;
+  script.spellcheck = false;
+  script.autocomplete = 'off';
+  if (efCore || source.adapter === 'alembic') actions.append(revisionLabel);
+  if (efCore) actions.append(labelledMigrationControl('EF Core SQL file relative to the project', script));
+  function setRevisions(ids) {
+    const previous = revision.value;
+    const automatic = new Option('', '');
+    setText(automatic, 'Automatic');
+    revision.replaceChildren(automatic, new Option('base', 'base'), ...ids.map(id => new Option(id, id)));
+    if (ids.includes(previous) || previous === 'base') revision.value = previous;
+  }
+  revision.addEventListener('change', () => reset(true));
+  script.addEventListener('input', () => reset(true));
   cancel.addEventListener('click', () => active?.abort());
   function reset(visible = false) {
     plan = undefined;
@@ -71,7 +89,7 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
     cancel.hidden = false;
     lock(true);
     controls.disabled = true;
-    for (const button of actions.children) button.disabled = true;
+    for (const control of actions.querySelectorAll('button, select, input')) control.disabled = true;
     try { await callback(); }
     catch (error) {
       form.hidden = true;
@@ -82,11 +100,11 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
       active = undefined;
       lock(false);
       controls.disabled = false;
-      for (const button of actions.children) button.disabled = false;
+      for (const control of actions.querySelectorAll('button, select, input')) control.disabled = false;
     }
   }
 
-  for (const operation of source.adapter === 'liquibase' ? ['apply', 'rollback'] : ['apply']) {
+  for (const operation of ['liquibase', 'alembic', 'ef-core'].includes(source.adapter) ? ['apply', 'rollback'] : ['apply']) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'secondary';
@@ -95,21 +113,26 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
     button.addEventListener('click', () => void work(async () => {
       reset(true);
       setText(status, 'Preparing the migration tool and checking database history…');
-      const targetSelection = selection();
+      const targetSelection = { ...selection(), ...(revision.value && { revision: revision.value }), ...(efCore && { scriptFile: script.value.trim() }) };
       const result = await send('preview', operation, targetSelection);
       plan = { operation, targetSelection, ...result };
       const { host, port, name } = result.target;
-      scope.textContent = [result.tool + ' ' + result.version, result.directory, host + ':' + port + '/' + name,
-        result.history.schema + '.' + result.history.table].join(' · ');
+      scope.textContent = [[result.tool, result.version].filter(Boolean).join(' '), result.directory, host + ':' + port + '/' + name,
+        result.history.schema + '.' + result.history.table,
+        result.toRevision && result.fromRevision + ' → ' + result.toRevision, result.scriptFile].filter(Boolean).join(' · ');
       files.replaceChildren(...result.migrations.map(item => {
         const line = document.createElement('li');
         line.textContent = item.revision + ' · ' + item.file;
         return line;
       }));
-      reverse.hidden = !result.undo;
-      reverse.textContent = result.undo?.join('\n') ?? '';
-      setText(note, operation === 'apply' ? 'Review the listed files. Applying the plan runs their SQL against the selected database.' :
-        'Review the rollback SQL. It can remove schema objects or data.');
+      reverse.hidden = !result.undo && !result.sql;
+      reverse.textContent = result.sql ?? result.undo?.join('\n') ?? '';
+      const message = source.adapter === 'alembic'
+        ? 'Review the listed Python revisions. Their code runs against the selected database and can change schema or data.'
+        : efCore ? 'Review the exported SQL and selected migration range before continuing.' :
+          operation === 'apply' ? 'Review the listed files. Applying the plan runs their SQL against the selected database.' :
+          'Review the rollback SQL. It can remove schema objects or data.';
+      setText(note, message);
       setText(submit, operation === 'apply' ? 'Apply reviewed migrations' : 'Run reviewed rollback');
       confirm.placeholder = name;
       submit.disabled = true;
@@ -130,5 +153,5 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
       setText(status, outcomes[result.status]);
     });
   });
-  return { element: section, reset };
+  return { element: section, reset, setRevisions };
 }

@@ -183,6 +183,8 @@ npm start
 
 入口、功能目录和对应测试见[代码结构指南](docs/CODE-MAP.md)。产品边界和模块职责见[架构规范](ARCHITECTURE.md)。测试使用 Node.js 自带运行器，覆盖技术栈、环境诊断、模板过滤、真实本地提交、子进程取消、重启恢复、目录归属、启动器和 API 写入保护。`npm test` 中的 GitHub 发布测试使用模拟 API，不创建远程仓库。
 
+[迁移适配器测试用例](docs/MIGRATION-TEST-CASES.md)列出了五个适配器的固定公开仓库、真实数据库场景和待补覆盖。
+
 真实联调可执行 `npm run test:integration`。需要 Node.js、Git、可用的 Docker 引擎及网络，并保持 5173 / 8080 端口空闲。Spring Boot 联调还需要 Java 21。脚本会在 `work/integration/` 生成 Vue + Express + PostgreSQL、React + Spring Boot + MySQL 和 React + NestJS + PostgreSQL，安装依赖并构建，启动开发服务，通过前端代理执行真实数据库查询，并保存 `report.json`。结束后会停止测试服务和容器，保留生成项目与数据库数据卷以便检查。
 
 可选参数 `--only=node`、`--only=java` 或 `--only=nest` 可只验证一组。显式执行 `npm run test:integration -- --only=node --github --repo-name=你的测试仓库名` 会使用当前已认证的 GitHub 账号创建并推送**新的私有仓库**，校验远程提交；仓库会保留，不归档或删除。默认联调不操作 GitHub。

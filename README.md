@@ -180,6 +180,8 @@ npm start
 
 Tests use Node’s built-in runner. They cover stack combinations, input validation, environment diagnostics, template filtering, real local commits, subprocess cancellation, restart recovery, directory ownership, launcher reuse, simulated GitHub retry, and local API protections. Unit tests do not create remote repositories.
 
+The [migration adapter test matrix](docs/MIGRATION-TEST-CASES.md) lists the pinned public repositories, live database cases, and remaining coverage for all five adapters.
+
 For real frontend/backend/database integration:
 
 ```sh

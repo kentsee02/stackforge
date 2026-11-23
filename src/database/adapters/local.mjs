@@ -103,7 +103,8 @@ export function localSession(target, credentials, command = run, signal) {
   }
   const env = sqlEnvironment();
   if (engine === 'postgres') Object.assign(env, { PGPASSWORD: password, PGCONNECT_TIMEOUT: '4', PGOPTIONS: '-c statement_timeout=12000 -c lock_timeout=4000', LC_ALL: 'C',
-    ...(target.sslmode && { PGSSLMODE: target.sslmode }) });
+    ...(target.sslmode && { PGSSLMODE: target.sslmode }),
+    ...(target.applicationName && { PGAPPNAME: target.applicationName }) });
   else Object.assign(env, { MYSQL_PWD: password });
   const client = engineConfig[engine].client;
   const query = async (sql, database, { timeout = 20000 } = {}) => {

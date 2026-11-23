@@ -29,13 +29,19 @@ const projectId = /^[a-f\d]{64}$/;
 const portableName = /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/;
 
 function reviewedConfig(adapter, source, text) {
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map(line => line.trim()).filter(line => line && !/^[#!]/.test(line));
-  if (adapter === 'flyway' && source.endsWith('flyway.toml')) {
+  let lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map(line => line.trim());
+  if (source.scope === 'spring') {
+    if (lines.some(line => /^#---$|^spring\.config\.(?:import|activate)\b/i.test(line))) return false;
+    lines = lines.filter(line => /^spring\.flyway\b/i.test(line)).map(line => line.slice('spring.'.length));
+    if (!lines.length) return false;
+  } else lines = lines.filter(line => line && !/^[#!]/.test(line));
+  if (adapter === 'flyway' && source.source.endsWith('flyway.toml')) {
     return lines.length === 2 && lines[0] === '[flyway]' && /^locations\s*=/.test(lines[1]);
   }
   return lines.every(line => {
     const match = /^([\w.]+)\s*[:=]\s*(.*)$/.exec(line);
-    return match && !match[2].endsWith('\\') && tools[adapter].config.test(match[1]);
+    return match && !match[2].endsWith('\\') && (tools[adapter].config.test(match[1]) ||
+      source.scope === 'spring' && match[1] === 'flyway.enabled' && match[2].trim() === 'true');
   });
 }
 
@@ -57,8 +63,9 @@ function formattedChanges(text, changes) {
 async function readSource(project, adapter, sourceId, scanned, signal) {
   const { root, migrationSources } = scanned;
   const source = migrationSources.find(item => item.adapter === adapter && item.id === sourceId);
-  if (source?.scope !== 'standalone') throw new Error(badSource);
   const flyway = adapter === 'flyway';
+  const spring = flyway && source?.scope === 'spring' && !source.profile && /(?:^|\/)application\.properties$/i.test(source.source);
+  if (source?.scope !== 'standalone' && !spring) throw new Error(badSource);
   const preview = await (flyway ? previewFlyway : previewLiquibase)(project, sourceId, signal, { scanned });
   if (preview.status !== 'ready') throw new Error(badSource);
   const folder = source.directory === '.' ? '' : source.directory + '/';
@@ -67,7 +74,7 @@ async function readSource(project, adapter, sourceId, scanned, signal) {
   let config;
   try {
     config = await readMigrationFile(join(root, source.source), 64 * 1024);
-    if (!reviewedConfig(adapter, source.source, config)) throw new Error();
+    if (!reviewedConfig(adapter, source, config)) throw new Error();
     const paths = flyway ? preview.migrations.map(item => item.file) : preview.files;
     if (!flyway && (paths.length !== 1 || !/\.sql$/i.test(paths[0]) || source.resourceRoot)) throw new Error();
     if (flyway && preview.migrations.some(item => !['versioned', 'repeatable'].includes(item.kind))) throw new Error();
@@ -92,9 +99,10 @@ async function readSource(project, adapter, sourceId, scanned, signal) {
     fingerprint: databaseKey(source, config, [...files]) };
 }
 
-async function databaseIdentity(session, name, { schema, table }, adapter) {
+export async function migrationDatabaseIdentity(session, name, { schema, table }, adapter) {
   const tracking = adapter === 'liquibase' ? "'databasechangeloglock','" + table + "'" : "'" + table + "'";
-  const userSchema = "n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'";
+  const userSchema = adapter === 'ef-core' && schema !== 'public' ? "n.nspname='" + schema + "'" :
+    "n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'";
   const result = JSON.parse(await session.query("BEGIN READ ONLY; SET LOCAL search_path = pg_catalog; " +
     "SELECT jsonb_build_array(current_database(), pg_postmaster_start_time()::text, " +
     "(SELECT oid::text FROM pg_database WHERE datname=current_database()), " +
@@ -105,7 +113,7 @@ async function databaseIdentity(session, name, { schema, table }, adapter) {
     " AND t.typtype IN ('e','d','r','m'))); COMMIT;", name));
   if (!Array.isArray(result) || result.length !== 4 || result[0] !== name || !result[1] || !/^\d+$/.test(result[2]) ||
       typeof result[3] !== 'boolean') throw new Error(unsafeHistory);
-  return { id: databaseKey(result.slice(0, 3)), populated: result[3] };
+  return { id: databaseKey(result.slice(0, 3)), startedAt: result[1], oid: result[2], populated: result[3] };
 }
 
 function reviewedHistory(state, migrations, adapter) {
@@ -160,7 +168,7 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
   const session = localSession(target, credentials, client.command, signal);
   const compare = () => compareSqlMigrationHistory({ adapter, preview: source.preview, history, checksums: source.checksums,
     resourcePrefix: source.folder, selection: target, credentials, resolveClient: async () => client, signal, includeFingerprint: true });
-  const readIdentity = () => databaseIdentity(session, target.name, history, adapter);
+  const readIdentity = () => migrationDatabaseIdentity(session, target.name, history, adapter);
   const before = await readIdentity();
   const state = await compare();
   const migrations = source.preview.migrations ?? source.preview.changes;

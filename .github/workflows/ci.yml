@@ -58,6 +58,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL did not become ready' }
           $env:STACKFORGE_TEST_PG_PASSWORD = 'root'
           npm run test:database-integration -- --windows-native
+  public-migration-repositories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm run test:public-migrations
   browser-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 12

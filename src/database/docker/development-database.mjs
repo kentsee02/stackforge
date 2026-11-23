@@ -288,7 +288,7 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
         }
         const { env, signal: _signal, ...io } = options;
         const extraEnv = Object.fromEntries(Object.entries(env).filter(([key]) =>
-          /^(?:PGPASSWORD|PGCONNECT_TIMEOUT|PGOPTIONS|PGSSLMODE|PGGSSENCMODE|MYSQL_PWD|LC_ALL)$/.test(key)));
+          /^(?:PGPASSWORD|PGCONNECT_TIMEOUT|PGOPTIONS|PGSSLMODE|PGGSSENCMODE|PGAPPNAME|MYSQL_PWD|LC_ALL)$/.test(key)));
         return cli(['exec', ...(io.input || io.inputFile ? ['-i'] : []), ...Object.keys(extraEnv).flatMap(key => ['-e', key]),
           latest.container, program, ...localArgs], { ...io, extraEnv });
       }

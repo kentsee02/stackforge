@@ -1,5 +1,6 @@
 import { setText } from '/i18n.js';
 import { labelledMigrationControl, migrationHistoryName, postgresHistoryMessages } from '/projects/migration-history.js';
+import { nativeMigrationControls } from '/projects/native-migration.js';
 
 const messages = {
   ready: 'Local Alembic revisions found. Database status is unverified.',
@@ -90,7 +91,14 @@ export function alembicPreview(projectId, source, targets, { request, post }) {
   databaseHeads.append(databaseHeadsLabel, ' · ', databaseHeadIds);
   details.append(summary, status, directory, heads, guide, form, databaseTarget, databaseStatus, databaseHeads, revisions, refresh);
 
-  let loading = false;
+  let loading = false, nativeWorking = false, ready = false;
+  const selection = () => ({ targetId: select.value, schema: schema.value, table: table.value });
+  const canMigrate = () => ready && targets.some(target => target.id === select.value && target.projectPostgres);
+  const native = nativeMigrationControls(projectId, source, { request, post }, { selection,
+    lock(locked) { nativeWorking = controls.disabled = refresh.disabled = locked; },
+    refresh: () => load(select.value, true)
+  });
+  details.append(native.element);
   function showDatabase(result) {
     databaseTarget.hidden = !result?.target;
     databaseTarget.textContent = result?.target ? address(result.target) + ' · ' +
@@ -100,8 +108,8 @@ export function alembicPreview(projectId, source, targets, { request, post }) {
     databaseHeadIds.textContent = result?.heads?.join(', ') ?? '';
   }
 
-  async function load(targetId) {
-    if (loading) return;
+  async function load(targetId, afterExecution = false) {
+    if (loading || nativeWorking && !afterExecution) return;
     loading = true;
     select.disabled = check.disabled = true;
     schema.disabled = table.disabled = true;
@@ -111,8 +119,12 @@ export function alembicPreview(projectId, source, targets, { request, post }) {
     setText(status, targetId ? 'Checking PostgreSQL migration history…' : 'Reading Alembic revision files…');
     try {
       const { token } = await request('/api/state');
-      const selection = targetId ? { targetId, schema: schema.value, table: table.value } : {};
-      const result = await post(`/api/projects/${projectId}/database-alembic-preview`, token, { sourceId: source.id, ...selection }, 40000);
+      const result = await post(`/api/projects/${projectId}/database-alembic-preview`, token, { sourceId: source.id, ...(targetId && selection()) }, 40000);
+      ready = result.status === 'ready';
+      if (!afterExecution) {
+        native.setRevisions(ready ? [...(result.heads.length > 1 ? ['heads'] : []), ...result.revisions.map(item => item.revision)] : []);
+        native.reset(canMigrate());
+      }
       form.hidden = result.status !== 'ready' || !targets.length;
       guide.hidden = result.status !== 'ready' || Boolean(targets.length);
       setText(status, result.database ? 'Local Alembic revisions found.' : messages[result.status]);
@@ -159,6 +171,7 @@ export function alembicPreview(projectId, source, targets, { request, post }) {
     showDatabase();
     setText(status, messages.ready);
     for (const badge of revisions.querySelectorAll('.alembic-revision-state')) badge.remove();
+    native.reset(canMigrate());
   });
   form.addEventListener('submit', event => {
     event.preventDefault();

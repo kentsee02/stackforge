@@ -27,6 +27,8 @@ import { compareSqlMigrationHistory } from './migrations/sql-migration-history.m
 import { sqlServerHistoryTable, sqlServerHistoryTargets } from './migrations/sql-server-history.mjs';
 import { mysqlHistoryTable, mysqlHistoryTargets } from './migrations/mysql-history.mjs';
 import { nativeSqlMigration } from './migrations/native-sql-migrations.mjs';
+import { nativeAlembicMigration } from './migrations/native-alembic.mjs';
+import { nativeEfCoreMigration } from './migrations/native-ef-core.mjs';
 
 export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
   runtime, removals, configWrites, localDatabase, isClosing }) {
@@ -280,7 +282,9 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
           const { engine, host, name, port } = selection;
           const target = { engine, host, name, port };
           const client = await development.client(project, target, signal, selection.id);
-          const result = await nativeSqlMigration({ project, payload, target, client, signal, directory: stagingRoot,
+          const migrate = payload.adapter === 'alembic' ? nativeAlembicMigration :
+            payload.adapter === 'ef-core' ? nativeEfCoreMigration : nativeSqlMigration;
+          const result = await migrate({ project, payload, target, client, signal, directory: stagingRoot,
             async verifyShared(endpoint) {
               const activeIds = await refreshDatabaseBindings(project.id, true);
               if (databaseRegistry.usesEndpoint(project.id, endpoint, activeIds)) throw new Error('A shared database cannot be migrated from StackForge.');

@@ -3,16 +3,19 @@ import { postgresHistoryQuery, postgresHistoryTable } from './postgres-history-t
 import { readSqlServerHistory } from './sql-server-history.mjs';
 
 const maxRows = 1024;
+export const efCoreHistoryColumns = { MigrationId: 'text', ProductVersion: 'text' };
 
 export const efCoreHistoryTable = (schema, table) => postgresHistoryTable(schema, table, '__EFMigrationsHistory');
 
-export async function compareEfCoreHistory({ group, history, ...options }) {
-  const query = postgresHistoryQuery(history, { MigrationId: 'text', ProductVersion: 'text' }, {
-    maxRows, row: 'CASE WHEN length("MigrationId") <= 143 THEN "MigrationId" ELSE NULL END'
+export async function compareEfCoreHistory({ group, history, includeRelation, ...options }) {
+  const query = postgresHistoryQuery(history, efCoreHistoryColumns, {
+    maxRows, row: 'CASE WHEN length("MigrationId") <= 143 THEN "MigrationId" ELSE NULL END',
+    ...(includeRelation && { extra: ", 'oid', :'sf_oid'" })
   });
   const { target, snapshot, status } = await (options.selection.engine === 'sqlserver' ?
     readSqlServerHistory(options, history) : readPostgresHistory(options, query));
-  const respond = (status, fields) => ({ target, history, groupId: group.id, status, ...fields });
+  const respond = (status, fields) => ({ target, history, groupId: group.id, status, ...fields,
+    ...(includeRelation && { relation: snapshot?.oid }) });
   if (!snapshot) return respond(status);
   if (snapshot.table === 'absent') return respond('history-missing');
   if (snapshot.table !== 'readable' || !Array.isArray(snapshot.rows) || snapshot.rows.length > maxRows) return respond('history-unavailable');

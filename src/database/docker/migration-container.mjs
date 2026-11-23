@@ -22,6 +22,21 @@ export async function migrationImage(cli, reference, allowPull) {
   return inspect();
 }
 
+export async function buildMigrationImage({ cli, reference, dockerfile, allowBuild, directory }) {
+  const existing = await migrationImage(cli, reference, false);
+  if (existing || !allowBuild) return existing;
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const staging = await mkdtemp(join(directory, 'migration-tool-'));
+  try {
+    await writeFile(join(staging, 'Dockerfile'), dockerfile, { flag: 'wx', mode: 0o600 });
+    await cli(['build', '--pull=false', '--tag', reference, staging], { timeout: 165000 });
+    return migrationImage(cli, reference, false);
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    throw new Error('Could not prepare the Alembic runtime. Check Docker and package registry access.');
+  } finally { await rm(staging, { recursive: true, force: true }); }
+}
+
 export async function runMigrationContainer({ cli, container, image, args, files, directory, env, signal, verify, cancel }) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const staging = await mkdtemp(join(directory, 'native-migration-'));

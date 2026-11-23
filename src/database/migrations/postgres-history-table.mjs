@@ -13,16 +13,21 @@ const historyTypes = {
   boolean: `('bool'::regtype)`
 };
 
-export function postgresHistoryQuery({ schema, table }, columns, { maxRows, row, order = '', extra = '' }) {
-  const relation = `"${schema}"."${table}"`;
+export function postgresHistoryMetadata({ schema, table }, columns) {
   const shape = Object.entries(columns).map(([name, type]) => `a.attname = '${name}' AND a.atttypid IN ${historyTypes[type]}`);
-  const metadata = `SELECT c.oid,
+  return `SELECT c.oid,
     c.relkind = 'r' AND NOT c.relrowsecurity AND NOT c.relhassubclass AND NOT c.relispartition
       AND (SELECT count(*) FROM pg_catalog.pg_attribute a
         WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
           AND (${shape.map(condition => '(' + condition + ')').join(' OR ')})) = ${shape.length} AS readable
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = '${schema}' AND c.relname = '${table}'`;
+}
+
+export function postgresHistoryQuery(historyTable, columns, { maxRows, row, order = '', extra = '' }) {
+  const { schema, table } = historyTable;
+  const relation = '"' + schema + '"."' + table + '"';
+  const metadata = postgresHistoryMetadata(historyTable, columns);
   return `BEGIN READ ONLY;
 SET LOCAL search_path = pg_catalog;
 SELECT current_database() AS sf_name,
