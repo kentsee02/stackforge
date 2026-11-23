@@ -11,6 +11,7 @@ import { resolveStartup } from '../projects/project-startup.mjs';
 import { drizzleConfig } from './migrations/drizzle-config.mjs';
 import { alembicConfig } from './migrations/alembic-config.mjs';
 import { flywaySources } from './migrations/flyway-config.mjs';
+import { liquibaseSources } from './migrations/liquibase-config.mjs';
 import { composeImageName, composeImages } from './discovered-compose.mjs';
 import { adoFields, dotnetConnectionEntries, dotnetDatabaseProviders } from './dotnet-discovery.mjs';
 
@@ -279,13 +280,19 @@ export async function discoverDatabases(project, { includeConnections = false, i
       'src/main/resources/application.properties', 'src/main/resources/application.yml', 'src/main/resources/application.yaml',
       ...djangoConfigs, 'config/database.yml', 'config/database.yaml'];
     if (includeMigrations) {
-      const flyway = await flywaySources({ files, pom, configs: [...localConfigs.slice(0, 20),
-        ...jvmConfigs.slice(0, 20).map(file => 'src/main/resources/' + file)], read: file => projectText(folder, file) });
-      truncated ||= flyway.limited;
-      for (const { file, document, ...config } of flyway.sources) {
-        const source = pathLabel(directory, file);
-        migrationSources.push({ id: databaseKey(project.id, 'flyway', source, config.scope, config.profile, document),
-          adapter: 'flyway', source, directory, ...config });
+      const configTexts = new Map();
+      const input = { files, pom, configs: [...localConfigs.slice(0, 20), ...jvmConfigs.slice(0, 20).map(file => 'src/main/resources/' + file)],
+        read(file) {
+          if (!configTexts.has(file)) configTexts.set(file, projectText(folder, file));
+          return configTexts.get(file);
+        } };
+      for (const [adapter, scanned] of [['flyway', await flywaySources(input)], ['liquibase', await liquibaseSources(input)]]) {
+        truncated ||= scanned.limited;
+        for (const { file, document, ...config } of scanned.sources) {
+          const source = pathLabel(directory, file);
+          migrationSources.push({ id: databaseKey(project.id, adapter, source, config.scope, config.profile, document),
+            adapter, source, directory, ...config });
+        }
       }
     }
     await Promise.all([...prisma, ...new Set(configs)].map(async file => {

@@ -34,10 +34,12 @@ export async function scanProjectServices(project) {
   const [conventional, layoutLimited] = await Promise.all([
     workspaceFolders(root, serviceFolders, budget),
     walkRepository(root, ({ folder, directory, files }) => {
-      if (hasServiceEvidence(files)) pending.add(folder);
+      const javaResources = /(?:^|\/)src\/main\/resources$/.test(directory);
+      const liquibase = files.includes('liquibase.properties');
+      if (hasServiceEvidence(files) || liquibase && !javaResources) pending.add(folder);
       if (files.includes('schema.prisma')) pending.add(/(?:^|\/)prisma$/.test(directory) ? dirname(folder) : folder);
       if (/(?:^|\/)config$/.test(directory) && files.some(file => /^database\.ya?ml$/i.test(file))) pending.add(dirname(folder));
-      if (/(?:^|\/)src\/main\/resources$/.test(directory) && files.some(file => jvmSettingsFile.test(file))) {
+      if (javaResources && (liquibase || files.some(file => jvmSettingsFile.test(file)))) {
         pending.add(join(folder, '..', '..', '..'));
       }
     })

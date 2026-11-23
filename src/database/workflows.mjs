@@ -21,6 +21,7 @@ import { scanEfCore } from './migrations/ef-core-preview.mjs';
 import { compareEfCoreHistory, efCoreHistoryTable } from './migrations/ef-core-history.mjs';
 import { postgresHistoryTargets } from './migrations/postgres-history.mjs';
 import { previewFlyway } from './migrations/flyway-preview.mjs';
+import { previewLiquibase } from './migrations/liquibase-preview.mjs';
 
 export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters, projectConfig, managedProjects,
   runtime, removals, configWrites, localDatabase, isClosing }) {
@@ -254,6 +255,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       throw new Error('Wait for the current project operation to finish.');
     }
     if (action === 'database-flyway-preview') return previewFlyway(project, payload.sourceId, controller.signal);
+    if (action === 'database-liquibase-preview') return previewLiquibase(project, payload.sourceId, controller.signal);
     if (action === 'database-ef-core-preview') {
       const { signal } = controller;
       const { targetId, groupId, schema, table } = payload;

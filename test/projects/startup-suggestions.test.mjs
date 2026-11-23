@@ -4,7 +4,6 @@ import { once } from 'node:events';
 import { cp, mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { discoverDatabases } from '../../src/database/discovery.mjs';
 import { createApp } from '../../src/http/server.mjs';
 import { ProjectOperations } from '../../src/projects/project-operations.mjs';
@@ -325,7 +324,7 @@ test('reading suggestions leaves saved custom configuration and project files un
   await assert.rejects(stat(join(root, 'executed.txt')), { code: 'ENOENT' });
 });
 
-test('local imports and clones share nested service evidence across startup, dependencies, databases and checks', async t => {
+test('local imports and clones share nested service evidence across startup, dependencies, databases and checks', { timeout: 30000 }, async t => {
   const frontend = 'areas/customers/retail/display';
   const python = 'integrations/partners/search/http';
   const node = 'internal/tools/inventory/http';
@@ -408,7 +407,9 @@ test('local imports and clones share nested service evidence across startup, dep
   assert.deepEqual((await get('/api/projects?logs=' + id)).projects.find(project => project.id === id).startupServices, []);
   assert.deepEqual(calls, []);
   assert.equal((await post(route + '/run-check', { check: check.id })).status, 202);
-  for (let i = 0; i < 40 && !calls.length; i++) await delay(25);
+  await operations.active({ path: root })?.done;
+  const { checkTask } = operations.status({ path: root }, true);
+  assert.equal(checkTask?.status, 'succeeded', checkTask?.error);
   assert.deepEqual(calls, [{ command: 'pnpm run build', args: [], cwd: join(root, frontend) }]);
 
   const services = [{ name: 'Custom path', directory: node, command: 'npm run start' }];

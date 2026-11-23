@@ -72,6 +72,10 @@ try {
   await writeFile(join(billing, 'flyway.toml'), '[flyway]\nlocations = ["filesystem:./changes"]');
   await writeFile(join(billing, 'changes/V1__Create_invoice.sql'), 'CREATE TABLE invoice (id integer);');
   await writeFile(join(billing, 'changes/R__Refresh_totals.sql'), 'CREATE VIEW totals AS SELECT count(*) FROM invoice;');
+  await writeFile(join(billing, 'liquibase.properties'), 'changeLogFile=liquibase/master.xml');
+  await mkdir(join(billing, 'liquibase'));
+  await writeFile(join(billing, 'liquibase/master.xml'), '<databaseChangeLog><include file="invoice.sql" relativeToChangelogFile="true"/></databaseChangeLog>');
+  await writeFile(join(billing, 'liquibase/invoice.sql'), '--liquibase formatted sql\n--changeset billing:invoice-init\nCREATE TABLE invoice (id integer);');
   await mkdir(join(fixtureRepo, 'services/reporting/storage/db'), { recursive: true });
   await writeFile(join(fixtureRepo, 'services/reporting/storage/Reports.csproj'), '<Project Sdk="Microsoft.NET.Sdk" />');
   await writeFile(join(fixtureRepo, 'services/reporting/storage/db/Schema.cs'), `using Microsoft.EntityFrameworkCore.Migrations;
@@ -370,11 +374,20 @@ try {
   await contains('.flyway-preview [role="status"]', '数据库历史尚未核对。');
   await contains('.flyway-preview', '可重复迁移 · changes/R__Refresh_totals.sql');
   assert.equal(await flyway.evaluate(panel => panel.scrollWidth <= panel.clientWidth), true);
+  const liquibase = page.locator('.liquibase-preview');
+  await liquibase.locator('summary').press('Enter');
+  await contains('.liquibase-preview summary', '预览 Liquibase 变更集');
+  await contains('.liquibase-preview [role="status"]', '数据库应用记录未核对。');
+  await contains('.liquibase-preview li', 'invoice-init · billing · liquibase/invoice.sql');
+  assert.equal(await liquibase.evaluate(panel => panel.scrollWidth <= panel.clientWidth), true);
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.locator('#language').selectOption('en');
   await contains('.flyway-preview', 'Versioned migration · changes/V1__Create_invoice.sql');
   await flyway.getByRole('button', { name: 'Rescan Flyway files' }).click();
   await contains('.flyway-preview [role="status"]', 'Database history is unverified.');
+  await contains('.liquibase-preview summary', 'Preview Liquibase changesets');
+  await liquibase.getByRole('button', { name: 'Rescan Liquibase files' }).click();
+  await contains('.liquibase-preview [role="status"]', 'Database history is unverified.');
   await alembic.locator('summary').press('Enter');
   await contains('.alembic-preview [role="status"]', 'Database status is unverified.');
   await contains('.alembic-preview', 'Declared heads · start');
@@ -445,7 +458,7 @@ try {
   await page.locator('#development-postgres-cancel').click();
   await page.unroute(developmentRoute);
   assert.deepEqual(errors, []);
-  console.log('Verified bilingual startup, database setup, and Drizzle, Alembic, EF Core and Flyway migration previews in imported and cloned projects.');
+  console.log('Verified bilingual startup, database setup, and Drizzle, Alembic, EF Core, Flyway and Liquibase migration previews in imported and cloned projects.');
 } finally {
   try {
     await browser?.close();

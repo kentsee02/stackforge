@@ -4,6 +4,7 @@ import { drizzlePreview } from '/projects/drizzle-preview.js';
 import { alembicPreview } from '/projects/alembic-preview.js';
 import { efCorePreview } from '/projects/ef-core-preview.js';
 import { flywayPreview } from '/projects/flyway-preview.js';
+import { liquibasePreview } from '/projects/liquibase-preview.js';
 
 export function createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
   selectedId, selectedProject, renderPage, refresh, act, openDevelopment, refreshDevelopment }) {
@@ -256,7 +257,8 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
       for (const source of data.migrationSources ?? []) {
         const preview = source.adapter === 'alembic' ? alembicPreview(view.id, source, data.alembicTargets ?? [], { request, post }) :
           source.adapter === 'ef-core' ? efCorePreview(view.id, source, data.efCoreTargets ?? [], { request, post }) :
-          source.adapter === 'flyway' ? flywayPreview(view.id, source, { request, post }) : undefined;
+          source.adapter === 'flyway' ? flywayPreview(view.id, source, { request, post }) :
+          source.adapter === 'liquibase' ? liquibasePreview(view.id, source, { request, post }) : undefined;
         if (!preview) continue;
         const row = document.createElement('li');
         row.append(preview);
