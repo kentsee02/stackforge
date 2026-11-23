@@ -112,7 +112,11 @@ export function migrationSourcePreview(projectId, source, { request, post, histo
       form.hidden = result.status !== 'ready' || !historyTargets.length;
       guide.hidden = result.status !== 'ready' || Boolean(historyTargets.length);
       showResult(result);
-      if (!afterExecution) native?.reset(result.status === 'ready' && canMigrate());
+      if (!afterExecution) {
+        if (adapter === 'flyway') native?.setRevisions(result.migrations.every(item => item.kind === 'versioned') ?
+          result.migrations.map(item => item.version) : []);
+        native?.reset(result.status === 'ready' && canMigrate());
+      }
     } catch (error) {
       setText(status, error.message);
     } finally {

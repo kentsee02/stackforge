@@ -53,17 +53,27 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   script.maxLength = 380;
   script.spellcheck = false;
   script.autocomplete = 'off';
-  if (efCore || source.adapter === 'alembic') actions.append(revisionLabel);
+  if (efCore || ['alembic', 'flyway'].includes(source.adapter)) actions.append(revisionLabel);
+  revisionLabel.hidden = source.adapter === 'flyway';
   if (efCore) actions.append(labelledMigrationControl('EF Core SQL file relative to the project', script));
+  const rollbackCount = document.createElement('input');
+  rollbackCount.type = 'number';
+  rollbackCount.min = '1';
+  rollbackCount.step = '1';
+  rollbackCount.value = '1';
+  if (source.adapter === 'liquibase') actions.append(labelledMigrationControl('Changesets to roll back', rollbackCount));
   function setRevisions(ids) {
     const previous = revision.value;
     const automatic = new Option('', '');
     setText(automatic, 'Automatic');
-    revision.replaceChildren(automatic, new Option('base', 'base'), ...ids.map(id => new Option(id, id)));
-    if (ids.includes(previous) || previous === 'base') revision.value = previous;
+    revision.replaceChildren(automatic, ...(source.adapter === 'flyway' ? [] : [new Option('base', 'base')]),
+      ...ids.map(id => new Option(id, id)));
+    revisionLabel.hidden = source.adapter === 'flyway' && !ids.length;
+    if (ids.includes(previous) || source.adapter !== 'flyway' && previous === 'base') revision.value = previous;
   }
   revision.addEventListener('change', () => reset(true));
   script.addEventListener('input', () => reset(true));
+  rollbackCount.addEventListener('input', () => reset(true));
   cancel.addEventListener('click', () => active?.abort());
   function reset(visible = false) {
     plan = undefined;
@@ -113,7 +123,8 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
     button.addEventListener('click', () => void work(async () => {
       reset(true);
       setText(status, 'Preparing the migration tool and checking database history…');
-      const targetSelection = { ...selection(), ...(revision.value && { revision: revision.value }), ...(efCore && { scriptFile: script.value.trim() }) };
+      const targetSelection = { ...selection(), ...(revision.value && { revision: revision.value }), ...(efCore && { scriptFile: script.value.trim() }),
+        ...(source.adapter === 'liquibase' && operation === 'rollback' && { rollbackCount: Number(rollbackCount.value) }) };
       const result = await send('preview', operation, targetSelection);
       plan = { operation, targetSelection, ...result };
       const { host, port, name } = result.target;

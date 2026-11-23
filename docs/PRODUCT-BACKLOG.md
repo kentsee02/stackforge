@@ -31,7 +31,12 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 - [x] Preview and run EF Core PostgreSQL SQL exports for the selected `DbContext` and migration range. Roll back the transaction if the script does not produce the expected history.
 - [x] Run supported Flyway SQL selected by literal Spring Boot properties on project-owned PostgreSQL.
 - [x] Add a reproducible [test matrix](MIGRATION-TEST-CASES.md) with fixed upstream commits plus live database and bilingual cases.
-- [ ] Extend writes to additional database engines and runtime layouts. Remaining items include EF Core SQL Server writes, project-specific Alembic runtimes, Liquibase structured changelogs and ranged rollback, licensed Flyway Undo, and broader Drizzle SQL.
+- [ ] Extend writes to additional database engines and runtime layouts. Remaining items include EF Core SQL Server writes, project-specific Alembic runtimes, Liquibase structured changelogs and rollback by tag, licensed Flyway Undo, and broader Drizzle SQL.
+
+## v0.46.1 Migration ranges
+
+- [x] Preview and confirm rollback of a selected number of recently applied changesets. Require an explicit rollback statement for each changeset, bind the count to the approval and recheck the resulting history.
+- [x] Apply versioned Flyway SQL up to a selected revision. Keep later versions pending and verify PostgreSQL rejects incompatible upstream seed SQL without marking the failed group as applied.
 
 ## v0.45.0 Native Flyway and Liquibase execution
 

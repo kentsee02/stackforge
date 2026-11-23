@@ -189,6 +189,13 @@ try {
       assert.equal((await query("SELECT to_regclass('public.first_item') IS NOT NULL AND to_regclass('public.second_item') IS NULL;")).trim(), 't');
       assert.equal((await execute((await preview('rollback')).planId, 'rollback')).status, 'rolled-back');
       assert.equal((await execute((await preview()).planId)).status, 'applied');
+      const rollback = { ...select, operation: 'rollback', rollbackCount: 2 };
+      await api(endpoint, { ...rollback, rollbackCount: 3, mode: 'preview' }, 409);
+      const rangePlan = await api(endpoint, { ...rollback, mode: 'preview' });
+      assert.deepEqual(rangePlan.undo, ['DROP TABLE second_item;', 'DROP TABLE first_item;']);
+      await api(endpoint, { ...rollback, rollbackCount: 1, mode: 'execute', planId: rangePlan.planId, confirmName: name }, 409);
+      assert.equal((await api(endpoint, { ...rollback, mode: 'execute', planId: rangePlan.planId, confirmName: name })).status, 'rolled-back');
+      assert.equal((await query("SELECT to_regclass('public.first_item') IS NULL AND to_regclass('public.second_item') IS NULL;")).trim(), 't');
     } else {
       await preview('rollback', 409);
       await writeFile(join(project, 'sql/R__labels.sql'), 'CREATE OR REPLACE VIEW labels AS SELECT 2 AS version;\n');

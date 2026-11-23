@@ -22,6 +22,9 @@ const cases = [
   { repo: 'jhipster/jhipster-sample-app', commit: '6b000b5d23a36c45e01472471b84a44fa2464044', adapter: 'liquibase' }
 ];
 const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12]];
+const selectedCases = new Set(process.argv.filter(arg => arg.startsWith('--case=')).map(arg => arg.slice('--case='.length)));
+assert.ok([...selectedCases].every(value => /^PUB-0[1-9]$/.test(value)), 'Select a case from PUB-01 through PUB-09.');
+const selected = number => !selectedCases.size || selectedCases.has('PUB-0' + number);
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-public-migrations-')));
 const repositories = new Map();
 const live = process.argv.includes('--postgres');
@@ -89,10 +92,27 @@ async function assertPostgresMigration(api, project, adapter) {
     const { id: targetId } = discovery.sqlMigrationTargets.find(item => item.projectPostgres);
     const endpoint = project.id + '/database-native-migration';
     const selection = { adapter, sourceId, targetId, operation: 'apply' };
-    const plan = await api(endpoint, { ...selection, mode: 'preview' });
-    const applied = await api(endpoint, { ...selection, mode: 'execute', planId: plan.planId, confirmName: name });
+    const check = () => api(project.id + '/database-' + adapter + '-preview', { sourceId, targetId });
+    const previewPlan = extras => api(endpoint, { ...selection, ...extras, mode: 'preview' });
+    const execute = (planId, extras) => api(endpoint, { ...selection, ...extras, mode: 'execute', planId, confirmName: name });
+    const plan = await previewPlan();
+    if (adapter === 'flyway') {
+      // The upstream seed scripts insert integer literals into a Boolean column.
+      // The native PostgreSQL attempt should fail as a group. V1 itself is portable.
+      assert.equal((await execute(plan.planId)).status, 'execution-failed');
+      const failed = (await check()).database;
+      assert.ok(['history-missing', 'pending'].includes(failed.status));
+      assert.ok(!failed.items?.some(item => item.state === 'applied'));
+      const revision = plan.migrations[0].revision;
+      const first = await previewPlan({ revision });
+      assert.equal(first.toRevision, revision);
+      assert.equal((await execute(first.planId, { revision })).status, 'applied');
+      assert.deepEqual((await check()).database.items.map(item => item.state), ['applied', 'pending', 'pending']);
+      return ['grouped-failure', 'apply-to-version-1', 'history'];
+    }
+    const applied = await execute(plan.planId);
     assert.equal(applied.status, 'applied');
-    const after = await api(project.id + '/database-' + adapter + '-preview', { sourceId, targetId });
+    const after = await check();
     assert.equal(after.database.status, 'recorded');
     assert.ok(after.database.items.every(item => item.state === (adapter === 'flyway' ? 'applied' : 'recorded')));
     return ['apply', 'history'];
@@ -191,6 +211,7 @@ try {
     return data;
   };
   const downloads = await Promise.allSettled(cases.map(async ({ repo, commit }, index) => {
+    if (!selected(index + 1)) return;
     const path = join(root, 'upstream-' + index);
     const url = 'https://github.com/' + repo;
     await mkdir(path);
@@ -206,6 +227,7 @@ try {
     return { path, url };
   }));
   for (const [index, item] of cases.entries()) {
+    if (!selected(index + 1)) continue;
     const download = downloads[index];
     if (download.status === 'rejected') throw new Error('Could not fetch pinned repository ' + item.repo, { cause: download.reason });
     const { path, url } = download.value;
@@ -223,7 +245,7 @@ try {
       console.log(JSON.stringify({ repository: item.repo, postgres: await assertPostgresMigration(api, cloned, item.adapter) }));
     }
   }
-  if (live) {
+  if (live && selected(9)) {
     const commit = '75773ed9b45b0a5adf3c42872d2e5494da669427';
     const path = 'liquibase-integration-tests/src/test/resources/changelogs/pgsql/complete/basic.formatted.sql';
     const checkout = join(root, 'liquibase-upstream');

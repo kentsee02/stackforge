@@ -22,6 +22,7 @@ The public live suite exercises original upstream migrations on disposable proje
 
 ```sh
 npm run test:public-migrations -- --postgres --ef-cli
+npm run test:public-migrations -- --postgres --case=PUB-05 --case=PUB-09
 ```
 
 ## Public repositories and expected results
@@ -32,7 +33,7 @@ npm run test:public-migrations -- --postgres --ef-cli
 | PUB-02 Alembic | [fastapi/full-stack-fastapi-template](https://github.com/fastapi/full-stack-fastapi-template/tree/77e550a73bb49dd2967622c5ed11bf7a49603c93) | Find all five revisions under the nested backend's `alembic.ini`. | Upgrade to the first revision, verify the head, downgrade to `base`, apply the full chain and verify current history. |
 | PUB-03 EF Core | [dotnet/eShop](https://github.com/dotnet/eShop/tree/ab10e4c68fd26369578ebfb3fd1ccf3b867d0444) | Find nine migrations across four .NET projects, including a separate infrastructure project. | Source coverage. |
 | PUB-04 EF Core | [ModularMonolithSharedDbContextSample](https://github.com/I-RzR-I/ModularMonolithSharedDbContextSample/tree/aa79eeffb5a4a02785e24c500d2524a3095d3adb) | Find ten assemblies with separate Identity and Document contexts across five layouts. | Export the real v1 Document migration and its reverse SQL with `dotnet ef`. Apply and roll back on PostgreSQL using the custom `doc` history schema. |
-| PUB-05 Flyway | [Java Spring Boot samples](https://github.com/nanotaboada/java.samples.spring.boot/tree/2cbc59f0d968951a5f80b6624ec1fd27c93363ed) | Find three SQL migrations from Spring Boot's classpath location. | Add a test-only PostgreSQL declaration if the sample uses its SQLite default. Apply its unchanged Spring Flyway configuration and SQL, then verify every recorded checksum. |
+| PUB-05 Flyway | [Java Spring Boot samples](https://github.com/nanotaboada/java.samples.spring.boot/tree/2cbc59f0d968951a5f80b6624ec1fd27c93363ed) | Find three SQL migrations from Spring Boot's classpath location. | Add a test-only PostgreSQL declaration. Keep the native Spring configuration and SQL intact. The full run must fail as a group because the seed migrations insert SQLite-style integer values into PostgreSQL Boolean columns. Apply to V1 and verify its checksum and that V2 and V3 remain pending. |
 | PUB-06 Flyway | [Maven profile example](https://github.com/BootcampToProd/flyway-with-spring-boot-maven/tree/046d4ae118e99f9197bea434daf870873c789b2e) | Keep the dev, stage and prod configurations separate and retain the disabled runtime source. | Source coverage. |
 | PUB-07 Liquibase | [Spring Boot Liquibase example](https://github.com/h3yzack/springboot3-liquibase-example/tree/baa98678824b59476bf09805ac516e4aa8729916) | Find four changesets through both the Maven and Spring declarations. | Source coverage. |
 | PUB-08 Liquibase | [JHipster sample app](https://github.com/jhipster/jhipster-sample-app/tree/6b000b5d23a36c45e01472471b84a44fa2464044) | Resolve the nested XML changelog and its 12 changesets. | Source coverage. |
@@ -53,13 +54,13 @@ npm run test:public-migrations -- --postgres --ef-cli
 | EF-01 | Split partial classes, custom directories, BOM and multiple contexts | Keep each migration in its own project and `DbContext`. Flag duplicate or unresolved declarations. | `test`, `test:public-migrations` |
 | EF-02 | Default and custom history tables on PostgreSQL and SQL Server | Report missing, pending, applied or conflicting history. Keep credentials out of API results. | `test:development-postgres`, `test:migration-sql-server` |
 | EF-03 | Reviewed PostgreSQL apply and rollback SQL | Verify the selected context and migration range, then check the exact history in the same transaction before commit. | `test:native-migrations`, PUB-04 |
-| EF-04 | Wrong history, stale SQL, escaped path or client meta-command | Roll back the whole write on history mismatch. Reject altered and unsafe input. | `test:native-migrations` |
+| EF-04 | Wrong history, stale SQL, escaped path, client meta-command or malformed SQL | Roll back the whole write on history mismatch. Reject altered and unsafe input. | `test`, `test:native-migrations` |
 | FLY-01 | CLI, Spring Boot, Maven profiles and Gradle paths | Discover local SQL in numeric version order. Report duplicates, unavailable files and unsupported settings. | `test`, `test:public-migrations` |
 | FLY-02 | PostgreSQL and MySQL history, versioned checksums and repeatables | Report applied, changed, outdated and unverifiable records with custom table support. | `test:development-postgres`, `test:development-mysql` |
 | FLY-03 | Native grouped apply, repeatable replay, error or cancellation | Confirm valid history after writes. Roll back a failing group and clear the cancelled session. | `test:native-migrations`, PUB-05 |
 | LIQ-01 | Structured and formatted changelogs, includes and logical paths | Inspect supported declarations and flag repeated identities, cycles and unreadable files. | `test`, `test:public-migrations` |
 | LIQ-02 | PostgreSQL and MySQL history with executed and marked-ran entries | Match changeset identity and distinguish marked-ran records. Reject incompatible history tables. | `test:development-postgres`, `test:development-mysql` |
-| LIQ-03 | Native apply, latest explicit rollback, rollback to empty and replay | Confirm the expected changesets and verify history after each operation. | `test:native-migrations`, PUB-09 |
+| LIQ-03 | Native apply, rollback of one or several changesets, and replay | Preview rollback statements in reverse apply order. Reject an invalid or altered count. Verify history after each operation. | `test:native-migrations`, PUB-09 |
 | FLOW-01 | Mismatched confirmation, altered files, shared or replaced target | Refuse the write. Use a fresh approval after changes. | `test:native-migrations`, `test:development-postgres` |
 | FLOW-02 | Verified backup recovery to a fresh PostgreSQL database | Refuse a populated restore target. On an eligible empty target, restore the archive and verify migration history. | `test:native-migrations` |
 | FLOW-03 | Imported and cloned Projects views in English and Chinese | Render file previews, statuses and confirmation controls. Exact database-name matching gates execution. | `test:browser` |
@@ -70,5 +71,5 @@ npm run test:public-migrations -- --postgres --ef-cli
 - Alembic writes cover supported revisions that use the staged runtime and version graph. Project-specific `env.py`, project imports, external dependencies, `depends_on` and nontransactional migrations need their own execution path.
 - EF Core executes reviewed PostgreSQL SQL exports. Direct project-tool invocation and SQL Server writes remain separate coverage. The real SQL Server test currently checks history.
 - Flyway writes cover supported standalone and literal Spring Boot properties configurations on project PostgreSQL. Maven and Gradle runtime integration, MySQL native execution and licensed Undo remain open.
-- Liquibase writes cover supported standalone formatted SQL on project PostgreSQL. Structured changelog execution, context and label filters, rollback by tag or range and MySQL native execution remain open.
+- Liquibase writes cover supported standalone formatted SQL on project PostgreSQL. Structured changelog execution, context and label filters, rollback by tag and MySQL native execution remain open.
 - A history match verifies recorded migrations. Schema drift and data correctness need separate checks.

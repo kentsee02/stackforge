@@ -174,11 +174,27 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
   const migrations = source.preview.migrations ?? source.preview.changes;
   const { applied, pending } = reviewedHistory(state, migrations, adapter);
   if (!applied && before.populated) throw new Error(unsafeHistory);
-  const expected = operation === 'apply' ? migrations.length : applied - 1;
-  const range = operation === 'apply' ? pending : migrations.slice(applied - 1, applied);
+  const rollback = operation === 'rollback';
+  const flywayTarget = adapter === 'flyway' && payload.revision !== undefined;
+  let applyLimit = migrations.length;
+  if (flywayTarget) {
+    if (migrations.some(item => item.kind !== 'versioned')) throw new Error('Use Automatic when the Flyway source contains repeatable migrations.');
+    applyLimit = migrations.findIndex(item => item.version === payload.revision) + 1;
+    if (applyLimit <= applied) throw new Error('Choose a revision in the requested migration direction.');
+  }
+  const count = rollback ? payload.rollbackCount ?? 1 : 0;
+  if (rollback && (!Number.isInteger(count) || count < 1 || count > applied)) {
+    throw new Error('Choose a rollback count within the applied Liquibase changesets.');
+  }
+  const expected = rollback ? applied - count : applyLimit;
+  const range = rollback ? migrations.slice(expected, applied).reverse() :
+    flywayTarget ? pending.slice(0, expected - applied) : pending;
   if (!range.length || expected < 0) throw new Error(noChanges);
-  const undo = operation === 'rollback' ? source.rollback?.[expected] : undefined;
-  if (operation === 'rollback' && !undo) throw new Error('The last applied changeset needs an explicit rollback statement.');
+  const undoGroups = rollback ? source.rollback?.slice(expected, applied).reverse() : undefined;
+  if (rollback && (!undoGroups || undoGroups.length !== count || undoGroups.some(group => !group))) {
+    throw new Error('Each selected changeset needs an explicit rollback statement.');
+  }
+  const undo = undoGroups?.flat();
   const order = undo ? await rollbackOrder(session, target, history, migrations, applied, source.folder) : undefined;
   const expires = mode === 'preview' ? String(Date.now() + 5 * 60_000) : /^(\d{13})\.[a-f\d]{64}$/.exec(payload.planId ?? '')?.[1];
   const signature = createHmac('sha256', key).update(JSON.stringify([
@@ -187,6 +203,7 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
   ])).digest('hex');
   const planId = expires + '.' + signature;
   const plan = { target, tool: tool.name, version: tool.version, history, directory: source.directory,
+    ...(flywayTarget && { fromRevision: migrations[applied - 1]?.version ?? 'base', toRevision: payload.revision }),
     migrations: range.map(item => ({ file: item.file, revision: item.version ?? item.description ?? item.author + ':' + item.id })), ...(undo && { undo }) };
   if (mode === 'preview') return { status: 'planned', planId, ...plan };
   if (!expires || Number(expires) <= Date.now() || payload.planId !== planId || payload.confirmName !== target.name) throw new Error(changed);
@@ -207,13 +224,14 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
   const invocation = adapter === 'flyway' ? {
     env: { FLYWAY_URL: jdbc, FLYWAY_USER: credentials.user, FLYWAY_PASSWORD: credentials.password },
     args: ['-locations=filesystem:/stackforge', '-defaultSchema=' + history.schema, '-table=' + history.table,
-      '-baselineOnMigrate=false', '-validateOnMigrate=true', '-group=true', '-cleanDisabled=true', '-placeholderReplacement=false', 'migrate']
+      '-baselineOnMigrate=false', '-validateOnMigrate=true', '-group=true', '-cleanDisabled=true', '-placeholderReplacement=false',
+      ...(flywayTarget ? ['-target=' + payload.revision] : []), 'migrate']
   } : {
     env: { LIQUIBASE_COMMAND_URL: jdbc, LIQUIBASE_COMMAND_USERNAME: credentials.user, LIQUIBASE_COMMAND_PASSWORD: credentials.password },
     args: ['--search-path=/stackforge', '--database-changelog-table-name=' + history.table,
       operation === 'apply' ? 'update' : 'rollback-count',
       '--changelog-file=' + [...source.files.keys()][0], '--default-schema-name=' + history.schema,
-      '--liquibase-schema-name=' + history.schema, ...(undo ? ['--count=1'] : [])]
+      '--liquibase-schema-name=' + history.schema, ...(rollback ? ['--count=' + count] : [])]
   };
   try {
     await runMigrationContainer({ ...scope, ...invocation, image, files: source.files, directory, signal, verify,
@@ -226,7 +244,8 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
     const after = await readIdentity();
     const historyAfter = await compare();
     const verified = reviewedHistory(historyAfter, migrations, adapter);
-    if (after.id !== before.id || verified.applied !== expected || (operation === 'apply' && verified.pending.length) ||
+    if (after.id !== before.id || verified.applied !== expected ||
+        (operation === 'apply' && verified.pending.length !== migrations.length - expected) ||
         historyAfter.fingerprint === state.fingerprint) return { status: 'execution-unverified' };
   } catch (error) {
     if (error.name === 'AbortError') throw error;

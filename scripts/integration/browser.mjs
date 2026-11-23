@@ -435,7 +435,7 @@ try {
   await liquibase.getByRole('button', { name: 'Rescan Liquibase files' }).click();
   await contains('.liquibase-preview [role="status"]', 'Database history is unverified.');
   for (const panel of [flyway, liquibase]) {
-    await panel.locator('select').selectOption({ label: targetLabel });
+    await panel.locator(':scope > form select').selectOption({ label: targetLabel });
     await panel.getByRole('button', { name: 'Check database history' }).click();
   }
   await contains('.flyway-preview', 'Checksum changed');
@@ -443,7 +443,7 @@ try {
   await page.locator('#language').selectOption('zh-CN');
   await contains('.flyway-preview', '校验和已变化');
   await contains('.liquibase-preview', '标记为已运行');
-  await flyway.locator('select').selectOption(ownedTarget.id);
+  await flyway.locator(':scope > form select').selectOption(ownedTarget.id);
   const native = flyway.locator('.native-migration');
   await native.getByRole('button', { name: '预览迁移计划' }).click();
   await contains('.flyway-preview .native-migration form', 'Flyway 11.20.3');
