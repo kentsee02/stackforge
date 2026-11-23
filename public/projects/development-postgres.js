@@ -11,11 +11,13 @@ export function createDevelopmentPostgres({ $, request, post, state, renderPage,
   const el = name => $('development-postgres-' + name);
   const panel = $('project-development-postgres');
   let view, confirmation, timer, shownStatus;
-  const engines = { postgres: 'PostgreSQL', mysql: 'MySQL' };
+  const engines = { postgres: 'PostgreSQL', mysql: 'MySQL', sqlserver: 'SQL Server' };
+  const createLabels = { postgres: 'Create project PostgreSQL', mysql: 'Create project MySQL', sqlserver: 'Create project SQL Server' };
   const selectedOption = () => view?.info?.options?.find(item => item.id === el('choice').value);
 
   function renderConfirmation() {
-    el('apply').disabled = !view || view.working || view.locked || el('confirm').value !== el('confirm-target').textContent;
+    el('apply').disabled = !view || view.working || view.locked || el('confirm').value !== el('confirm-target').textContent ||
+      !el('terms').hidden && !el('accept-terms').checked;
   }
 
   function renderControls() {
@@ -92,7 +94,7 @@ export function createDevelopmentPostgres({ $, request, post, state, renderPage,
     const engine = selectedOption()?.engine;
     if (!engine || view.portEngine === engine) return;
     view.portEngine = engine;
-    el('port').value = engine === 'mysql' ? view.info.mysqlPort : view.info.port;
+    el('port').value = engine === 'mysql' ? view.info.mysqlPort : engine === 'sqlserver' ? view.info.sqlServerPort : view.info.port;
   }
 
   async function load() {
@@ -121,7 +123,7 @@ export function createDevelopmentPostgres({ $, request, post, state, renderPage,
     const deleting = mode === 'delete';
     const value = deleting ? target.volume : target.name;
     const endpoint = target.host + ':' + target.port + '/' + target.name;
-    const title = deleting ? 'Delete database volume' : target.engine === 'mysql' ? 'Create project MySQL' : 'Create project PostgreSQL';
+    const title = deleting ? 'Delete database volume' : createLabels[target.engine ?? 'postgres'];
     setText(el('dialog-title'), title);
     setText(el('confirm-hint'), deleting ? 'Stop the database and type the exact volume name to delete its data.' : 'Type the target database name to confirm.');
     el('confirm-target').textContent = value;
@@ -129,6 +131,9 @@ export function createDevelopmentPostgres({ $, request, post, state, renderPage,
     el('dialog-connection').hidden = !target.connections?.length;
     el('dialog-connection').textContent = target.connections?.map(item => item.variable + ' · ' + (item.file ?? item.source)).join(' · ') ?? '';
     el('confirm').value = '';
+    el('terms').hidden = deleting || target.engine !== 'sqlserver';
+    el('accept-terms').checked = false;
+    if (!el('terms').hidden) el('terms-link').href = target.terms;
     el('apply').className = deleting ? 'secondary danger' : 'primary';
     el('apply').disabled = true;
     setText(el('apply'), title);
@@ -144,7 +149,7 @@ export function createDevelopmentPostgres({ $, request, post, state, renderPage,
     renderPage();
     try {
       const { token } = await request('/api/state');
-      const result = await post('/api/projects/' + current.id + '/database-development', token, { mode, ...payload }, 210000);
+      const result = await post('/api/projects/' + current.id + '/database-development', token, { mode, ...payload }, payload.acceptTerms ? 470000 : 210000);
       if (view !== current) return;
       if (mode === 'preview') openConfirmation('create', result);
       if (mode === 'save') {
@@ -152,6 +157,7 @@ export function createDevelopmentPostgres({ $, request, post, state, renderPage,
         void reloadDiscovery();
       } else if (mode === 'delete') current.message = 'Database volume deleted. Update any connection settings that used this instance.';
       else current.message = undefined;
+      if (['create', 'start', 'delete'].includes(mode)) void reloadDiscovery();
     } catch (error) {
       current.problem = error.message;
       current.message = undefined;
@@ -190,13 +196,15 @@ export function createDevelopmentPostgres({ $, request, post, state, renderPage,
   });
   el('cancel').addEventListener('click', () => el('dialog').close());
   el('confirm').addEventListener('input', renderConfirmation);
+  el('accept-terms').addEventListener('input', renderConfirmation);
   el('confirm-form').addEventListener('submit', event => {
     event.preventDefault();
     if (!confirmation || el('apply').disabled || state.pending) return;
     const { mode, target } = confirmation;
     const confirm = el('confirm').value;
     el('dialog').close();
-    void send(mode, mode === 'create' ? { plan: target.plan, name: target.name, port: target.port, targetId: target.targetId, confirm } : { confirm });
+    void send(mode, mode === 'create' ? { plan: target.plan, name: target.name, port: target.port, targetId: target.targetId, confirm,
+      ...(target.engine === 'sqlserver' && { acceptTerms: el('accept-terms').checked }) } : { confirm });
   });
 
   return {

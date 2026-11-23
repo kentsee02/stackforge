@@ -7,6 +7,8 @@ import { databaseKey } from '../discovery.mjs';
 import { compareEfCoreHistory, efCoreHistoryColumns, efCoreHistoryTable } from './ef-core-history.mjs';
 import { scanEfCore } from './ef-core-preview.mjs';
 import { efPostgresStatements } from './ef-core-sql.mjs';
+import { efSqlServerIdentity, efSqlServerStatements, efSqlServerTransaction } from './ef-core-tsql.mjs';
+import { sqlServerHistoryTable } from './sql-server-history.mjs';
 import { readMigrationFile } from './migration-files.mjs';
 import { migrationDatabaseIdentity } from './native-sql-migrations.mjs';
 import { postgresHistoryMetadata } from './postgres-history-table.mjs';
@@ -19,12 +21,12 @@ const invalidHistory = 'Check the migration history and target database before p
 const pgText = text => "pg_catalog.convert_from(pg_catalog.decode('" + Buffer.from(text, 'utf8').toString('hex') + "', 'hex'), 'UTF8')";
 const jsonSql = value => pgText(JSON.stringify(value)) + '::jsonb';
 
-async function sourceFiles(root, source, file, migrations, signal) {
+async function sourceFiles(root, source, file, migrations, signal, parse, invalid) {
   if (typeof file !== 'string' || file.length > 380 || !/\.sql$/i.test(file) ||
-      file.split('/').some(part => !/^[\w][\w .-]*$/.test(part) || /[. ]$/.test(part))) throw new Error(unsupported);
+      file.split('/').some(part => !/^[\w][\w .-]*$/.test(part) || /[. ]$/.test(part))) throw new Error(invalid);
   try {
     const sql = (await readMigrationFile(join(root, file), 256 * 1024)).replace(/^\uFEFF/, '');
-    const statements = efPostgresStatements(sql);
+    const statements = parse(sql);
     if (!statements) throw new Error();
     const files = new Set([source, ...migrations.map(item => item.file)]);
     const contents = [];
@@ -38,7 +40,7 @@ async function sourceFiles(root, source, file, migrations, signal) {
     return { sql, statements, digest: databaseKey(sql, contents) };
   } catch (error) {
     if (error.name === 'AbortError') throw error;
-    throw new Error(unsupported);
+    throw new Error(invalid);
   }
 }
 
@@ -84,21 +86,27 @@ function guardedScript(history, before, relationId, current, expected, statement
 
 export async function nativeEfCoreMigration({ project, payload, target, client, signal, verifyShared }) {
   const { mode, operation, sourceId, groupId, scriptFile } = payload;
-  if (!['preview', 'execute'].includes(mode) || !['apply', 'rollback'].includes(operation)) throw new Error(unsupported);
+  const sqlServer = target.engine === 'sqlserver';
+  const invalid = sqlServer ? 'Choose a supported SQL Server EF Core migration SQL file inside the project.' : unsupported;
+  if (!['preview', 'execute'].includes(mode) || !['apply', 'rollback'].includes(operation)) throw new Error(invalid);
   const { root, identity } = await resolveStartup(project, []);
   const preview = await scanEfCore(project, { sourceId, signal });
   const group = preview.groups?.find(item => item.id === groupId);
   if (preview.status !== 'ready' || !group || group.migrations.some(item => !item.verified)) {
     throw new Error('Choose a verified EF Core DbContext and rescan if it changed.');
   }
-  const source = await sourceFiles(root, preview.source, scriptFile, group.migrations, signal);
-  const history = efCoreHistoryTable(payload.schema, payload.table);
+  const readSource = () => sourceFiles(root, preview.source, scriptFile, group.migrations, signal,
+    sqlServer ? efSqlServerStatements : efPostgresStatements, invalid);
+  const source = await readSource();
+  const history = (sqlServer ? sqlServerHistoryTable : efCoreHistoryTable)(payload.schema, payload.table);
   const scope = await client.migrationScope();
-  const credentials = await client.credentials();
+  const credentials = sqlServer ? undefined : await client.credentials();
   const applicationName = 'stackforge_migration_' + randomBytes(12).toString('hex');
-  const session = localSession({ ...target, applicationName }, credentials, client.command, signal);
-  const readIdentity = () => migrationDatabaseIdentity(session, target.name, history, 'ef-core');
-  const compare = () => compareEfCoreHistory({ group, history, selection: target, credentials, resolveClient: async () => client,
+  const session = sqlServer ? undefined : localSession({ ...target, applicationName }, credentials, client.command, signal);
+  const readIdentity = () => sqlServer ? efSqlServerIdentity(scope.query, target, history) :
+    migrationDatabaseIdentity(session, target.name, history, 'ef-core');
+  const compare = () => compareEfCoreHistory({ group, history, selection: { ...target, ...(sqlServer && { projectSqlServer: true }) }, credentials,
+    resolveClient: async () => sqlServer ? { sqlServerQuery: scope.query } : client,
     signal, includeRelation: true });
   const before = await readIdentity();
   const state = await compare();
@@ -126,13 +134,15 @@ export async function nativeEfCoreMigration({ project, payload, target, client, 
   await verifyShared(target);
   const refreshed = await scanEfCore(project, { sourceId, signal });
   if (refreshed.status !== 'ready' || !refreshed.groups?.some(item => item.id === groupId) ||
-      (await sourceFiles(root, preview.source, scriptFile, migrations, signal)).digest !== source.digest) throw new Error(changed);
+      (await readSource()).digest !== source.digest) throw new Error(changed);
   await resolveStartup(project, [], identity);
   await scope.verify();
   if (databaseKey(await readIdentity()) !== databaseKey(before)) throw new Error(changed);
   throwIfCancelled(signal);
   try {
-    await session.query(guardedScript(history, before, state.relation, current, expected, source.statements), target.name, { timeout: 140000 });
+    if (sqlServer) await scope.query(efSqlServerTransaction({ target, history, before, relationId: state.relation,
+      current, expected, statements: source.statements, applicationName }), { timeout: 140000 });
+    else await session.query(guardedScript(history, before, state.relation, current, expected, source.statements), target.name, { timeout: 140000 });
   } catch (error) {
     await scope.cancel(applicationName).catch(() => {});
     if (error.name === 'AbortError') throw error;

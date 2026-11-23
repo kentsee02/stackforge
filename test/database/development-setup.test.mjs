@@ -109,7 +109,7 @@ test('dedicated database previews report the reason Docker is unavailable', asyn
     return scenario.info ?? healthy;
   } });
   const { options } = await development.inspect(project);
-  assert.deepEqual(options.filter(item => item.canCreate).map(item => item.engine).sort(), ['mysql', 'postgres']);
+  assert.deepEqual(options.filter(item => item.canCreate).map(item => item.engine).sort(), ['mysql', 'postgres', 'sqlserver']);
   const pg = options.find(item => item.engine === 'postgres');
   const preview = option => development.action(project, { mode: 'preview', name: 'stackforge_test', port: 55432, targetId: option.id });
   for (const [failure, message] of [

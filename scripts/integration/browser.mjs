@@ -351,11 +351,13 @@ try {
   await writeFile(join(cloned.path, '.env'), 'ALEMBIC_DATABASE_URL=postgresql://browseruser:browser_test_only@127.0.0.1:5432/browser_alembic\n');
   const ownedTarget = { id: 'f'.repeat(64), host: '127.0.0.1', port: 55432, name: 'project_fixture', engine: 'postgres', projectPostgres: true };
   const ownedMysql = { id: 'b'.repeat(64), host: '127.0.0.1', port: 53306, name: 'mysql_fixture', engine: 'mysql', projectMysql: true };
+  const ownedSql = { id: 'd'.repeat(64), host: '127.0.0.1', port: 51433, name: 'sqlserver_fixture', engine: 'sqlserver', projectSqlServer: true };
   await page.route('**/api/projects/' + cloned.id + '/database-discovery', async route => {
     const response = await route.fetch();
     const data = await response.json();
     for (const key of ['sqlMigrationTargets', 'alembicTargets', 'efCoreTargets']) data[key].unshift(ownedTarget);
     data.sqlMigrationTargets.unshift(ownedMysql);
+    data.efCoreTargets.unshift(ownedSql);
     return route.fulfill({ response, json: data });
   });
   await page.route('**/api/projects/' + cloned.id + '/database-liquibase-preview', async route => {
@@ -371,7 +373,7 @@ try {
     migrations: [{ revision: '1', file: 'services/billing/storage/changes/V1__Create_invoice.sql' }], planId: 'fixture-plan' };
   await page.route('**/api/projects/' + cloned.id + '/database-native-migration', route => {
     const payload = route.request().postDataJSON();
-    assert.equal(payload.targetId, payload.adapter === 'liquibase' ? ownedMysql.id : ownedTarget.id);
+    assert.equal(payload.targetId, payload.adapter === 'liquibase' ? ownedMysql.id : payload.adapter === 'ef-core' ? ownedSql.id : ownedTarget.id);
     if (payload.adapter === 'alembic') {
       assert.equal(payload.operation, 'apply');
       assert.equal(payload.revision, 'start');
@@ -379,10 +381,11 @@ try {
     }
     if (payload.adapter === 'ef-core') {
       assert.equal(payload.operation, 'rollback');
+      assert.equal(payload.schema, 'dbo');
       assert.equal(payload.revision, 'base');
       assert.equal(payload.scriptFile, 'artifacts/rollback.sql');
       assert.match(payload.groupId, /^[a-f0-9]{64}$/);
-      return route.fulfill({ json: { ...reviewedPlan, tool: 'EF Core', version: '', fromRevision: '20260102123456_CreateReports',
+      return route.fulfill({ json: { ...reviewedPlan, target: ownedSql, tool: 'EF Core', version: '', fromRevision: '20260102123456_CreateReports',
         toRevision: 'base', scriptFile: payload.scriptFile, sql: 'DROP TABLE reports;' } });
     }
     if (payload.adapter === 'liquibase') {
@@ -518,7 +521,9 @@ try {
   await alembic.getByLabel('Target revision').selectOption('start');
   await alembic.getByRole('button', { name: 'Preview migration plan' }).click();
   await contains('.alembic-preview .native-migration form', 'base → start');
+  await ef.getByLabel('History schema').fill('public');
   await efTarget.selectOption(ownedTarget.id);
+  await efTarget.selectOption(ownedSql.id);
   await page.locator('#language').selectOption('zh-CN');
   const efNative = ef.locator('.native-migration');
   await efNative.getByLabel('目标版本').selectOption('base');
@@ -597,6 +602,27 @@ try {
   await contains('#development-postgres-dialog-title', 'Create project MySQL');
   await page.locator('#language').selectOption('zh-CN');
   await contains('#development-postgres-dialog-title', '创建项目专属 MySQL');
+  await page.locator('#development-postgres-cancel').click();
+  await page.unroute(developmentRoute);
+  const sqlOption = { id: 'a'.repeat(64), directory: '.', engine: 'sqlserver', status: 'detected', canCreate: true,
+    requirementIds: [], actions: [], evidence: ['appsettings.json'] };
+  await page.route(developmentRoute, route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { status: 'absent', sqlServerPort: 51433, options: [sqlOption] } });
+    const { name, port, targetId, mode } = route.request().postDataJSON();
+    assert.equal(mode, 'preview');
+    assert.equal(targetId, sqlOption.id);
+    assert.equal(port, 51433);
+    return route.fulfill({ json: { plan: 'sql-preview', name, port, targetId, host: '127.0.0.1', directory: '.',
+      engine: 'sqlserver', terms: 'https://www.microsoft.com/', image: 'mcr.microsoft.com/mssql/server:2022-latest' } });
+  });
+  await page.locator('#development-postgres-refresh').click();
+  await contains('#development-postgres-evidence', 'appsettings.json');
+  await page.locator('#development-postgres-preview').click();
+  await contains('#development-postgres-dialog-title', '创建项目专属 SQL Server');
+  await page.locator('#development-postgres-confirm').fill(await page.locator('#development-postgres-confirm-target').textContent());
+  assert.equal(await page.locator('#development-postgres-apply').isDisabled(), true);
+  await page.locator('#development-postgres-accept-terms').check();
+  assert.equal(await page.locator('#development-postgres-apply').isEnabled(), true);
   await page.locator('#development-postgres-cancel').click();
   await page.unroute(developmentRoute);
   assert.deepEqual(errors, []);

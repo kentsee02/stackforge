@@ -61,6 +61,7 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
   for (const item of targets) {
     const option = new Option('', item.id);
     if (item.projectPostgres) setText(option, ['Project PostgreSQL', address(item)]);
+    else if (item.projectSqlServer) setText(option, ['Project SQL Server', address(item)]);
     else option.textContent = [item.engine === 'sqlserver' ? 'SQL Server' : 'PostgreSQL', address(item), item.source, item.variable].filter(Boolean).join(' · ');
     target.append(option);
   }
@@ -80,7 +81,7 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
   const guide = document.createElement('p');
   guide.className = 'hint';
   guide.hidden = true;
-  setText(guide, 'Set up Project PostgreSQL or save a local PostgreSQL or SQL Server connection, then rescan database configuration.');
+  setText(guide, 'Set up Project PostgreSQL or Project SQL Server, or save a direct local connection to check history.');
   const databaseStatus = document.createElement('p');
   databaseStatus.className = 'hint';
   databaseStatus.setAttribute('role', 'status');
@@ -120,7 +121,7 @@ export function efCorePreview(projectId, source, targets, { request, post }) {
 
   let loading = false, groups = [], showingHistory = false, nativeWorking = false, ready = false;
   const selection = () => ({ groupId: context.value, targetId: target.value, schema: schema.value, table: table.value });
-  const canMigrate = () => ready && context.value && targets.some(item => item.id === target.value && item.projectPostgres);
+  const canMigrate = () => ready && context.value && targets.some(item => item.id === target.value && (item.projectPostgres || item.projectSqlServer));
   const native = nativeMigrationControls(projectId, source, { request, post }, {
     selection,
     lock(locked) { nativeWorking = controls.disabled = refresh.disabled = locked; },

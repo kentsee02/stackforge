@@ -151,6 +151,8 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
         }
         if (ef.sources.length) {
           if (container) efCoreTargets.push(container);
+          const sqlServer = await development.historyTarget(project, 'sqlserver').catch(() => undefined);
+          if (sqlServer) efCoreTargets.push(sqlServer);
           efCoreTargets.push(...postgresHistoryTargets(scanned, { efCore: true }).map(item => item.public));
           efCoreTargets.push(...sqlServerHistoryTargets(scanned).map(item => item.public));
         }
@@ -279,10 +281,12 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
         try {
           const postgres = await development.historyTarget(project);
           const sqlAdapter = ['flyway', 'liquibase'].includes(payload.adapter);
-          const selection = postgres ?? (sqlAdapter ? await development.historyTarget(project, 'mysql') : undefined);
+          const selection = postgres ?? (sqlAdapter ? await development.historyTarget(project, 'mysql') :
+            payload.adapter === 'ef-core' ? await development.historyTarget(project, 'sqlserver') : undefined);
           if (!selection || selection.id !== payload.targetId) throw new Error(sqlAdapter
             ? 'Choose the project-owned PostgreSQL or MySQL database for native migrations.'
-            : 'Choose the project-owned PostgreSQL database for native migrations.');
+            : payload.adapter === 'ef-core' ? 'Choose the project-owned PostgreSQL or SQL Server database for EF Core migrations.'
+              : 'Choose the project-owned PostgreSQL database for native migrations.');
           const { engine, host, name, port } = selection;
           const target = { engine, host, name, port };
           const client = await development.client(project, target, signal, selection.id);
@@ -447,7 +451,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       ...(options?.mysql ? mysqlHistoryTargets(scanned) : [])].find(item => item.public.id === targetId);
     let selection = local?.public;
     if (!selection) {
-      for (const engine of options?.mysql ? ['postgres', 'mysql'] : ['postgres']) {
+      for (const engine of options?.mysql ? ['postgres', 'mysql'] : options?.efCore ? ['postgres', 'sqlserver'] : ['postgres']) {
         const container = await development.historyTarget(project, engine).catch(() => undefined);
         if (container?.id === targetId) { selection = container; break; }
       }
@@ -456,7 +460,8 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     return { selection, credentials: local?.credentials, sslmode: local?.sslmode,
       command: localDatabase.command, probe: localDatabase.probe, signal,
       async resolveClient(target) {
-        try { return await development.client(project, target, signal, selection.projectPostgres || selection.projectMysql ? selection.id : undefined); }
+        try { return await development.client(project, target, signal,
+          selection.projectPostgres || selection.projectMysql || selection.projectSqlServer ? selection.id : undefined); }
         catch (error) {
           if (error.name === 'AbortError') throw error;
           throw Object.assign(new Error(invalid), { code: 'target-changed' });

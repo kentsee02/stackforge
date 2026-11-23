@@ -17,7 +17,7 @@ const cases = [
   { repo: 'dotnet/eShop', commit: 'ab10e4c68fd26369578ebfb3fd1ccf3b867d0444', adapter: 'ef-core' },
   { repo: 'I-RzR-I/ModularMonolithSharedDbContextSample', commit: 'aa79eeffb5a4a02785e24c500d2524a3095d3adb', adapter: 'ef-core', efExport: true },
   { repo: 'nanotaboada/java.samples.spring.boot', commit: '2cbc59f0d968951a5f80b6624ec1fd27c93363ed', adapter: 'flyway', live: true },
-  { repo: 'BootcampToProd/flyway-with-spring-boot-maven', commit: '046d4ae118e99f9197bea434daf870873c789b2e', adapter: 'flyway' },
+  { repo: 'BootcampToProd/flyway-with-spring-boot-maven', commit: '046d4ae118e99f9197bea434daf870873c789b2e', adapter: 'flyway', live: true, flywayProfile: 'stage' },
   { repo: 'h3yzack/springboot3-liquibase-example', commit: 'baa98678824b59476bf09805ac516e4aa8729916', adapter: 'liquibase', live: true },
   { repo: 'jhipster/jhipster-sample-app', commit: '6b000b5d23a36c45e01472471b84a44fa2464044', adapter: 'liquibase' },
   { repo: 'talenteddeveloper/spring-boot-flyway-demo', commit: '77403a2a10af102452b6f026bf6473021decbf99', adapter: 'flyway', number: 10 }
@@ -45,7 +45,7 @@ const app = createApp({
   }
 });
 
-async function assertLiveMigration(api, project, adapter, engine = 'postgres') {
+async function assertLiveMigration(api, project, adapter, engine = 'postgres', flywayProfile) {
   const server = createServer().listen(0, '127.0.0.1');
   await once(server, 'listening');
   const { port } = server.address();
@@ -90,7 +90,10 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres') {
   const discovery = await api(project.id + '/database-discovery');
   if (adapter === 'ef-core') return assertEfCoreExport(api, project, discovery, name);
   if (['flyway', 'liquibase'].includes(adapter)) {
-    const { id: sourceId } = discovery.migrationSources.find(item => item.adapter === adapter && ['standalone', 'spring'].includes(item.scope));
+    const source = discovery.migrationSources.find(item => item.adapter === adapter &&
+      (flywayProfile ? item.scope === 'maven' && item.profile === flywayProfile && item.nativeLocations : ['standalone', 'spring'].includes(item.scope)));
+    assert.ok(source, 'Expected a reviewed migration source');
+    const { id: sourceId } = source;
     const { id: targetId } = discovery.sqlMigrationTargets.find(item => engine === 'mysql' ? item.projectMysql : item.projectPostgres);
     const endpoint = project.id + '/database-native-migration';
     const selection = { adapter, sourceId, targetId, operation: 'apply' };
@@ -98,7 +101,7 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres') {
     const previewPlan = extras => api(endpoint, { ...selection, ...extras, mode: 'preview' });
     const execute = (planId, extras) => api(endpoint, { ...selection, ...extras, mode: 'execute', planId, confirmName: name });
     const plan = await previewPlan();
-    if (adapter === 'flyway' && engine === 'postgres') {
+    if (adapter === 'flyway' && engine === 'postgres' && !flywayProfile) {
       // The upstream seed scripts insert integer literals into a Boolean column.
       // The native PostgreSQL attempt should fail as a group. V1 itself is portable.
       assert.equal((await execute(plan.planId)).status, 'execution-failed');
@@ -127,7 +130,7 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres') {
       assert.ok((await check()).database.items.every(item => item.state === 'pending'));
       return ['apply', 'rollback-view-and-table', 'history'];
     }
-    return ['apply', 'history'];
+    return [...(flywayProfile ? ['maven-profile:' + flywayProfile] : []), 'apply', 'history'];
   }
   const sourceId = discovery.migrationSources.find(item => item.adapter === 'alembic').id;
   const targetId = discovery.alembicTargets.find(item => item.projectPostgres).id;
@@ -254,7 +257,7 @@ try {
     assert.ok(importedResults.some(result => ['ready', 'configuration-needed'].includes(result.status) && result.count > 0),
       'The expected public repository migration preview is unavailable: ' + item.repo);
     if (live && (item.live || ['drizzle', 'alembic'].includes(item.adapter) || efCli && item.efExport)) {
-      console.log(JSON.stringify({ repository: item.repo, postgres: await assertLiveMigration(api, cloned, item.adapter) }));
+      console.log(JSON.stringify({ repository: item.repo, postgres: await assertLiveMigration(api, cloned, item.adapter, 'postgres', item.flywayProfile) }));
     }
     if (liveMysql && item.number === 10) {
       console.log(JSON.stringify({ repository: item.repo, mysql: await assertLiveMigration(api, cloned, item.adapter, 'mysql') }));

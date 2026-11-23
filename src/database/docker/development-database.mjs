@@ -8,6 +8,7 @@ import { mysqlEnvironmentOption, saveDatabaseEnvironment, saveMysqlEnvironment }
 import { developmentOptions } from '../development-setup.mjs';
 import { databaseReady, databaseTransferCapabilities } from '../backup/docker-transfer.mjs';
 import { mysqlMigrationScope } from './mysql-migration-scope.mjs';
+import { sqlServerDevelopment, sqlServerTerms } from './sql-server-development.mjs';
 
 const user = 'stackforge';
 const host = '127.0.0.1';
@@ -15,9 +16,12 @@ const engines = {
   postgres: { prefix: 'stackforge-pg-', image: 'docker.io/library/postgres:17', data: '/var/lib/postgresql/data', port: 5432,
     label: 'io.stackforge.development-postgres', password: 'POSTGRES_PASSWORD', cli: 'psql', scheme: 'postgresql' },
   mysql: { prefix: 'stackforge-mysql-', image: 'docker.io/library/mysql:8.4', data: '/var/lib/mysql', port: 3306,
-    label: 'io.stackforge.development-mysql', password: 'MYSQL_PASSWORD', cli: 'mysql', scheme: 'mysql' }
+    label: 'io.stackforge.development-mysql', password: 'MYSQL_PASSWORD', cli: 'mysql', scheme: 'mysql' },
+  sqlserver: { prefix: 'stackforge-sqlserver-', image: 'mcr.microsoft.com/mssql/server:2022-latest', data: '/var/opt/mssql', port: 1433,
+    label: 'io.stackforge.development-sqlserver', password: 'MSSQL_SA_PASSWORD' }
 };
 const engineOf = record => record.engine ?? 'postgres';
+const targetFlag = { postgres: 'projectPostgres', mysql: 'projectMysql', sqlserver: 'projectSqlServer' };
 const detailsOf = record => Object.hasOwn(engines, engineOf(record)) ? engines[engineOf(record)] : undefined;
 const changed = 'The development database container or volume could not be verified.';
 const stale = 'The development database plan changed. Preview it again.';
@@ -28,8 +32,9 @@ const linuxMode = 'Switch Docker to Linux containers, then retry.';
 const uuid = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i;
 const containerId = /^[a-f\d]{64}$/;
 const id = /^[a-f\d]{32}$/;
-const validName = name => typeof name === 'string' && /^[a-z][a-z\d_]{0,62}$/.test(name) &&
-  !['postgres', 'template0', 'template1', 'mysql', 'information_schema', 'performance_schema', 'sys'].includes(name);
+const validName = (name, engine) => typeof name === 'string' && /^[a-z][a-z\d_]{0,62}$/.test(name) &&
+  !['postgres', 'template0', 'template1', 'mysql', 'information_schema', 'performance_schema', 'sys'].includes(name) &&
+  !(engine === 'sqlserver' && ['master', 'tempdb', 'msdb', 'model'].includes(name));
 const validPort = port => Number.isInteger(port) && port >= 1024 && port <= 65535;
 
 function localEndpoint(endpoint) {
@@ -130,6 +135,7 @@ async function ready(cli, record, target) {
   if (target.status !== 'running') return false;
   if (engineOf(record) === 'mysql') return databaseReady({ engine: 'mysql', container: target.container, command: (_, args, options) => cli(args, options) });
   try {
+    if (engineOf(record) === 'sqlserver') return Boolean(record.sqlDatabase && await sqlServerDevelopment(cli, target.container, record).identity());
     const result = await cli(['exec', target.container, 'sh', '-c',
       'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -XAtw -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT current_database()"']);
     return result.trim() === record.name;
@@ -140,6 +146,7 @@ async function ready(cli, record, target) {
 }
 
 async function connections(project, directory, engine = 'postgres') {
+  if (engine === 'sqlserver') return [];
   const { root, requirements, connections: values } = await discoverDatabases(project, { includeConnections: true });
   const matching = requirements.filter(item => item.engine === engine && (!item.declaredEngine || item.declaredEngine === engine) && (!directory || item.directory === directory));
   const urls = matching.filter(item => /^[A-Z_][A-Z0-9_]*$/.test(item.environmentVariable ?? '') &&
@@ -167,7 +174,7 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
   const reserved = port => Object.values(registry.value.development).some(item => item.port === port);
   function valid(record, project, daemon) {
     if (record.daemon !== daemon || record.owner !== owner(project) || !id.test(record.key) ||
-        !detailsOf(record) || !validName(record.name) || !validPort(record.port)) throw new Error(changed);
+        !detailsOf(record) || !validName(record.name, engineOf(record)) || !validPort(record.port)) throw new Error(changed);
   }
 
   async function databasePassword(cli, container, record) {
@@ -181,14 +188,14 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
   async function historyTarget(project, engine = 'postgres') {
     await registry.ready;
     const record = current(project);
-    if (!record?.container || !record.created || record.deleting || engineOf(record) !== engine) return;
+    if (!record?.container || !record.created || record.deleting || engineOf(record) !== engine || engine === 'sqlserver' && !record.sqlDatabase) return;
     assertProject(project);
     valid(record, project, record.daemon);
     return { id: historyTargetId(project, record), name: record.name, port: record.port, host, engine,
-      ...(engine === 'postgres' ? { projectPostgres: true } : { projectMysql: true }) };
+      [targetFlag[engine]]: true };
   }
   function summary(record, target, accepting) {
-    const status = target.status === 'running' ? accepting ? 'ready' : 'starting' :
+    const status = target.status === 'running' ? accepting ? 'ready' : engineOf(record) === 'sqlserver' ? 'incomplete' : 'starting' :
       record.deleting || !target.container ? 'incomplete' : 'stopped';
     return { host, engine: engineOf(record), name: record.name, port: record.port, volume: volumeName(record), status,
       canStart: !record.deleting && (!record.created || Boolean(target.volume)) && (!record.container || Boolean(target.container)),
@@ -205,14 +212,16 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
       while (reserved(port) && port < 65535) port++;
       let mysqlPort = 53306;
       while (reserved(mysqlPort) && mysqlPort < 65535) mysqlPort++;
-      return { status: 'absent', port, mysqlPort, ...await developmentOptions(project, Object.keys(engines)) };
+      let sqlServerPort = 51433;
+      while (reserved(sqlServerPort) && sqlServerPort < 65535) sqlServerPort++;
+      return { status: 'absent', port, mysqlPort, sqlServerPort, ...await developmentOptions(project, Object.keys(engines)) };
     }
     const { cli, daemon } = await dockerSession(command, signal);
     valid(record, project, daemon);
     const target = await owned(cli, record);
     const accepting = await ready(cli, record, target);
     const options = accepting ? await connections(project, record.directory, engineOf(record)).catch(() => []) : [];
-    const capabilities = accepting && await databaseTransferCapabilities({ engine: engineOf(record), container: target.container,
+    const capabilities = accepting && engineOf(record) !== 'sqlserver' && await databaseTransferCapabilities({ engine: engineOf(record), container: target.container,
       command: (_, args, options) => cli(args, options), signal });
     return { ...summary(record, target, accepting), connections: options,
       ...(capabilities && { archive: { id: archiveId(project, record), ...capabilities } }) };
@@ -235,6 +244,21 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
       return target;
     }
     const target = await verify();
+    if (engineOf(record) === 'sqlserver') {
+      async function checked() {
+        const latest = await verify();
+        if (latest.status !== 'running' || !latest.publishedOnLoopback) throw Object.assign(new Error('Start the project database before preparing a migration.'), { code: 'container-stopped' });
+        const sql = sqlServerDevelopment(cli, latest.container, record);
+        await sql.identity();
+        return sql;
+      }
+      return {
+        async sqlServerQuery(sql, options) { return (await checked()).query(sql, options); },
+        async migrationScope() {
+          return { ...await checked(), container: target.container, verify: checked };
+        }
+      };
+    }
     return {
       async migrationScope() {
         const latest = await verify();
@@ -343,6 +367,8 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
       const selected = options.find(option => option.id === targetId && option.canCreate);
       if (!selected) throw new Error('Choose a compatible database service and refresh detection if it changed.');
       const { engine, directory } = selected;
+      if (!validName(name, engine)) throw new Error('Choose an unused database name and a port from 1024 to 65535.');
+      if (engine === 'sqlserver' && mode === 'create' && payload.acceptTerms !== true) throw new Error('Accept the SQL Server Developer license terms before creating the database.');
       const settings = await connections(project, directory, engine);
       const prior = typeof payload.plan === 'string' && /^(\d{13})\.([a-f\d]{32})\.[a-f\d]{64}$/.exec(payload.plan);
       const expiry = mode === 'preview' ? String(Date.now() + 300000) : prior?.[1];
@@ -351,7 +377,7 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
       if (mode === 'create' && (!expiry || Number(expiry) <= Date.now() || payload.plan !== plan || payload.confirm !== name)) throw new Error(stale);
       if (reserved(port) || !await probePort(port)) throw new Error('Choose a free port for the development database.');
       if (mode === 'preview') return { plan, name, port, host, image: engines[engine].image, targetId, directory, engine,
-        volume: volumeName({ key, engine }), connections: settings };
+        volume: volumeName({ key, engine }), connections: settings, ...(engine === 'sqlserver' && { terms: sqlServerTerms }) };
       throwIfCancelled(signal);
       record = { owner: owner(project), daemon, name, port, key, directory, engine };
       await persist(project, record);
@@ -375,15 +401,16 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
         await persist(project, record);
       }
       if (!target.container) {
-        const variables = engine === 'mysql' ? ['MYSQL_DATABASE=' + record.name, 'MYSQL_USER=' + user, 'MYSQL_PASSWORD', 'MYSQL_ROOT_PASSWORD', 'MYSQL_ROOT_HOST=localhost'] :
+        const variables = engine === 'sqlserver' ? ['ACCEPT_EULA=Y', 'MSSQL_PID=Developer', 'MSSQL_SA_PASSWORD'] :
+          engine === 'mysql' ? ['MYSQL_DATABASE=' + record.name, 'MYSQL_USER=' + user, 'MYSQL_PASSWORD', 'MYSQL_ROOT_PASSWORD', 'MYSQL_ROOT_HOST=localhost'] :
           ['POSTGRES_DB=' + record.name, 'POSTGRES_USER=' + user, 'POSTGRES_PASSWORD'];
-        const extraEnv = { [passwordKey]: randomBytes(24).toString('hex'),
+        const extraEnv = { [passwordKey]: (engine === 'sqlserver' ? 'Aa1!' : '') + randomBytes(24).toString('hex'),
           ...(engine === 'mysql' && { MYSQL_ROOT_PASSWORD: randomBytes(24).toString('hex') }) };
         await mutate(cli, ['container', 'create', '--name', nameOf(record), '--label', label + '=' + record.key, '--network', 'bridge',
           '--publish', host + ':' + record.port + ':' + servicePort, '--mount', 'type=volume,src=' + volumeName(record) + ',dst=' + data,
           ...variables.flatMap(value => ['--env', value]), image,
           ...(engine === 'mysql' ? ['--log-bin-trust-function-creators=ON'] : [])],
-        { timeout: 180000, extraEnv });
+        { timeout: engine === 'sqlserver' ? 360000 : 180000, extraEnv });
         target = await owned(cli, record);
       }
       if (!target.container) throw new Error(changed);
@@ -394,6 +421,10 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
       if (target.status !== 'running') {
         await resolveStartup(project, []);
         await mutate(cli, ['container', 'start', target.container]);
+      }
+      if (engine === 'sqlserver') {
+        const sqlDatabase = await sqlServerDevelopment(cli, target.container, record).initialize(signal);
+        if (!record.sqlDatabase) await persist(project, { ...record, sqlDatabase });
       }
     } else if (mode === 'stop' && target.container && target.status === 'running') {
       await mutate(cli, ['container', 'stop', target.container], { timeout: 30000 });

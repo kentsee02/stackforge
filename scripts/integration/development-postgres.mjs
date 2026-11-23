@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -343,7 +343,33 @@ try {
   await writeFile(altered, migrationSql[0] + '-- changed after application\n');
   assert.equal((await drizzlePreview()).status, 'history-conflict');
   await writeFile(altered, migrationSql[0]);
-  await query('DROP TABLE drizzle_first, drizzle_second; DROP SCHEMA project_history CASCADE; CREATE TABLE proof (value integer); INSERT INTO proof VALUES (42);');
+  await query('DROP TABLE drizzle_first, drizzle_second; DROP SCHEMA project_history CASCADE;');
+  await rename(join(path, 'db/migrations'), join(path, 'db/legacy-migrations'));
+  const v1Late = '20260202000000_create_items';
+  const v1Early = '20260101000000_create_notes';
+  async function addV1(name, sql) {
+    const migration = join(path, 'db/migrations', name);
+    await mkdir(migration, { recursive: true });
+    await writeFile(join(migration, 'migration.sql'), sql);
+  }
+  await addV1(v1Late, 'CREATE TABLE v1_items(id int);');
+  const v1 = await drizzlePreview();
+  assert.equal(v1.format, 'v1');
+  assert.equal((await applyDrizzle(v1)).status, 'applied');
+  assert.equal((await query('SELECT name FROM project_history.migrations WHERE applied_at IS NOT NULL')).trim(), v1Late);
+  await addV1(v1Early, 'CREATE TABLE v1_notes(id int);');
+  const missingEarlier = await drizzlePreview();
+  assert.deepEqual(missingEarlier.migrations.map(item => item.state), ['pending', 'applied']);
+  assert.equal((await applyDrizzle(missingEarlier)).status, 'applied');
+  assert.deepEqual((await query('SELECT name FROM project_history.migrations ORDER BY id')).trim().split(/\r?\n/), [v1Late, v1Early]);
+  const v1Rollback = { ...rollbackInput, revision: v1Late };
+  await writeFile(rollbackFile, 'DROP TABLE v1_notes;');
+  const v1Plan = await rollbackPreview(v1Rollback);
+  assert.equal(v1Plan.fromRevision, v1Early);
+  assert.equal((await api(id + '/database-drizzle-apply', { requirementId: drizzle.id, ...v1Rollback,
+    planId: v1Plan.planId, confirmName: 'portal' })).status, 'rolled-back');
+  assert.deepEqual((await drizzlePreview()).migrations.map(item => item.state), ['pending', 'applied']);
+  await query('DROP TABLE v1_items; DROP SCHEMA project_history CASCADE; CREATE TABLE proof (value integer); INSERT INTO proof VALUES (42);');
   assert.equal((await drizzlePreview()).status, 'history-conflict');
   const requirement = discovery.requirements.find(item => item.guidedSetup);
   const binding = discovery.bindings.find(item => item.requirementId === requirement.id);

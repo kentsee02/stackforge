@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { readdir, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { localSession, localhostEndpoint, validateLocalTarget } from '../adapters/local.mjs';
 import { databaseConnectionValue, discoverDatabases } from '../discovery.mjs';
@@ -16,7 +17,14 @@ const signingKey = randomBytes(32);
 
 async function migrationFiles(folder, out, signal) {
   const directory = join(folder, out);
-  const journal = JSON.parse(await readMigrationFile(join(directory, 'meta', '_journal.json'), 256 * 1024));
+  let text;
+  try { text = await readMigrationFile(join(directory, 'meta', '_journal.json'), 256 * 1024); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return { format: 'v1', files: await folderMigrations(directory, out, signal) };
+  }
+  if ((await readdir(directory)).some(name => /^\d{14}_/.test(name))) throw new Error();
+  const journal = JSON.parse(text);
   if (journal.version !== '7' || journal.dialect !== 'postgresql' ||
       !Array.isArray(journal.entries) || !journal.entries.length || journal.entries.length > maxEntries) throw new Error();
   const tags = new Set();
@@ -35,14 +43,43 @@ async function migrationFiles(folder, out, signal) {
     bytes -= Buffer.byteLength(sql);
     result.push({ file: out + '/' + file, tag, when, hash: createHash('sha256').update(sql).digest('hex'), sql });
   }
-  return result;
+  return { format: 'journal-v7', files: result };
 }
 
-function stateQuery({ historySchema, historyTable }) {
+async function folderMigrations(directory, out, signal) {
+  if (await realpath(directory) !== directory) throw new Error();
+  const entries = await readdir(directory, { withFileTypes: true });
+  const names = entries.filter(item => /^\d{14}/.test(item.name));
+  if (!names.length || names.length > maxEntries || entries.some(item => item.name.endsWith('.sql'))) throw new Error();
+  const seen = new Set();
+  let remaining = 16 * 1024 * 1024;
+  const files = [];
+  for (const entry of names.sort((a, b) => a.name.localeCompare(b.name, 'en'))) {
+    throwIfCancelled(signal);
+    const tag = entry.name;
+    const stamp = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})_[a-zA-Z0-9_-]{1,120}$/.exec(tag);
+    if (!entry.isDirectory() || !stamp || seen.has(tag.toLowerCase()) || remaining <= 0) throw new Error();
+    seen.add(tag.toLowerCase());
+    const [, year, month, day, hour, minute, second] = stamp;
+    const iso = year + '-' + month + '-' + day + 'T' + hour + ':' + minute + ':' + second + '.000Z';
+    const when = Date.parse(iso);
+    if (!Number.isFinite(when) || new Date(when).toISOString() !== iso) throw new Error();
+    const sql = await readMigrationFile(join(directory, tag, 'migration.sql'), Math.min(remaining, 1024 * 1024));
+    if (!sql.trim()) throw new Error();
+    remaining -= Buffer.byteLength(sql);
+    files.push({ file: out + '/' + tag + '/migration.sql', tag, when, sql,
+      hash: createHash('sha256').update(sql).digest('hex') });
+  }
+  return files;
+}
+
+function stateQuery({ historySchema, historyTable }, named) {
   return `WITH history AS (
     SELECT c.oid, c.relkind = 'r' AND NOT c.relrowsecurity AND NOT c.relhassubclass AND
       (SELECT count(*) FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped AND
-        ((a.attname='hash' AND a.atttypid='text'::regtype) OR (a.attname='created_at' AND a.atttypid='bigint'::regtype)))=2 AS eligible
+        ((a.attname='hash' AND a.atttypid='text'::regtype) OR (a.attname='created_at' AND a.atttypid='bigint'::regtype)
+        ${named ? "OR (a.attname='name' AND a.atttypid='text'::regtype) OR (a.attname='id' AND a.atttypid='int4'::regtype) OR (a.attname='applied_at' AND a.atttypid='timestamptz'::regtype)" : ''}))=${named ? 5 : 2}
+      ${named ? '' : "AND NOT EXISTS (SELECT FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped AND a.attname IN ('name', 'applied_at'))"} AS eligible
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname='${historySchema}' AND c.relname='${historyTable}'
   ) SELECT jsonb_build_array(current_database(), current_user,
@@ -63,31 +100,37 @@ function stateQuery({ historySchema, historyTable }) {
 
 const historyName = ({ historySchema, historyTable }) => '"' + historySchema + '"."' + historyTable + '"';
 
-async function historyState(session, target, config) {
+function historyRows(config, named, limit = '') {
+  const columns = named ? 'created_at, hash, name, id' : 'created_at, hash';
+  const sort = named ? 'id' : 'created_at';
+  return `SELECT coalesce(jsonb_agg(jsonb_build_array(created_at::text, hash${named ? ', name' : ''}) ORDER BY ${sort}), '[]')
+    FROM (SELECT ${columns} FROM ONLY ${historyName(config)} ORDER BY ${sort} ${limit}) history_rows`;
+}
+
+async function historyState(session, target, config, named) {
   const read = text => session.query('BEGIN READ ONLY; SET LOCAL search_path = pg_catalog; ' + text + '; COMMIT;', target.name);
-  const header = JSON.parse(await read(stateQuery(config)));
+  const header = JSON.parse(await read(stateQuery(config, named)));
   const [database, user, oid, started, history, hasObjects] = header;
   if (database !== target.name || !user || !/^\d+$/.test(oid) || !started ||
       !['readable', 'unsupported', 'absent'].includes(history) || typeof hasObjects !== 'boolean') throw new Error();
   if (history === 'unsupported') return { conflict: true };
-  const rows = history === 'absent' ? [] : JSON.parse(await read(`SELECT coalesce(jsonb_agg(jsonb_build_array(created_at::text, hash) ORDER BY created_at), '[]')
-    FROM (SELECT created_at, hash FROM ONLY ${historyName(config)} ORDER BY created_at LIMIT ${maxEntries + 1}) history_rows`));
+  const rows = history === 'absent' ? [] : JSON.parse(await read(historyRows(config, named, 'LIMIT ' + (maxEntries + 1))));
   return { rows, hasObjects, header, history };
 }
 
 const pgText = text => "pg_catalog.convert_from(pg_catalog.decode('" + Buffer.from(text, 'utf8').toString('hex') + "', 'hex'), 'UTF8')";
 
-async function writeMigration(session, target, config, state, operations, expectedRows) {
+async function writeMigration(session, target, config, state, operations, expectedRows, named) {
   const table = historyName(config);
   const existing = state.history === 'readable';
   const previous = pgText(JSON.stringify(state.rows)) + '::jsonb';
   const header = pgText(JSON.stringify(state.header)) + '::jsonb';
   const expected = pgText(JSON.stringify(expectedRows)) + '::jsonb';
-  const readRows = `SELECT coalesce(jsonb_agg(jsonb_build_array(created_at::text, hash) ORDER BY created_at), '[]') FROM ONLY ${table}`;
+  const readRows = historyRows(config, named);
   const prepareHistory = existing
     ? `IF (${readRows}) IS DISTINCT FROM ${previous} THEN RAISE EXCEPTION 'Drizzle migration history changed'; END IF;`
     : `CREATE SCHEMA IF NOT EXISTS "${config.historySchema}";
-       CREATE TABLE ${table} (id serial PRIMARY KEY, hash text NOT NULL, created_at bigint);`;
+       CREATE TABLE ${table} (id serial PRIMARY KEY, hash text NOT NULL, created_at bigint${named ? ', name text, applied_at timestamp with time zone DEFAULT now()' : ''});`;
   await session.query(`BEGIN;
     SET LOCAL search_path = pg_catalog;
     SET LOCAL standard_conforming_strings = on;
@@ -96,15 +139,15 @@ async function writeMigration(session, target, config, state, operations, expect
     ${existing ? 'LOCK TABLE ' + table + ' IN ACCESS EXCLUSIVE MODE;' : ''}
     DO $stackforge_drizzle$
     BEGIN
-      IF (${stateQuery(config)}) IS DISTINCT FROM ${header} THEN
+      IF (${stateQuery(config, named)}) IS DISTINCT FROM ${header} THEN
         RAISE EXCEPTION 'Drizzle migration target changed';
       END IF;
       ${prepareHistory}
       SET LOCAL search_path TO DEFAULT;
       ${operations.join('\n')}
       SET LOCAL search_path = pg_catalog;
-      IF (${stateQuery(config)}) ->> 4 IS DISTINCT FROM 'readable'
-        ${existing ? `OR (${stateQuery(config)}) ->> 6 IS DISTINCT FROM (${header} ->> 6)` : ''} THEN
+      IF (${stateQuery(config, named)}) ->> 4 IS DISTINCT FROM 'readable'
+        ${existing ? `OR (${stateQuery(config, named)}) ->> 6 IS DISTINCT FROM (${header} ->> 6)` : ''} THEN
         RAISE EXCEPTION 'Drizzle history table changed';
       END IF;
       IF (${readRows}) IS DISTINCT FROM ${expected} THEN
@@ -143,12 +186,15 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   const location = directory === '.' ? '' : directory + '/';
   const result = { source, variable, history: config.historySchema + '.' + config.historyTable };
   const respond = (status, fields) => ({ ...result, status, ...fields });
-  let files;
-  try { files = await migrationFiles(resolve(root, directory), config.out, signal); }
+  let migration;
+  try { migration = await migrationFiles(resolve(root, directory), config.out, signal); }
   catch (error) {
     if (error.name === 'AbortError') throw error;
     return respond('files-unavailable');
   }
+  const { files, format } = migration;
+  const named = format === 'v1';
+  result.format = format;
   result.migrations = files.map(({ file }) => ({ file: location + file, state: 'unverified' }));
   if (config.environmentConflict) return respond('environment-conflict', { sources: config.environmentSources });
   if (requirement.status !== 'configured') return respond('configuration-needed');
@@ -172,22 +218,29 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   try {
     const credentials = { user: decodeURIComponent(url.username), password: decodeURIComponent(url.password) };
     session = localSession({ ...target, sslmode, applicationName }, credentials, client?.command ?? command, signal);
-    state = await historyState(session, target, config);
+    state = await historyState(session, target, config, named);
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     return respond(['authentication', 'server', 'permission', 'client', 'database', 'tls'].includes(error.issue) ? error.issue : 'connection');
   }
   await resolveStartup(project, [], identity);
   const { rows } = state;
-  if (state.conflict || rows.length > files.length || !rows.length && state.hasObjects ||
-      !rows.every(([when, hash, extra], i) => extra === undefined && when === String(files[i].when) && hash === files[i].hash)) {
+  if (state.conflict || rows.length > files.length || !rows.length && state.hasObjects) {
     return respond('history-conflict');
   }
-  const migrations = result.migrations.map((item, index) => ({ ...item, state: index < rows.length ? 'applied' : 'pending' }));
-  if (rows.length && client?.migrationScope) result.rollbackTargets = [null, ...files.slice(0, rows.length - 1).map(file => file.tag)];
+  const local = new Map(files.map(file => [file.tag, file]));
+  const applied = rows.map(([when, hash, tag], index) => {
+    const file = named ? local.get(tag) : files[index];
+    return file && hash === file.hash && (named ? /^\d+$/.test(when ?? '') : when === String(file.when)) ? file : undefined;
+  });
+  const appliedSet = new Set(applied);
+  if (appliedSet.has(undefined) || appliedSet.size !== rows.length) return respond('history-conflict');
+  const entries = selected => result.migrations.map((item, index) => ({ ...item, state: selected.has(files[index]) ? 'applied' : 'pending' }));
+  const migrations = entries(appliedSet);
+  if (rows.length && client?.migrationScope) result.rollbackTargets = [null, ...applied.slice(0, -1).map(file => file.tag)];
   if (rollback && !result.rollbackTargets) throw new Error(badRollback);
-  const reverse = rollback && await reviewedRollback(root, rollback, files, rows.length, signal);
-  const pending = files.slice(rows.length);
+  const reverse = rollback && await reviewedRollback(root, rollback, applied, rows.length, signal);
+  const pending = files.filter(file => !appliedSet.has(file));
   if (!reverse && !pending.length) {
     if (approval) throw new Error(changed);
     return respond('current', { migrations });
@@ -209,11 +262,11 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   const expiry = approval ? /^\d{13}(?=\.)/.exec(approval.planId ?? '')?.[0] : String(Date.now() + 300000);
   const signature = createHmac('sha256', signingKey).update(JSON.stringify([
     expiry, project.id, identity, requirement.id, target, value, config.historySchema, config.historyTable, scope?.container,
-    state.header, rows, files.map(({ file, when, hash }) => [file, when, hash]),
+    state.header, rows, format, files.map(({ file, when, hash }) => [file, when, hash]),
     reverse && [reverse.revision, reverse.scriptFile, createHash('sha256').update(reverse.sql).digest('hex')]
   ])).digest('hex');
   const planId = expiry + '.' + signature;
-  const range = reverse && { fromRevision: files[rows.length - 1].tag, toRevision: reverse.revision ?? 'base' };
+  const range = reverse && { fromRevision: applied.at(-1).tag, toRevision: reverse.revision ?? 'base' };
   if (!approval) return respond(reverse ? 'rollback-planned' : 'pending', { migrations, planId, ...range, ...(reviewSql && { reviewSql }) });
   if (!expiry || Number(expiry) <= Date.now() || approval.planId !== planId || approval.confirmName !== target.name) throw new Error(changed);
   await verifyTarget(target);
@@ -225,21 +278,25 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   throwIfCancelled(signal);
   const execute = sql => 'EXECUTE ' + pgText(sql) + ';';
   const table = historyName(config);
-  const last = reverse ? reverse.next : files.length;
-  const expectedRows = files.slice(0, last).map(file => [String(file.when), file.hash]);
-  const commands = reverse ? [...reverse.statements.map(execute), 'DELETE FROM ' + table + ' WHERE created_at >= ' + files[last].when + ';'] :
+  const remaining = reverse ? applied.slice(0, reverse.next) : [...applied, ...pending];
+  const newEntries = pending.map(file => [String(file.when), file.hash, ...(named ? [file.tag] : [])]);
+  const expectedRows = reverse ? rows.slice(0, reverse.next) : [...rows, ...newEntries];
+  const removed = reverse && (named ? 'name IN (' + applied.slice(reverse.next).map(file => "'" + file.tag + "'").join(',') + ')' :
+    'created_at >= ' + applied[reverse.next].when);
+  const commands = reverse ? [...reverse.statements.map(execute), 'DELETE FROM ' + table + ' WHERE ' + removed + ';'] :
     pending.flatMap((file, index) => [
-      ...statements[index].map(execute), `INSERT INTO ${table} (hash, created_at) VALUES ('${file.hash}', ${file.when});`
+      ...statements[index].map(execute), `INSERT INTO ${table} (hash, created_at${named ? ', name' : ''}) VALUES
+        ('${file.hash}', ${file.when}${named ? ", '" + file.tag + "'" : ''});`
     ]);
   try {
-    await writeMigration(session, target, config, state, commands, expectedRows);
+    await writeMigration(session, target, config, state, commands, expectedRows, named);
   } catch (error) {
     await scope?.cancel(applicationName).catch(() => {});
     if (error.name === 'AbortError') throw error;
     return respond('apply-failed');
   }
   try {
-    const after = await historyState(session, target, config);
+    const after = await historyState(session, target, config, named);
     if (JSON.stringify(after.rows) !== JSON.stringify(expectedRows) ||
         JSON.stringify(after.header?.slice(0, 4)) !== JSON.stringify(state.header.slice(0, 4))) {
       return respond('apply-unverified');
@@ -248,7 +305,6 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
     if (error.name === 'AbortError') throw error;
     return respond('apply-unverified');
   }
-  if (scope) result.rollbackTargets = last ? [null, ...files.slice(0, last - 1).map(file => file.tag)] : [];
-  return respond(reverse ? 'rolled-back' : 'applied', { migrations: migrations.map((item, index) =>
-    ({ ...item, state: index < last ? 'applied' : 'pending' })) });
+  if (scope) result.rollbackTargets = remaining.length ? [null, ...remaining.slice(0, -1).map(file => file.tag)] : [];
+  return respond(reverse ? 'rolled-back' : 'applied', { migrations: entries(new Set(remaining)) });
 }

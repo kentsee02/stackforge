@@ -1,7 +1,7 @@
 import { databaseKey, discoverDatabases } from './discovery.mjs';
 import { databaseResource } from './registry.mjs';
 
-const relational = ['postgres', 'mysql'];
+const relational = ['postgres', 'mysql', 'sqlserver'];
 
 export async function developmentOptions(project, supported) {
   const { requirements, limited } = await discoverDatabases(project);

@@ -74,18 +74,21 @@ async function readSource(project, adapter, sourceId, scanned, signal) {
   const source = migrationSources.find(item => item.adapter === adapter && item.id === sourceId);
   const flyway = adapter === 'flyway';
   const spring = source?.scope === 'spring' && !source.profile && /(?:^|\/)application\.properties$/i.test(source.source);
-  if (source?.scope !== 'standalone' && !spring) throw new Error(badSource);
+  const buildLocations = flyway && ['maven', 'gradle'].includes(source?.scope) && source.nativeLocations;
+  if (source?.scope !== 'standalone' && !spring && !buildLocations) throw new Error(badSource);
   const preview = await (flyway ? previewFlyway : previewLiquibase)(project, sourceId, signal, { scanned });
   if (preview.status !== 'ready') throw new Error(badSource);
   const folder = [source.directory === '.' ? '' : source.directory, source.resourceRoot].filter(Boolean).map(dir => dir + '/').join('');
   const entrypoint = preview.changelog?.slice(folder.length);
   const files = new Map(), checksums = new Map();
   const undoByFile = new Map();
+  const resources = new Set();
   let structured = false, remaining = 8 * 1024 ** 2;
-  let config;
+  let config, manifest;
   try {
     config = await readMigrationFile(join(root, source.source), 64 * 1024);
-    if (!reviewedConfig(adapter, source, config)) throw new Error();
+    if (!buildLocations && !reviewedConfig(adapter, source, config)) throw new Error();
+    if (source.nativeManifest) manifest = await readMigrationFile(join(root, folder, source.nativeManifest), 128 * 1024);
     const paths = flyway ? preview.migrations.map(item => item.file) : preview.files;
     if (!flyway && (!entrypoint || !preview.changelog.startsWith(folder))) throw new Error();
     if (flyway && preview.migrations.some(item => !['versioned', 'repeatable'].includes(item.kind))) throw new Error();
@@ -103,9 +106,22 @@ async function readSource(project, adapter, sourceId, scanned, signal) {
       else if (/\.sql$/i.test(path)) {
         undoByFile.set(file, formattedChanges(sql, preview.changes.filter(item => item.file === file)).slice());
       } else {
-        if (!reviewedStructuredLiquibase(path, sql)) throw new Error();
+        const references = [];
+        if (!reviewedStructuredLiquibase(path, sql, references)) throw new Error();
+        for (const item of references) {
+          resources.add(item.relative ? posix.join(posix.dirname(path), item.path) : item.path);
+        }
         structured = true;
       }
+    }
+    for (const path of resources) {
+      throwIfCancelled(signal);
+      if (files.has(path)) continue;
+      if (remaining <= 0 || resources.size > 128) throw new Error();
+      const contents = await readMigrationFile(join(root, folder + path), Math.min(remaining, 512 * 1024));
+      if (/\u0000|\$\{/.test(contents)) throw new Error();
+      remaining -= Buffer.byteLength(contents);
+      files.set(path, contents);
     }
   } catch (error) {
     if (error.name === 'AbortError') throw error;
@@ -113,7 +129,8 @@ async function readSource(project, adapter, sourceId, scanned, signal) {
   }
   const rollback = preview.changes?.map(item => undoByFile.get(item.file)?.shift());
   return { directory: source.directory, folder, preview, checksums, files, rollback, structured, entrypoint,
-    fingerprint: databaseKey(source, config, [...files]) };
+    resources: [...resources].map(path => folder + path),
+    schema: source.nativeSchema, fingerprint: databaseKey(source, config, manifest, [...files]) };
 }
 
 export async function migrationDatabaseIdentity(session, name, { schema, table }, adapter) {
@@ -228,6 +245,7 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
   const source = await readSource(project, adapter, sourceId, scanned, signal);
   const history = mysql ? mysqlHistoryTable(target.name, payload.table ?? (adapter === 'liquibase' ? 'DATABASECHANGELOG' : tool.table)) :
     postgresHistoryTable(payload.schema, payload.table, tool.table);
+  if (source.schema && source.schema !== history.schema) throw new Error('Choose the history schema declared by this Flyway configuration.');
   const scope = await client.migrationScope();
   const image = await migrationImage(scope.cli, tool.image, mode === 'preview');
   if (!image) throw new Error(changed);
@@ -305,6 +323,7 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
   ])).digest('hex');
   const planId = expires + '.' + signature;
   const plan = { target, tool: tool.name, version: tool.version, history, directory: source.directory, ...(tag && { rollbackTag: tag }),
+    ...(source.resources.length && { resources: source.resources }),
     ...(flywayTarget && { fromRevision: migrations[applied - 1]?.version ?? 'base', toRevision: payload.revision }),
     migrations: range.map(item => ({ file: item.file, revision: item.version ?? item.description ?? item.author + ':' + item.id })), ...(undo && { undo }) };
   if (mode === 'preview') return { status: 'planned', planId, ...plan };

@@ -43,7 +43,7 @@ export function migrationSourcePreview(projectId, source, { request, post, histo
   const controls = document.createElement('fieldset');
   const select = document.createElement('select');
   const empty = new Option('', '');
-  const schema = migrationHistoryName('public');
+  const schema = migrationHistoryName(source.nativeSchema ?? 'public');
   const table = migrationHistoryName(tableName);
   const check = document.createElement('button');
   select.required = true;
@@ -77,6 +77,7 @@ export function migrationSourcePreview(projectId, source, { request, post, histo
   setText(refresh, rescan);
   details.append(summary, status, guide, form, historyStatus, results, refresh);
   const eligible = source.scope === 'standalone' ||
+    adapter === 'flyway' && source.nativeLocations ||
     source.scope === 'spring' && !source.profile && /(?:^|\/)application\.properties$/i.test(source.source);
   const selected = () => ({ targetId: select.value, schema: schema.value, table: table.value });
   const canMigrate = () => eligible && historyTargets.some(target => target.id === select.value && (target.projectPostgres || target.projectMysql));

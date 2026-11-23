@@ -56,6 +56,15 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   if (efCore || ['alembic', 'flyway'].includes(source.adapter)) actions.append(revisionLabel);
   revisionLabel.hidden = source.adapter === 'flyway';
   if (efCore) actions.append(labelledMigrationControl('EF Core SQL file relative to the project', script));
+  const projectRuntime = document.createElement('input');
+  projectRuntime.type = 'checkbox';
+  const runtimeFiles = document.createElement('input');
+  runtimeFiles.disabled = true;
+  runtimeFiles.maxLength = 4000;
+  runtimeFiles.spellcheck = false;
+  runtimeFiles.autocomplete = 'off';
+  if (source.adapter === 'alembic') actions.append(labelledMigrationControl('Use the project Alembic environment', projectRuntime),
+    labelledMigrationControl('Local Python files, comma separated', runtimeFiles));
   const rollbackCount = document.createElement('input');
   rollbackCount.type = 'number';
   rollbackCount.min = '1';
@@ -81,6 +90,11 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   }
   revision.addEventListener('change', () => reset(true));
   script.addEventListener('input', () => reset(true));
+  projectRuntime.addEventListener('input', () => {
+    runtimeFiles.disabled = !projectRuntime.checked;
+    reset(true);
+  });
+  runtimeFiles.addEventListener('input', () => reset(true));
   rollbackCount.addEventListener('input', () => reset(true));
   rollbackTag.addEventListener('input', () => {
     rollbackCount.disabled = Boolean(rollbackTag.value.trim());
@@ -126,6 +140,7 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
       controls.disabled = false;
       for (const control of actions.querySelectorAll('button, select, input')) control.disabled = false;
       rollbackCount.disabled = Boolean(rollbackTag.value.trim());
+      runtimeFiles.disabled = !projectRuntime.checked;
     }
   }
 
@@ -140,6 +155,9 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
       setText(status, 'Preparing the migration tool and checking database history…');
       const tag = rollbackTag.value.trim();
       const targetSelection = { ...selection(), ...(revision.value && { revision: revision.value }), ...(efCore && { scriptFile: script.value.trim() }),
+        ...(source.adapter === 'alembic' && projectRuntime.checked && {
+          projectEnvironment: true, runtimeFiles: runtimeFiles.value.split(',').map(file => file.trim()).filter(Boolean)
+        }),
         ...(source.adapter === 'liquibase' && operation === 'rollback' && (tag ? { rollbackTag: tag } : { rollbackCount: Number(rollbackCount.value) })) };
       const result = await send('preview', operation, targetSelection);
       plan = { operation, targetSelection, ...result };
@@ -150,6 +168,10 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
       files.replaceChildren(...result.migrations.map(item => {
         const line = document.createElement('li');
         line.textContent = item.revision + ' · ' + item.file;
+        return line;
+      }), ...(result.resources ?? []).map(file => {
+        const line = document.createElement('li');
+        setText(line, ['Migration resource', file]);
         return line;
       }));
       reverse.hidden = !result.undo && !result.sql;
@@ -162,7 +184,8 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
       setText(note, message);
       setText(recovery, result.target.engine === 'mysql'
         ? 'Back up the MySQL database before running this plan. A failed or cancelled migration can leave schema changes committed.'
-        : 'Download a verified backup from the project database controls before running the plan.');
+        : result.target.engine === 'sqlserver' ? 'Back up the project SQL Server database before running the plan.'
+          : 'Download a verified backup from the project database controls before running the plan.');
       setText(submit, operation === 'apply' ? 'Apply reviewed migrations' : 'Run reviewed rollback');
       confirm.placeholder = name;
       submit.disabled = true;

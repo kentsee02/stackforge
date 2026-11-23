@@ -15,6 +15,7 @@ const version = '1.20.1';
 const signingKey = randomBytes(32);
 const changed = 'The migration plan changed or expired. Preview it again.';
 const unsupported = 'Guided Alembic requires a verified revision graph and self-contained migration scripts.';
+const environmentUnsupported = 'Choose an Alembic environment that accepts the supplied connection and list its local Python files.';
 const invalidHistory = 'Check the migration history and target database before preparing a write.';
 const dockerfile = [
   'FROM python@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df',
@@ -30,7 +31,7 @@ const runner = [
   'from alembic import command',
   'from alembic.config import Config',
   'from alembic.migration import MigrationContext',
-  'from sqlalchemy import URL, create_engine',
+  'from sqlalchemy import URL, create_engine, event',
   'url = URL.create("postgresql+psycopg", username=os.environ["SF_USER"], password=os.environ["SF_PASSWORD"],',
   '  host="127.0.0.1", port=int(os.environ["SF_PORT"]), database=os.environ["SF_DATABASE"],',
   '  query={"application_name": os.environ["SF_APPLICATION"]})',
@@ -50,7 +51,13 @@ const runner = [
   '        raise RuntimeError("Alembic history changed")',
   '    config.attributes.update(connection=connection, options=options)',
   '    operation, revision = sys.argv[1:]',
-  '    (command.upgrade if operation == "apply" else command.downgrade)(config, revision)',
+  '    def deny_commit(_connection):',
+  '        raise RuntimeError("The project environment tried to commit the migration transaction")',
+  '    event.listen(connection, "commit", deny_commit)',
+  '    try:',
+  '        (command.upgrade if operation == "apply" else command.downgrade)(config, revision)',
+  '    finally:',
+  '        event.remove(connection, "commit", deny_commit)',
   '    if sorted(context.get_current_heads()) != json.loads(os.environ["SF_EXPECTED"]):',
   '        raise RuntimeError("Alembic did not record the expected revision")',
   ''
@@ -64,14 +71,68 @@ const environment = [
   ''
 ].join('\n');
 
-async function readSource(project, sourceId, scanned, signal) {
+const projectEnvironment = [
+  'import os, runpy, sys',
+  'from alembic import context',
+  'settings = context.config.attributes',
+  'configure = context.configure',
+  'configured = False',
+  'def bound_configure(*args, **kwargs):',
+  '    global configured',
+  '    if args or kwargs.get("connection") is not settings["connection"] or kwargs.get("url") is not None:',
+  '        raise RuntimeError("The project environment did not use the supplied connection")',
+  '    kwargs.update(settings["options"], transactional_ddl=True, transaction_per_migration=False)',
+  '    configure(**kwargs)',
+  '    configured = True',
+  'sys.path.insert(0, "/stackforge/project")',
+  'os.chdir("/stackforge/project")',
+  'context.configure = bound_configure',
+  'try:',
+  '    runpy.run_path("/stackforge/alembic/project_env.py", run_name="__main__")',
+  '    if not configured:',
+  '        raise RuntimeError("The project environment did not configure Alembic")',
+  'finally:',
+  '    context.configure = configure',
+  ''
+].join('\n');
+
+async function readSource(project, sourceId, scanned, signal, runtime) {
   const source = scanned.migrationSources.find(item => item.adapter === 'alembic' && item.id === sourceId);
   if (!source) throw new Error(unsupported);
   const preview = await previewAlembic(project, sourceId, signal, scanned);
   const { revisions } = preview;
   if (preview.status !== 'ready' || revisions.some(({ revision, dependencies }) =>
       revision.length > 32 || /^(?:base|head|heads)$/i.test(revision) || dependencies.length)) throw new Error(unsupported);
-  const files = new Map([['run.py', runner], ['alembic/env.py', environment]]);
+  const files = new Map([['run.py', runner], ['alembic/env.py', runtime ? projectEnvironment : environment]]);
+  const resources = [];
+  if (runtime) {
+    const { files: modules } = runtime;
+    if (!Array.isArray(modules) || modules.length > 24 || new Set(modules).size !== modules.length ||
+        modules.some(file => typeof file !== 'string' || file.length > 220 || !/^(?:[a-zA-Z_]\w*\/)*[a-zA-Z_]\w*\.py$/.test(file))) {
+      throw new Error(environmentUnsupported);
+    }
+    try {
+      const prefix = source.directory === '.' ? '' : source.directory + '/';
+      const env = prefix + posix.join(posix.dirname(source.versions), 'env.py');
+      const text = await readMigrationFile(join(scanned.root, env), 256 * 1024);
+      if (!/\.attributes(?:\.get\s*\(\s*['"]connection['"]|\s*\[\s*['"]connection['"]\s*\])/.test(text) ||
+          /\bautocommit_block\s*\(/.test(text)) throw new Error(environmentUnsupported);
+      files.set('alembic/project_env.py', text);
+      resources.push(env);
+      for (const file of modules) {
+        throwIfCancelled(signal);
+        const path = prefix + file;
+        const text = await readMigrationFile(join(scanned.root, path), 256 * 1024);
+        if (/\bautocommit_block\s*\(/.test(text)) throw new Error(environmentUnsupported);
+        files.set('project/' + file, text);
+        resources.push(path);
+      }
+      if (!modules.length) files.set('project/__init__.py', '');
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      throw new Error(environmentUnsupported);
+    }
+  }
   try {
     let remaining = 8 * 1024 ** 2;
     for (const row of revisions) {
@@ -84,7 +145,7 @@ async function readSource(project, sourceId, scanned, signal) {
       files.set('alembic/versions/' + filename, text);
     }
     const config = await readMigrationFile(join(scanned.root, source.source), 64 * 1024);
-    return { revisions, heads: preview.heads, files, directory: source.directory, fingerprint: databaseKey(source, config, [...files]) };
+    return { revisions, heads: preview.heads, files, resources, directory: source.directory, fingerprint: databaseKey(source, config, [...files]) };
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     throw new Error(unsupported);
@@ -119,8 +180,9 @@ function revisionPlan(source, state, operation, requested) {
 export async function nativeAlembicMigration({ project, payload, target, client, signal, directory, verifyShared }) {
   const { mode, operation, sourceId } = payload;
   if (!['preview', 'execute'].includes(mode) || !['apply', 'rollback'].includes(operation)) throw new Error(unsupported);
+  const runtime = payload.projectEnvironment === true ? { files: payload.runtimeFiles ?? [] } : undefined;
   const scanned = await discoverDatabases(project, { includeMigrations: true });
-  const source = await readSource(project, sourceId, scanned, signal);
+  const source = await readSource(project, sourceId, scanned, signal, runtime);
   const { revisions } = source;
   const history = postgresHistoryTable(payload.schema, payload.table, 'alembic_version');
   const scope = await client.migrationScope();
@@ -147,13 +209,14 @@ export async function nativeAlembicMigration({ project, payload, target, client,
   ])).digest('hex');
   const planId = expires + '.' + signature;
   const plan = { target, history, tool: 'Alembic', version, directory: source.directory,
+    ...(source.resources.length && { resources: source.resources }),
     fromRevision: state.heads.join(', ') || 'base', toRevision: selected,
     migrations: range.map(({ file, revision }) => ({ file, revision })) };
   if (mode === 'preview') return { status: 'planned', planId, ...plan };
   if (!expires || Number(expires) <= Date.now() || payload.planId !== planId || payload.confirmName !== target.name) throw new Error(changed);
   await verifyShared(target);
   const latest = await discoverDatabases(project, { includeMigrations: true });
-  if ((await readSource(project, sourceId, latest, signal)).fingerprint !== source.fingerprint) throw new Error(changed);
+  if ((await readSource(project, sourceId, latest, signal, runtime)).fingerprint !== source.fingerprint) throw new Error(changed);
   await resolveStartup(project, [], scanned.identity);
   const application = 'stackforge_migration_' + randomBytes(12).toString('hex');
   try {

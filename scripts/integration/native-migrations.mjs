@@ -89,7 +89,8 @@ async function testExistingAdapters() {
     let pathToChange, body;
     if (adapter === 'flyway') {
       await mkdir(join(project, 'sql'));
-      await writeFile(join(project, 'flyway.conf'), 'flyway.locations=filesystem:sql\n');
+      await writeFile(join(project, 'build.gradle.kts'), "plugins { id(\"org.flywaydb.flyway\") version \"11.20.3\" }\n" +
+        'flyway {\n  locations = ["filesystem:sql"]\n}\n');
       pathToChange = join(project, 'sql/V01__first.sql');
       await writeFile(join(project, 'sql/V2__second.sql'), 'CREATE TABLE second_item(id int);\n');
       await writeFile(join(project, 'sql/R__labels.sql'), 'CREATE VIEW labels AS SELECT 1 AS version;\n');
@@ -118,6 +119,7 @@ async function testExistingAdapters() {
     }
     const query = await database(id, name);
     const discovery = await api(id + '/database-discovery');
+    if (adapter === 'flyway') assert.ok(discovery.migrationSources.some(item => item.scope === 'gradle' && item.nativeLocations));
     const { id: sourceId } = discovery.migrationSources.find(item => item.adapter === adapter);
     const { id: targetId } = discovery.sqlMigrationTargets.find(item => item.projectPostgres);
     const endpoint = id + '/database-native-migration';
@@ -293,7 +295,9 @@ COMMIT;`);
   })).status, 'rolled-back');
   assert.equal((await query("SELECT to_regclass('report') IS NULL;")).trim(), 't');
   console.log('Verified EF Core SQL apply, guarded transaction rollback, stale plan rejection, and downgrade on PostgreSQL.');
+}
 
+async function testAlembic() {
   const branched = join(root, 'alembic-branches');
   await mkdir(join(branched, 'prisma'), { recursive: true });
   await writeFile(join(branched, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
@@ -327,6 +331,34 @@ def downgrade():
     revision: 'base', planId: downgrade.planId, confirmName: branchDb
   })).status, 'rolled-back');
   assert.equal((await branchQuery('SELECT count(*) FROM alembic_version;')).trim(), '0');
+  const projectEnv = join(branched, 'alembic/env.py');
+  const projectHelper = join(branched, 'version_options.py');
+  const localEnv = [
+    'from alembic import context',
+    'from version_options import options',
+    'connection = context.config.attributes["connection"]',
+    'context.configure(connection=connection, **options)',
+    'with context.begin_transaction():',
+    '    context.run_migrations()',
+    ''
+  ].join('\n');
+  await writeFile(projectEnv, localEnv);
+  await writeFile(projectHelper, 'options = {"include_schemas": True}\n');
+  const custom = { projectEnvironment: true, runtimeFiles: ['version_options.py'] };
+  await branchRequest('preview', 'apply', { ...custom, runtimeFiles: ['../outside.py'] }, 409);
+  const stale = await branchRequest('preview', 'apply', custom);
+  assert.deepEqual(stale.resources, ['alembic/env.py', 'version_options.py']);
+  await writeFile(projectHelper, '# Changed after review\n', { flag: 'a' });
+  await branchRequest('execute', 'apply', { ...custom, planId: stale.planId, confirmName: branchDb }, 409);
+  await writeFile(projectEnv, localEnv + 'connection.commit()\n');
+  const earlyCommit = await branchRequest('preview', 'apply', custom);
+  assert.equal((await branchRequest('execute', 'apply', { ...custom, planId: earlyCommit.planId, confirmName: branchDb })).status, 'execution-failed');
+  assert.equal((await branchQuery('SELECT count(*) FROM alembic_version;')).trim(), '0');
+  await writeFile(projectEnv, localEnv);
+  const customUpgrade = await branchRequest('preview', 'apply', custom);
+  assert.equal((await branchRequest('execute', 'apply', { ...custom, planId: customUpgrade.planId, confirmName: branchDb })).status, 'applied');
+  const customDown = await branchRequest('preview', 'rollback', { ...custom, revision: 'base' });
+  assert.equal((await branchRequest('execute', 'rollback', { ...custom, revision: 'base', planId: customDown.planId, confirmName: branchDb })).status, 'rolled-back');
   console.log('Verified Alembic multiple heads, explicit branched rollback, and version history.');
 }
 
@@ -335,6 +367,11 @@ async function testStructuredLiquibase() {
   await mkdir(join(structured, 'prisma'), { recursive: true });
   await writeFile(join(structured, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
   await mkdir(join(structured, 'changes'));
+  await mkdir(join(structured, 'changes/data'));
+  await writeFile(join(structured, 'changes/data/setup.sql'), 'CREATE TABLE yaml_fixture (id int);\n');
+  const csv = join(structured, 'changes/data/items.csv');
+  await writeFile(csv, 'id\n21\n');
+  await writeFile(join(structured, 'changes/data/undo.sql'), 'DROP TABLE yaml_fixture;\n');
   await writeFile(join(structured, 'liquibase.properties'), 'changeLogFile=changes/main.json\n');
   await writeFile(join(structured, 'changes/main.json'), JSON.stringify({ databaseChangeLog: [
     { include: { file: 'from-yaml.yaml', relativeToChangelogFile: true } },
@@ -348,12 +385,17 @@ async function testStructuredLiquibase() {
       id: yaml
       author: fixture
       changes:
-        - createTable:
+        - sqlFile:
+            path: data/setup.sql
+            relativeToChangelogFile: true
+        - loadData:
             tableName: yaml_fixture
-            columns:
-              - column:
-                  name: id
-                  type: int
+            file: data/items.csv
+            relativeToChangelogFile: true
+      rollback:
+        - sqlFile:
+            path: data/undo.sql
+            relativeToChangelogFile: true
 `);
   await writeFile(join(structured, 'changes/from-xml.xml'), `<?xml version="1.0" encoding="UTF-8"?>
 <databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -373,7 +415,8 @@ async function testStructuredLiquibase() {
   const tableCount = () => structuredQuery("SELECT count(*) FROM information_schema.tables WHERE table_schema='public' " +
     "AND table_name IN ('yaml_fixture', 'xml_fixture', 'json_fixture');");
   const stale = await requestPlan('preview', 'apply');
-  await writeFile(join(structured, 'changes/from-xml.xml'), '\n', { flag: 'a' });
+  assert.deepEqual(stale.resources, ['changes/data/setup.sql', 'changes/data/items.csv', 'changes/data/undo.sql']);
+  await writeFile(csv, 'id\n22\n');
   const rejection = await requestPlan('execute', 'apply', { planId: stale.planId, confirmName: structuredName }, 409);
   assert.match(rejection.error, /preview it again/i);
   assert.equal((await tableCount()).trim(), '0');
@@ -382,6 +425,7 @@ async function testStructuredLiquibase() {
   assert.equal((await requestPlan('execute', 'apply', { planId: approved.planId, confirmName: structuredName })).status, 'applied');
   assert.equal((await structuredQuery('SELECT count(*) FROM databasechangelog;')).trim(), '3');
   assert.equal((await tableCount()).trim(), '3');
+  assert.equal((await structuredQuery('SELECT id FROM yaml_fixture;')).trim(), '22');
   const structuredUndo = await requestPlan('preview', 'rollback', { rollbackCount: 3 });
   assert.match(structuredUndo.undo.join('\n'), /DROP TABLE[^;]*json_fixture[\s\S]*DROP TABLE[^;]*xml_fixture[\s\S]*DROP TABLE[^;]*yaml_fixture/i);
   assert.equal((await structuredQuery('SELECT count(*) FROM databasechangelog;')).trim(), '3');
@@ -538,13 +582,12 @@ async function testLiquibaseTags() {
 }
 
 try {
-  const mysqlOnly = process.argv.includes('--mysql-only');
-  const structuredOnly = process.argv.includes('--structured-only');
-  const tagsOnly = process.argv.includes('--tags-only');
-  if (!mysqlOnly && !structuredOnly && !tagsOnly) await testExistingAdapters();
-  if (!mysqlOnly && !tagsOnly) await testStructuredLiquibase();
-  if (!structuredOnly && !tagsOnly) await testNativeMysql();
-  if (!mysqlOnly && !structuredOnly) await testLiquibaseTags();
+  const selection = process.argv.find(argument => ['--mysql-only', '--structured-only', '--tags-only', '--alembic-only'].includes(argument));
+  if (!selection) await testExistingAdapters();
+  if (!selection || selection === '--alembic-only') await testAlembic();
+  if (!selection || selection === '--structured-only') await testStructuredLiquibase();
+  if (!selection || selection === '--mysql-only') await testNativeMysql();
+  if (!selection || selection === '--tags-only') await testLiquibaseTags();
 } finally {
   for (const id of records) await removeDatabase(id);
   await app.shutdownTasks();

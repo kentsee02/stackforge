@@ -30,6 +30,32 @@ function propertyOptions(text) {
   return result;
 }
 
+function nativeMavenSettings(text) {
+  const options = new Map();
+  const keys = new Set(['locations', 'url', 'user', 'password', 'schemas', 'defaultschema',
+    'validateonmigrate', 'cleandisabled', 'baselineonmigrate']);
+  for (const line of text.split(/\r?\n/).map(item => item.trim()).filter(item => item && !/^[#!]/.test(item))) {
+    const pair = /^flyway\.([a-z]+)\s*[:=]\s*(.*)$/i.exec(line);
+    const key = pair?.[1].toLowerCase();
+    if (!keys.has(key) || options.has(key) || pair[2].endsWith('\\')) return;
+    if (['validateonmigrate', 'cleandisabled', 'baselineonmigrate'].includes(key) && !/^(?:true|false)$/i.test(pair[2])) return;
+    options.set(key, pair[2].trim());
+  }
+  const schema = options.get('defaultschema') ?? options.get('schemas');
+  if (schema !== undefined && (!/^[A-Za-z_][A-Za-z\d_]{0,62}$/.test(schema) ||
+      options.has('schemas') && options.get('schemas') !== schema)) return;
+  return { nativeLocations: true, ...(schema && { nativeSchema: schema }), nativeManifest: 'pom.xml' };
+}
+
+function nativeMavenPlugin(plugin) {
+  const config = /<configuration>\s*([\s\S]*?)<\/configuration>/.exec(plugin)?.[1] ?? '';
+  return !/<(?:executions?|dependencies|extensions)\b/i.test(plugin) &&
+    !config.replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/<configFiles>\s*<configFile>\s*[^<>]+\s*<\/configFile>\s*<\/configFiles>/g, '')
+      .replace(/<locations>(?:\s*<location>[^<>]+<\/location>)+\s*<\/locations>/g, '')
+      .replace(/<(locations|configFiles|url|user|password)>[^<>]*<\/\1>/g, '').trim();
+}
+
 export function flywayRelativePath(path) {
   const value = path.replace(/^\.\/+/, '').replace(/\/$/, '');
   if (!value || value.length > 240 || value.split('/').some(part => !/^[\p{L}\p{N}_-][\p{L}\p{N}_ .-]*$/u.test(part) ||
@@ -126,9 +152,12 @@ async function mavenSource(xml, read, profile) {
     const text = await read(file);
     const fromFile = propertyOptions(text);
     for (const [key, value] of options) fromFile.set(key, fromFile.has(key) && fromFile.get(key) !== value ? undefined : value);
-    return configuration(file, 'maven', fromFile, { profile, unsupported: !text });
+    const native = nativeMavenPlugin(plugin) && options.size <= Number(options.has('locations')) && nativeMavenSettings(text);
+    return { ...configuration(file, 'maven', fromFile, { profile, unsupported: !text }), ...native };
   }
-  return configuration('pom.xml', 'maven', options, { profile, unsupported });
+  const nativeLocations = !unsupported && nativeMavenPlugin(plugin) && options.size <= Number(options.has('locations')) &&
+    !/<flyway\.(?!version>|locations>)[\w-]+>/i.test(xml);
+  return { ...configuration('pom.xml', 'maven', options, { profile, unsupported }), ...(nativeLocations && { nativeLocations }) };
 }
 
 export async function flywaySources({ files, pom, configs, read }) {
@@ -158,10 +187,12 @@ export async function flywaySources({ files, pom, configs, read }) {
     if (/['"](?:org\.flywaydb:flyway-[\w-]+|org\.springframework\.boot:spring-boot-starter-flyway)(?=[:'"])/.test(text)) runtimeFile ??= file;
     if (!/\bid\s*\(?\s*['"]org\.flywaydb\.flyway['"]/.test(text)) continue;
     const options = new Map();
+    const blocks = [...text.matchAll(/\bflyway\s*\{([^{}]*)\}/g)];
     const block = /\bflyway\s*\{([\s\S]*?)\}/.exec(text)?.[1] ?? '';
     for (const [, key, value] of block.matchAll(/^[ \t]*(\w+)[ \t]*=[ \t]*(\[[^\]]*\]|[^\r\n]+)$/gm)) put(options, key, value);
     const unsupported = [...relevant].some(key => new RegExp('\\b' + key + '\\b', 'i').test(block) && !options.has(key));
-    sources.push(configuration(file, 'gradle', options, { unsupported }));
+    const nativeLocations = blocks.length === 1 && /^\s*locations\s*=\s*(?:\[[^\r\n]*\]|'[^'\r\n]+'|"[^"\r\n]+")\s*$/.test(block);
+    sources.push({ ...configuration(file, 'gradle', options, { unsupported }), ...(nativeLocations && { nativeLocations }) });
   }
 
   if (runtimeFile || maven || configs.some(file => /application/.test(file))) {

@@ -33,6 +33,7 @@ function tableQuery({ schema, table }) {
 SET LOCK_TIMEOUT 4000;
 SELECT DB_NAME();
 DECLARE @id int = OBJECT_ID(N'${relation}');
+SELECT COALESCE(CONVERT(varchar(12),@id),'absent');
 IF @id IS NULL SELECT 'absent';
 ELSE IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = @id AND is_memory_optimized = 0)
   OR EXISTS (SELECT 1 FROM sys.security_predicates WHERE target_object_id = @id)
@@ -47,7 +48,7 @@ ELSE BEGIN
 END;`;
 }
 
-export async function readSqlServerHistory({ selection, credentials, command, probe, signal }, history) {
+export async function readSqlServerHistory({ selection, credentials, command, probe, signal, resolveClient }, history) {
   const { host, port, name } = selection;
   const target = { host, port, name, engine: 'sqlserver' };
   if (host === 'localhost') {
@@ -56,11 +57,17 @@ export async function readSqlServerHistory({ selection, credentials, command, pr
     target.host = address;
   }
   try {
-    const [database, table, ...rows] = (await queryLocalSqlServer(target, credentials, tableQuery(history), { command, signal })).split(/\r?\n/);
+    const client = selection.projectSqlServer && await resolveClient?.(target);
+    if (selection.projectSqlServer && !client) return { target, status: 'target-changed' };
+    const sql = tableQuery(history);
+    const output = client ? await client.sqlServerQuery(sql) : await queryLocalSqlServer(target, credentials, sql, { command, signal });
+    const [database, relation, table, ...rows] = output.trim().split(/\r?\n/).map(line => line.trimEnd());
     if (database !== name) return { target, status: 'target-changed' };
-    return { target, snapshot: { table, rows: rows.map(row => /^(?:[0-9a-f]{4}){1,143}$/i.test(row) ? Buffer.from(row, 'hex').toString('utf16le') : null) } };
+    if (relation !== 'absent' && !/^[1-9]\d*$/.test(relation ?? '')) return { target, status: 'history-unavailable' };
+    return { target, snapshot: { table, oid: relation === 'absent' ? '' : relation,
+      rows: rows.map(row => /^(?:[0-9a-f]{4}){1,143}$/i.test(row) ? Buffer.from(row, 'hex').toString('utf16le') : null) } };
   } catch (error) {
     if (error.name === 'AbortError') throw error;
-    return { target, status: error.issue ?? 'connection' };
+    return { target, status: error.issue ?? error.code ?? 'connection' };
   }
 }
