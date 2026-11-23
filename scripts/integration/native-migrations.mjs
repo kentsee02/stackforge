@@ -366,17 +366,27 @@ async function testStructuredLiquibase() {
   const input = { adapter: 'liquibase', sourceId: structuredDiscovery.migrationSources.find(item => item.adapter === 'liquibase').id,
     targetId: structuredDiscovery.sqlMigrationTargets.find(item => item.projectPostgres).id };
   const structuredEndpoint = structuredId + '/database-native-migration';
-  const requestPlan = (mode, operation, fields = {}) => api(structuredEndpoint, { ...input, mode, operation, ...fields });
+  const requestPlan = (mode, operation, fields = {}, expected = 200) => api(structuredEndpoint, { ...input, mode, operation, ...fields }, expected);
+  const tableCount = () => structuredQuery("SELECT count(*) FROM information_schema.tables WHERE table_schema='public' " +
+    "AND table_name IN ('yaml_fixture', 'xml_fixture', 'json_fixture');");
+  const stale = await requestPlan('preview', 'apply');
+  await writeFile(join(structured, 'changes/from-xml.xml'), '\n', { flag: 'a' });
+  const rejection = await requestPlan('execute', 'apply', { planId: stale.planId, confirmName: structuredName }, 409);
+  assert.match(rejection.error, /preview it again/i);
+  assert.equal((await tableCount()).trim(), '0');
   const approved = await requestPlan('preview', 'apply');
   assert.deepEqual(approved.migrations.map(item => item.revision), ['fixture:yaml', 'fixture:xml', 'fixture:json']);
   assert.equal((await requestPlan('execute', 'apply', { planId: approved.planId, confirmName: structuredName })).status, 'applied');
   assert.equal((await structuredQuery('SELECT count(*) FROM databasechangelog;')).trim(), '3');
+  assert.equal((await tableCount()).trim(), '3');
   const structuredUndo = await requestPlan('preview', 'rollback', { rollbackCount: 3 });
   assert.match(structuredUndo.undo.join('\n'), /DROP TABLE[^;]*json_fixture[\s\S]*DROP TABLE[^;]*xml_fixture[\s\S]*DROP TABLE[^;]*yaml_fixture/i);
   assert.equal((await structuredQuery('SELECT count(*) FROM databasechangelog;')).trim(), '3');
+  assert.equal((await tableCount()).trim(), '3');
   const result = await requestPlan('execute', 'rollback', { rollbackCount: 3, planId: structuredUndo.planId, confirmName: structuredName });
   assert.equal(result.status, 'rolled-back');
   assert.equal((await structuredQuery('SELECT count(*) FROM databasechangelog;')).trim(), '0');
+  assert.equal((await tableCount()).trim(), '0');
   console.log('Verified structured Liquibase JSON, YAML and XML with read-only rollback preview and native rollback.');
 }
 

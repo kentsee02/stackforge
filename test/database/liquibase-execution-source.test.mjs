@@ -26,3 +26,10 @@ test('Liquibase staged execution rejects unresolved paths and runtime-dependent 
   assert.equal(reviewedStructuredLiquibase('main.json',
     '{"databaseChangeLog":[{"changeSet":{"id":"first","author":"test","runAlways":true}}]}'), false);
 });
+
+test('Liquibase staged execution rejects property expressions after XML and JSON decoding', () => {
+  assert.equal(reviewedStructuredLiquibase('main.xml', '<databaseChangeLog><changeSet id="first" author="test">' +
+    '<sql>SELECT \'&#x24;&#0123;RUNTIME_VALUE}\'</sql></changeSet></databaseChangeLog>'), false);
+  assert.equal(reviewedStructuredLiquibase('main.json', '{"databaseChangeLog":[{"changeSet":{"id":"first","author":"test",' +
+    '"changes":[{"sql":{"sql":"SELECT \'\\u0024\\u007bRUNTIME_VALUE}\'"}}]}}]}'), false);
+});

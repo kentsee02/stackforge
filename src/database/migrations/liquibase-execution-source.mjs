@@ -27,6 +27,8 @@ const includePath = /^(?:[A-Za-z0-9_-][\w.-]*\/)*[A-Za-z0-9_-][\w.-]*\/?$/;
 const validKey = key => elements.has(key) || simpleFields.has(key);
 
 function reviewedXml(text) {
+  const expandedMarkers = text.replace(/&#(?:0*36|x0*24);/gi, '$').replace(/&#(?:0*123|x0*7b);/gi, '{');
+  if (/\$\{/.test(expandedMarkers)) return false;
   for (const [token] of text.matchAll(liquibaseXmlTokens)) {
     if (token.startsWith('<?') && !/^<\?xml\s[^?]*\?>$/.test(token)) return false;
     const tag = /^<([A-Za-z_][\w:.-]*)([\s\S]*)>$/.exec(token);
@@ -59,6 +61,7 @@ function reviewedYaml(text) {
 
 function reviewedJson(value, depth = 0) {
   if (depth > 24) return false;
+  if (typeof value === 'string') return !/\$\{/.test(value);
   if (Array.isArray(value)) return value.every(item => reviewedJson(item, depth + 1));
   if (value && typeof value === 'object') return Object.entries(value).every(([name, item]) =>
     validKey(name) && reviewedJson(item, depth + 1));

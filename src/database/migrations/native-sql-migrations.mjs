@@ -239,7 +239,9 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
   if (rollback && !undo) {
     if (!source.structured) throw new Error('Each selected changeset needs an explicit rollback statement.');
     try {
-      undo = [rollbackSql(await runJob(liquibase({ command: 'rollback-count-sql', readOnly: true })), range, source.folder)];
+      const sql = rollbackSql(await runJob(liquibase({ command: 'rollback-count-sql', readOnly: true })), range, source.folder);
+      if (sql.includes(credentials.password)) throw new Error();
+      undo = [sql];
     } catch (error) {
       if (error.name === 'AbortError' || error.message === changed) throw error;
       throw new Error('Liquibase could not generate reviewable rollback SQL for this range.');

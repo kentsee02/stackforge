@@ -38,6 +38,7 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 - [x] Stage supported XML, YAML and JSON resources with local includes, preserving the resource paths used by Liquibase history.
 - [x] Apply the public Spring Boot Liquibase example's YAML and included SQL on a disposable PostgreSQL database.
 - [x] Generate native rollback SQL for a reviewed structured changeset range and recheck the exact preview before writing.
+- [x] In v0.47.1, reject encoded variable expressions and prove that changing an included changelog invalidates its approval. Verify physical tables and history through rollback.
 - [ ] Cover runtime-dependent changelogs, referenced data files, rollback tags and MySQL writes.
 
 ## v0.46.1 Migration ranges
