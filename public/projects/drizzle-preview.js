@@ -33,6 +33,7 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
   const summary = document.createElement('summary');
   const target = document.createElement('p');
   const status = document.createElement('p');
+  const cancel = document.createElement('button');
   const files = document.createElement('ul');
   const refresh = document.createElement('button');
   const rollbackSettings = document.createElement('fieldset');
@@ -53,6 +54,10 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
   target.hidden = true;
   status.className = 'hint';
   status.setAttribute('role', 'status');
+  cancel.type = 'button';
+  cancel.className = 'secondary';
+  cancel.hidden = true;
+  setText(cancel, 'Cancel migration operation');
   files.className = 'check-list';
   refresh.className = 'secondary';
   refresh.type = 'button';
@@ -90,12 +95,14 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
   form.append(range, review, risk, fields);
   setText(summary, 'Preview Drizzle migrations');
   setText(refresh, 'Check again');
-  details.append(summary, target, status, files, rollbackSettings, form, refresh);
-  let loading = false, plan;
+  details.append(summary, target, status, cancel, files, rollbackSettings, form, refresh);
+  let active, plan;
 
   async function load(approval, selection) {
-    if (loading) return;
-    loading = true;
+    if (active) return;
+    const operation = new AbortController();
+    active = operation;
+    cancel.hidden = false;
     plan = undefined;
     refresh.hidden = true;
     form.hidden = true;
@@ -110,7 +117,7 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
       const { token } = await request('/api/state');
       const endpointName = approval ? 'database-drizzle-apply' : 'database-drizzle-preview';
       const result = await post('/api/projects/' + projectId + '/' + endpointName, token,
-        { requirementId: requirement.id, ...selection, ...approval }, approval ? 170000 : 60000);
+        { requirementId: requirement.id, ...selection, ...approval }, approval ? 170000 : 60000, operation.signal);
       const endpoint = result.target;
       const address = endpoint && (endpoint.host.includes(':') ? '[' + endpoint.host + ']' : endpoint.host);
       target.textContent = [result.variable, endpoint && address + ':' + endpoint.port + '/' + endpoint.name, result.history].filter(Boolean).join(' · ');
@@ -147,15 +154,17 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
         form.hidden = false;
       }
     } catch (error) {
-      setText(status, error.message);
+      setText(status, operation.signal.aborted ? 'Cancellation requested. Check database history before starting again.' : error.message);
     } finally {
       refresh.hidden = false;
       rollbackSettings.disabled = false;
-      loading = false;
+      cancel.hidden = true;
+      active = undefined;
     }
   }
   details.addEventListener('toggle', () => { if (details.open) void load(); });
   refresh.addEventListener('click', () => void load());
+  cancel.addEventListener('click', () => active?.abort());
   const updateRollback = () => {
     previewRollback.disabled = !scriptFile.value.trim();
     if (plan?.selection) {

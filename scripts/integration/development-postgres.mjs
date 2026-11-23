@@ -296,6 +296,37 @@ try {
   const failingRollback = await rollbackPreview(rollbackInput);
   assert.equal((await rollbackDrizzle(failingRollback)).status, 'apply-failed');
   assert.equal((await query("SELECT to_regclass('public.drizzle_second') IS NOT NULL AND count(*) = 2 FROM project_history.migrations")).trim(), 't');
+  await writeFile(rollbackFile, 'DROP TABLE drizzle_second;\nINSERT INTO drizzle_first(id) VALUES ((SELECT 777 FROM pg_sleep(90)));');
+  const slowRollback = await rollbackPreview(rollbackInput);
+  const activeRollback = new AbortController();
+  const runningRollback = fetch(origin + '/api/projects/' + id + '/database-drizzle-apply', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-StackForge-Token': token }, signal: activeRollback.signal,
+    body: JSON.stringify({ requirementId: drizzle.id, ...rollbackInput, planId: slowRollback.planId, confirmName: 'portal' })
+  }).catch(error => error);
+  try {
+    let sleeping = false;
+    for (let attempt = 0; attempt < 60; attempt++) {
+      sleeping = (await query("SELECT count(*) FROM pg_stat_activity WHERE application_name LIKE 'stackforge_migration_%' AND wait_event='PgSleep';")).trim() === '1';
+      if (sleeping) break;
+      await delay(400);
+    }
+    assert.equal(sleeping, true);
+  } finally { activeRollback.abort(); }
+  assert.equal((await runningRollback).name, 'AbortError');
+  const operationFile = join(root, 'state', 'database-operations.jsonl');
+  let cancelled;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    cancelled = (await readFile(operationFile, 'utf8')).split('\n').some(line => {
+      if (!line) return false;
+      const action = JSON.parse(line);
+      return action.projectId === id && action.action === 'database-rollback' && action.status === 'cancelled';
+    });
+    if (cancelled) break;
+    await delay(300);
+  }
+  assert.equal(cancelled, true);
+  assert.equal((await query("SELECT count(*) FROM pg_stat_activity WHERE application_name LIKE 'stackforge_migration_%';")).trim(), '0');
+  assert.equal((await query("SELECT to_regclass('public.drizzle_second') IS NOT NULL AND count(*) = 2 FROM project_history.migrations")).trim(), 't');
   await writeFile(rollbackFile, 'DROP TABLE drizzle_second;\n');
   const approvedRollback = await rollbackPreview(rollbackInput);
   assert.equal(approvedRollback.status, 'rollback-planned');

@@ -549,7 +549,7 @@ try {
     return route.fulfill({ json: { ...drizzleState, status: 'rolled-back', rollbackTargets: [],
       migrations: [{ state: 'pending', file: 'drizzle/0000_create.sql' }] } });
   });
-  await drizzlePanel.locator(':scope > button').click();
+  await drizzlePanel.getByRole('button', { name: '重新检测' }).click();
   await drizzlePanel.getByLabel('项目内的回滚 SQL 文件相对路径').fill('drizzle/revert.sql');
   await drizzlePanel.getByRole('button', { name: '预览回滚计划' }).click();
   await contains('.drizzle-preview .drizzle-sql-review', 'DROP TABLE example;');

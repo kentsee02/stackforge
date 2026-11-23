@@ -60,6 +60,7 @@ Develop these candidates in priority order. v0.33.0 completed startup preflight,
 - [x] Review and apply common changes including rename, drop, type changes and data updates on a verified project PostgreSQL database.
 - [x] Review an explicit rollback SQL file and select a prior journal revision. Tie the approval to file content and the exact target and history.
 - [x] Check the expected history before commit. Verify failed scripts leave schema and history intact and that rolled-back revisions can be replayed.
+- [x] In v0.49.1, expose cancellation and verify that cancelling a running rollback closes its PostgreSQL session and preserves schema and history.
 - [ ] Support additional Drizzle engines, journal layouts and operations that require the project's own runtime.
 
 ## v0.48.0 Flyway and Liquibase on project MySQL
