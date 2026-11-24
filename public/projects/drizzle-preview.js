@@ -44,12 +44,25 @@ const mysqlStatuses = {
   client: 'Install mysql and add it to PATH to check this database.',
   connection: 'Could not verify the MySQL connection.'
 };
+const sqliteStatuses = {
+  'files-unavailable': 'The SQLite Drizzle journal or one of its SQL files could not be verified.',
+  'configuration-needed': 'Choose a SQLite database file inside the project, then check again.',
+  'history-upgrade-required': 'Upgrade the legacy SQLite migration history with Drizzle before using these v1 folders.',
+  'sqlite-file-invalid': 'SQLite could not read or verify the database file.',
+  'sqlite-locked': 'The SQLite database is locked. Stop the writer or retry.',
+  'sqlite-runtime': 'Use Node.js 24.10 or later to apply SQLite migrations in StackForge.',
+  'sqlite-sql-blocked': 'SQLite rolled back the batch because it contains unsupported migration commands.',
+  'apply-failed': 'Could not apply the SQLite migrations. The batch was rolled back.',
+  'apply-unverified': 'SQLite changes ran, but the resulting migration history could not be verified.'
+};
 
 export function drizzlePreview(projectId, requirement, { request, post }) {
   const details = document.createElement('details');
   details.className = 'migration-preview drizzle-preview';
   const summary = document.createElement('summary');
   const target = document.createElement('p');
+  const databaseFile = document.createElement('input');
+  const databaseChoice = labelledMigrationControl('SQLite file path inside the project', databaseFile);
   const status = document.createElement('p');
   const cancel = document.createElement('button');
   const files = document.createElement('ul');
@@ -68,6 +81,10 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
   const prompt = document.createElement('span');
   const confirm = document.createElement('input');
   const apply = document.createElement('button');
+  databaseChoice.hidden = true;
+  databaseFile.maxLength = 320;
+  databaseFile.autocomplete = 'off';
+  databaseFile.spellcheck = false;
   target.className = 'hint';
   target.hidden = true;
   status.className = 'hint';
@@ -112,7 +129,7 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
   form.append(range, review, risk, fields);
   setText(summary, 'Preview Drizzle migrations');
   setText(refresh, 'Check again');
-  details.append(summary, target, status, cancel, files, rollbackSettings, form, refresh);
+  details.append(summary, target, status, databaseChoice, cancel, files, rollbackSettings, form, refresh);
   let active, plan;
 
   async function load(approval, selection) {
@@ -134,13 +151,17 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
       const { token } = await request('/api/state');
       const endpointName = approval ? 'database-drizzle-apply' : 'database-drizzle-preview';
       const result = await post('/api/projects/' + projectId + '/' + endpointName, token,
-        { requirementId: requirement.id, ...selection, ...approval }, approval ? 170000 : 60000, operation.signal);
+        { requirementId: requirement.id, ...selection, ...approval,
+          ...(!databaseChoice.hidden && databaseFile.value.trim() && { databaseFile: databaseFile.value.trim() }) },
+        approval ? 170000 : 60000, operation.signal);
       const endpoint = result.target;
-      const address = endpoint && (endpoint.host.includes(':') ? '[' + endpoint.host + ']' : endpoint.host);
-      target.textContent = [result.variable, endpoint && address + ':' + endpoint.port + '/' + endpoint.name, result.history].filter(Boolean).join(' · ');
+      const address = endpoint?.host && (endpoint.host.includes(':') ? '[' + endpoint.host + ']' : endpoint.host);
+      target.textContent = [result.variable, endpoint?.path ?? (address && address + ':' + endpoint.port + '/' + endpoint.name), result.history].filter(Boolean).join(' · ');
       target.hidden = false;
+      databaseChoice.hidden = !result.chooseFile;
       const mysql = result.engine === 'mysql';
-      setText(status, [(mysql && mysqlStatuses[result.status]) || statuses[result.status], result.sources?.join(', '),
+      const sqlite = result.engine === 'sqlite';
+      setText(status, [(sqlite && sqliteStatuses[result.status]) || (mysql && mysqlStatuses[result.status]) || statuses[result.status], result.sources?.join(', '),
         result.applyBlocked && 'This batch contains SQL outside the supported migration commands for this database.']);
       files.replaceChildren();
       for (const migration of result.migrations ?? []) {
@@ -164,7 +185,8 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
         plan = { id: result.planId, name: endpoint.name, selection };
         review.hidden = risk.hidden = !result.reviewSql;
         review.textContent = result.reviewSql ?? '';
-        setText(risk, mysql ? 'Back up the database before applying. MySQL schema changes can commit even when a later statement fails.' :
+        setText(risk, mysql ? 'Back up the database before applying. MySQL schema changes can commit even when a later statement fails.' : sqlite ?
+          'Back up the SQLite file before applying. If the selected file is missing, StackForge will create it.' :
           'Review the full SQL and back up this project database. The migration may change or remove existing data.');
         range.hidden = !result.toRevision;
         range.textContent = result.toRevision ? result.fromRevision + ' → ' + result.toRevision : '';
@@ -193,6 +215,10 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
     }
   };
   revision.addEventListener('change', updateRollback);
+  databaseFile.addEventListener('input', () => {
+    form.hidden = true;
+    plan = undefined;
+  });
   scriptFile.addEventListener('input', updateRollback);
   previewRollback.addEventListener('click', () => void load(undefined, {
     operation: 'rollback', revision: revision.value || null, scriptFile: scriptFile.value.trim()

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -221,6 +222,113 @@ process.stdout.write('ready\\n'); setInterval(()=>{},1000);`);
     const log = JSON.parse(await readFile(join(root, 'state', 'databases.json'), 'utf8'));
     assert.equal(log.backups[0].checksum, result.metadata.checksum);
   } finally { controller.abort(); await running.catch(() => {}); }
+});
+
+test('Drizzle SQLite binds approval to the file and SQL, rolls back failures, and recognizes restored history', {
+  timeout: 45000, skip: !DatabaseSync.prototype.setAuthorizer
+}, async t => {
+  const { project, request, register } = await fixture(t);
+  const file = join(project, 'notes.sqlite');
+  const config = async filename => writeFile(join(project, 'drizzle.config.ts'), `export default { dialect: 'sqlite',
+    dbCredentials: { url: 'file:${filename}' }, migrations: { table: 'drizzle_log' } }`);
+  await config('notes.sqlite');
+  await writeFile(join(project, 'package.json'), JSON.stringify({ devDependencies: { 'drizzle-kit': '0.31.8' } }));
+  const folders = ['20261101100000_create', '20261101100100_update'];
+  const migrations = folders.map(folder => join(project, 'drizzle', folder));
+  await mkdir(migrations[0], { recursive: true });
+  await writeFile(join(migrations[0], 'migration.sql'), 'CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT); INSERT INTO notes VALUES (1, \'first note\');');
+  const route = await register();
+  const discovery = () => request(route + '/database-discovery').then(response => response.json());
+  const requirementId = (await discovery()).requirements.find(item => item.migrationAdapter === 'drizzle').id;
+  const endpoint = route + '/database-drizzle-';
+  const preview = (extra = {}) => request(endpoint + 'preview', { requirementId, ...extra }).then(response => response.json());
+  const apply = (planId, confirmName = 'notes.sqlite') => request(endpoint + 'apply', { requirementId, planId, confirmName });
+  const check = async (planId, status) => {
+    const response = await apply(planId);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.status, status, JSON.stringify(result));
+  };
+  assert.equal((await preview({ databaseFile: 'wrong.sqlite' })).status, 'configuration-needed');
+  const initial = await preview();
+  assert.equal(initial.status, 'pending');
+  assert.equal((await apply(initial.planId, 'wrong.sqlite')).status, 409);
+  await check(initial.planId, 'applied');
+  const query = sql => {
+    const database = new DatabaseSync(file, { readOnly: true });
+    try { return database.prepare(sql).get(); }
+    finally { database.close(); }
+  };
+  assert.equal(query('SELECT title FROM notes').title, 'first note');
+  assert.equal((await preview()).status, 'current');
+  const archiveEndpoint = route + '/database-archive';
+  const source = (await discovery()).bindings.find(item => item.instance.path === 'notes.sqlite').id;
+  const backup = await request(archiveEndpoint, {}, { 'X-StackForge-Binding': source });
+  assert.equal(backup.status, 200);
+  const archive = Buffer.from(await backup.arrayBuffer());
+  await config('restored.sqlite');
+  const restored = (await discovery()).bindings.find(item => item.instance.path === 'restored.sqlite').id;
+  const restoreHeaders = { 'X-StackForge-Binding': restored };
+  const restorePreview = await request(archiveEndpoint + '/preview', archive, restoreHeaders);
+  assert.equal(restorePreview.status, 200);
+  const restorePlan = await restorePreview.json();
+  assert.equal((await request(archiveEndpoint + '/restore', archive, { ...restoreHeaders,
+    'X-StackForge-Preview': restorePlan.id, 'X-StackForge-Target': Buffer.from(restorePlan.name).toString('base64') })).status, 200);
+  assert.equal((await preview()).status, 'current');
+  await config('notes.sqlite');
+  await mkdir(migrations[1]);
+  const second = join(migrations[1], 'migration.sql');
+  const additive = 'ALTER TABLE notes ADD pinned INTEGER NOT NULL DEFAULT 0;';
+  await writeFile(second, additive);
+  const plan = await preview();
+  await writeFile(second, additive + '\n');
+  assert.equal((await apply(plan.planId)).status, 409);
+  await writeFile(second, additive);
+  const replacementPlan = await preview();
+  const old = join(project, 'original.sqlite');
+  await rename(file, old);
+  await writeFile(file, await readFile(old));
+  assert.equal((await apply(replacementPlan.planId)).status, 409);
+  const alias = join(project, 'alias.sqlite');
+  await link(file, alias);
+  assert.equal((await preview()).status, 'sqlite-file-invalid');
+  await rm(alias);
+  for (const sql of ["ATTACH DATABASE 'out.sqlite' AS outside;", 'COMMIT;', 'DROP TABLE drizzle_log;', 'PRAGMA writable_schema=ON;']) {
+    await writeFile(second, additive + sql);
+    await check((await preview()).planId, 'sqlite-sql-blocked');
+    assert.equal(query("SELECT count(*) AS total FROM pragma_table_info('notes') WHERE name='pinned'").total, 0);
+    assert.equal(query('SELECT count(*) AS total FROM drizzle_log').total, 1);
+  }
+  await writeFile(second, additive + 'INSERT INTO nonexistent VALUES (1);');
+  await check((await preview()).planId, 'apply-failed');
+  assert.equal(query("SELECT count(*) AS total FROM pragma_table_info('notes') WHERE name='pinned'").total, 0);
+  await writeFile(second, additive);
+  const wal = new DatabaseSync(file);
+  try {
+    wal.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; UPDATE notes SET title='kept from WAL';");
+    await check((await preview()).planId, 'applied');
+    assert.deepEqual({ ...query('SELECT title, pinned FROM notes') }, { title: 'kept from WAL', pinned: 0 });
+  } finally { wal.close(); }
+  assert.equal((await preview()).status, 'current');
+  const third = join(project, 'drizzle', '20261101100200_shared');
+  await mkdir(third);
+  await writeFile(join(third, 'migration.sql'), 'CREATE TABLE another (id INTEGER);');
+  const locked = new DatabaseSync(file);
+  try {
+    locked.exec('BEGIN IMMEDIATE;');
+    await check((await preview()).planId, 'sqlite-locked');
+  } finally { locked.close(); }
+  const child = join(project, 'child');
+  await mkdir(child);
+  await rename(file, join(child, 'notes.sqlite'));
+  await config('child/notes.sqlite');
+  await writeFile(join(child, 'package.json'), '{}');
+  assert.equal((await request('/api/projects/import', { path: child })).status, 201);
+  const shared = await preview();
+  assert.equal(shared.status, 'pending');
+  const denied = await apply(shared.planId);
+  assert.equal(denied.status, 409);
+  assert.match((await denied.json()).error, /Another project uses this SQLite database file/);
 });
 
 test('remote profile testing pins TLS and saves an opaque credential reference', async t => {

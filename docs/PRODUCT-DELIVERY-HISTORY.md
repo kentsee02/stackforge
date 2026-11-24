@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.52.0 Drizzle SQLite migration support
+
+- Inspect legacy journal and v1 folder history for SQLite files resolved inside the project.
+- Review and apply a supported batch in one transaction, or create a missing target after the staged migration succeeds.
+- Verified the original eight migrations from electron-db and the Drizzle team's upstream v1 SQLite fixture.
+
 ## v0.51.0 Drizzle MySQL migration support
 
 - Detect static MySQL configurations and preview legacy journal and v1 folder migrations. Compare timestamps or folder names and hashes against MySQL history.

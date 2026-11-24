@@ -31,6 +31,7 @@ npm run test:native-migrations -- --tags-only
 npm run test:native-migrations -- --alembic-only
 npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
 npm run test:public-migrations -- --mysql --case=PUB-12 --case=PUB-13
+npm run test:public-migrations -- --case=PUB-14 --case=PUB-15
 ```
 
 ## Public repositories and expected results
@@ -50,6 +51,8 @@ npm run test:public-migrations -- --mysql --case=PUB-12 --case=PUB-13
 | PUB-11 Liquibase | [Liquibase MySQL table and view fixture](https://github.com/liquibase/liquibase/blob/75773ed9b45b0a5adf3c42872d2e5494da669427/liquibase-integration-tests/src/test/resources/changelogs/mysql/complete/createtable.and.view.changelog.xml) | Import the original XML with a test-only properties file that points to it. | Create the table and view on MySQL 8.4, verify their history, then preview and roll them back in reverse order. |
 | PUB-12 Drizzle | [Official MySQL v5 journal fixture](https://github.com/drizzle-team/drizzle-orm/tree/a086f59fba7f46f3a077893ba912c99e91eaa760/integration-tests/drizzle2/mysql) | Import the upstream journal and SQL through a minimal test project. | Review and apply the original SQL on MySQL 8.4, then verify the checksum and timestamp. |
 | PUB-13 Drizzle | [Official MySQL v1 folder fixture](https://github.com/drizzle-team/drizzle-orm/tree/5d71fc408add08bd207f4753f4554578ec9e0640/integration-tests/drizzle2/mysql) | Import the upstream folder SQL through a minimal test project. | Review and apply the original SQL on MySQL 8.4, then verify the checksum and folder name. |
+| PUB-14 Drizzle | [electron-db](https://github.com/arjunemirchandani/electron-db/tree/43be51f7a44f23e05f481b3745f44cfe6fdea38c) | Import and clone the same unmodified public project. Detect its SQLite config and eight journaled migrations without assuming an Electron profile path. | Apply the original SQL to a fresh project file. Verify the FTS5 table and all eight recorded migrations. |
+| PUB-15 Drizzle | [Official SQLite v1 fixture](https://github.com/drizzle-team/drizzle-orm/tree/5d71fc408add08bd207f4753f4554578ec9e0640/integration-tests/drizzle2/sqlite) | Import the upstream folder SQL with a local test configuration. | Apply using a literal SQLite file URL and verify the folder name and SQL hash in history. |
 
 ## Adapter-specific cases
 
@@ -66,6 +69,9 @@ npm run test:public-migrations -- --mysql --case=PUB-12 --case=PUB-13
 | DRZ-09 | Drizzle MySQL v1 folders, upgrade boundary and older pending migrations | Report when the v1 source needs an upstream history upgrade. Apply an older missing folder and verify both checksum and folder name in history. | `test:development-mysql`, PUB-13 |
 | DRZ-10 | Unsafe MySQL SQL or a failure after committed DDL | Refuse unexpected client commands, executable comments, and edits to the history ledger. Detect a partially applied table, leave the failed migration out of history, and block a retry. | `test:development-mysql` |
 | DRZ-11 | Cancel a live Drizzle MySQL session | Terminate the tagged session, keep the recovery marker, and verify that later SQL did not run. | `test:development-mysql` |
+| DRZ-12 | SQLite legacy and v1 files | Recognize configured and user-selected targets. Create a missing file after the approved batch succeeds. Verify migration history and actual schema. | PUB-14, PUB-15 |
+| DRZ-13 | SQLite file identity, unsafe SQL and recovery | Reject stale SQL, a same-path replacement, hard links, a locked file and a target shared with another registered project. Roll back DDL and history on denied or invalid SQL. Preserve WAL data and recognize restored history. | `test`, Node.js 24.10+ |
+| DRZ-14 | SQLite migration panel in English and Chinese | Show the target input only when needed. Require an exact filename and clear approval when the selected file changes. | `test:browser` |
 | ALE-01 | Linear, branching, merging, incomplete and dynamic Python revisions | Verify literal DAGs and flag unresolved, duplicate or linked sources. | `test` |
 | ALE-02 | Default or customized PostgreSQL version table | Compare the selected table. Report missing, restricted, conflicting or replaced targets. | `test:development-postgres`, `test:database-integration` |
 | ALE-03 | Upgrade a public sequence to a known revision; downgrade and replay | After each operation, recorded heads match the selected target. | `test:public-migrations -- --postgres` |
@@ -96,7 +102,7 @@ npm run test:public-migrations -- --mysql --case=PUB-12 --case=PUB-13
 
 ## Remaining coverage
 
-- Drizzle writes cover legacy and v1 PostgreSQL and MySQL layouts. SQLite, other engines, and arbitrary runtime SQL remain open. MySQL uses archive recovery because schema changes can commit before a batch ends. Legacy-to-v1 history upgrades run upstream.
+- Drizzle writes cover legacy and v1 PostgreSQL, MySQL, and local SQLite layouts. SQLite requires Node.js 24.10+ for writes. Hosted dialects and SQLite batches that change connection settings, attach databases, or require unsupported virtual table modules remain open. MySQL and SQLite support archive recovery. Legacy-to-v1 history upgrades run upstream.
 - Alembic writes cover supported staged revisions and connection-aware project environments with listed local modules. External packages, `depends_on` execution and nontransactional migrations remain open.
 - EF Core executes reviewed PostgreSQL and SQL Server exports on project-owned targets. Direct project-tool invocation and unsupported SQL constructs remain open.
 - Flyway writes cover supported standalone, Spring Boot, Maven SQL profiles and literal Gradle SQL locations on project PostgreSQL and MySQL. Java migrations, callbacks and licensed Undo remain open.

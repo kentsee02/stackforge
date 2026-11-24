@@ -76,9 +76,11 @@ For an imported Prisma 7 project like Game Portal, open **Database discovery →
 
 The PostgreSQL guide can replace a placeholder URL in a single verified environment file. If configuration sources disagree, the guide names the sources to review before rescanning. If database bindings could not refresh after a verified project move, use **Refresh** under **Database discovery** to retry from the new path. When a new clone replaces an old registration, StackForge cleans up the old registration's saved credentials. If the credential store is unavailable, StackForge retries on restart.
 
-**Preview Drizzle migrations** appears when a PostgreSQL or MySQL Drizzle Kit configuration reads its URL from an environment variable. StackForge reads legacy journals and v1 migration folders. With a direct local URL, the preview compares SQL hashes and timestamps or folder names against the default or custom history table.
+**Preview Drizzle migrations** reads legacy journals and v1 folders for supported PostgreSQL, MySQL and SQLite projects. It compares SQL hashes and timestamps or folder names against the target's default or custom history table. For SQLite, use the configured file or select a path inside the project when the configuration leaves the target open.
 
 Stop the project, review the SQL files, and type the database name to apply an eligible batch. PostgreSQL applies changes and writes history in one transaction. MySQL apply requires a verified project-owned MySQL 8.4 database. Back up the target before applying MySQL changes. If an interrupted migration leaves partial changes, the panel directs you to verified backup recovery.
+
+SQLite apply requires Node.js 24.10 or later. It writes schema, data and history in one transaction. Enter the SQLite filename to confirm. Use the SQLite backup and restore workflow to recover a previous state.
 
 **Preview Alembic migrations** lists revision order and branch heads from a standard `alembic.ini` layout, including one in a nested Python service. Choose a project-owned PostgreSQL database or a saved direct loopback PostgreSQL URL, then select **Check database history** to compare `public.alembic_version` with the local graph. The read-only check reports what the version table records. Use the project's Alembic environment for custom layouts, schema verification, and applying migrations.
 

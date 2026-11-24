@@ -8,10 +8,10 @@ Complete the remaining migration coverage before starting project activity histo
 
 ### Open migration work
 
-1. **Drizzle additional engines and native layouts.** Evaluate SQLite next. Verify its history, file identity, reviewed writes, and recovery on the supported upstream layout. PostgreSQL and MySQL now cover legacy journals and v1 folders with their respective history contracts.
-2. **Alembic runtime coverage.** Handle external pinned dependencies, cross-branch `depends_on` execution and nontransactional revisions. Verify runtime isolation and expose partial results when atomic execution is unavailable.
-3. **Liquibase execution filters.** Verify context and label filtering against the exact changeset range, including eligible preconditions and runtime property inputs.
-4. **Flyway runtime integration.** Cover project-managed Maven and Gradle behavior such as Java migrations and callbacks separately from the reviewed SQL locations already supported. Undo requires an eligible Flyway edition and an undo migration for live verification.
+1. **Alembic runtime coverage.** Handle external pinned dependencies, cross-branch `depends_on` execution and nontransactional revisions. Verify runtime isolation and expose partial results when atomic execution is unavailable.
+2. **Liquibase execution filters.** Verify context and label filtering against the exact changeset range, including eligible preconditions and runtime property inputs.
+3. **Flyway runtime integration.** Cover project-managed Maven and Gradle behavior such as Java migrations and callbacks separately from the reviewed SQL locations already supported. Undo requires an eligible Flyway edition and an undo migration for live verification.
+4. **Additional Drizzle engines and layouts.** Evaluate hosted dialects and SQLite batches that require custom runtime controls. PostgreSQL, MySQL and local SQLite cover legacy journals and v1 folders.
 
 ### Acceptance criteria
 

@@ -1,5 +1,6 @@
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { databaseRedactor } from './security/secrets.mjs';
 import { databaseOperationLog } from './security/operation-log.mjs';
 import { databaseResources } from './resources.mjs';
@@ -362,13 +363,32 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       if (payload.operation !== undefined && !['apply', 'rollback'].includes(payload.operation)) throw new Error('Choose a valid migration operation.');
       const rollback = payload.operation === 'rollback' ? { revision: payload.revision, scriptFile: payload.scriptFile } : undefined;
       const options = { project, requirementId: payload.requirementId, command: localDatabase.command,
-        resolveClient: target => development.client(project, target, signal), probe: localDatabase.probe, signal, rollback };
+        resolveClient: target => development.client(project, target, signal), probe: localDatabase.probe, signal, rollback,
+        databaseFile: payload.databaseFile };
       if (action === 'database-drizzle-preview') return previewDrizzle(options);
       if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
         throw new Error('Stop the project before applying database migrations.');
       }
       const record = databaseLog.begin(project, rollback ? 'database-rollback' : 'database-migrate');
       const done = previewDrizzle({ ...options, approval: payload, async verifyTarget(target) {
+        if (target.engine === 'sqlite') {
+          const selected = projectPathKey(target.file);
+          for (const other of managedProjects().filter(item => item.id !== project.id)) {
+            const root = await realpath(other.path).catch(() => other.path);
+            const within = relative(projectPathKey(root), selected);
+            if (!within || isAbsolute(within) || within === '..' || within.startsWith('..' + sep)) continue;
+            const { bindings, limited } = await scanDatabases(other);
+            if (limited) throw new Error('StackForge could not verify whether another project uses this database.');
+            for (const { instance } of bindings.filter(item => item.instance.provider === 'sqlite')) {
+              const path = resolve(root, instance.path);
+              const actual = await realpath(path).catch(() => path);
+              if (projectPathKey(actual) === selected) {
+                throw new Error('Another project uses this SQLite database file.');
+              }
+            }
+          }
+          return;
+        }
         const activeIds = await refreshDatabaseBindings(project.id, true);
         if (databaseRegistry.usesEndpoint(project.id, target, activeIds)) {
           const engine = target.engine === 'mysql' ? 'MySQL' : 'PostgreSQL';

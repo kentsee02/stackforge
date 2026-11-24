@@ -252,19 +252,20 @@ export async function discoverDatabases(project, { includeConnections = false, i
       const drizzle = await drizzleConfig(folder, files, projectText);
       if (drizzle) {
         const { file, variable } = drizzle;
-        const defined = environmentEntries.filter(([name, values]) => !name.endsWith('.env.example') && Object.hasOwn(values, variable))
-          .map(([name, values]) => [name, values[variable]]);
-        if (Object.hasOwn(process.env, variable)) defined.push(['Process environment', process.env[variable]]);
+        const defined = variable ? environmentEntries.filter(([name, values]) => !name.endsWith('.env.example') && Object.hasOwn(values, variable))
+          .map(([name, values]) => [name, values[variable]]) : [];
+        if (variable && Object.hasOwn(process.env, variable)) defined.push(['Process environment', process.env[variable]]);
         const environmentConflict = new Set(defined.map(([, value]) => value)).size > 1 ||
-          Boolean(process.env.DOTENV_CONFIG_PATH);
-        const value = defined[0]?.[1];
+          Boolean(variable && process.env.DOTENV_CONFIG_PATH);
+        const value = drizzle.sqliteFile ?? defined[0]?.[1];
         const engine = drizzle.engine ?? 'postgres';
-        const parsed = connection(value, engine);
+        const parsed = engine === 'sqlite' ? { engine, ...(value && { path: value.replace(/^file:/i, '') }),
+          status: value ? 'configured' : 'missing' } : connection(value, engine);
         const state = environmentConflict || parsed.engine !== engine ? { engine, status: 'ambiguous' } : parsed;
         const id = add(directory, file, variable, { ...state, orm: 'Drizzle',
           environmentVariable: variable, migrationAdapter: 'drizzle' });
         if (includeConnections && id) connections.set(id, { ...drizzle, value, environmentConflict,
-          environmentSources: [...defined.map(([name]) => name), ...(process.env.DOTENV_CONFIG_PATH ? ['DOTENV_CONFIG_PATH'] : [])] });
+          environmentSources: [...defined.map(([name]) => name), ...(variable && process.env.DOTENV_CONFIG_PATH ? ['DOTENV_CONFIG_PATH'] : [])] });
       }
     }
     const prismaConfig = await prismaConnection(folder, directory, files, runtimeEnv, env.get('.env'), environmentEntries);

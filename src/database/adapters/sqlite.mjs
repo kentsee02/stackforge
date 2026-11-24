@@ -7,18 +7,19 @@ import { databaseKey } from '../discovery.mjs';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { run, throwIfCancelled } from '../../platform/process.mjs';
 import { backupLimit } from '../backup/docker-transfer.mjs';
+import { sqliteFileState } from './sqlite-file.mjs';
 
 const worker = fileURLToPath(new URL('./sqlite-worker.mjs', import.meta.url));
 const invalid = 'Choose a SQLite database file inside the project.';
 const unavailable = 'SQLite could not read or verify the database file.';
 const existsError = 'SQLite restore and creation require a missing database file with no journal files.';
-const suffixes = ['', '-wal', '-shm', '-journal'];
 const header = Buffer.from('SQLite format 3\0');
 
 export async function sqliteTarget(project, binding) {
   const path = binding.instance?.path;
   if (binding.instance?.provider !== 'sqlite' || !path || isAbsolute(path) ||
-      !/\.(?:db|sqlite3?)$/i.test(path) || path.split('/').some(part => !part || part === '..' || part === '.' || /[\\:\x00-\x1f]/.test(part))) {
+      !/\.(?:db|sqlite3?)$/i.test(path) ||
+      path.split('/').some(part => !part || /[. ]$/.test(part) || /[\\:\x00-\x1f]/.test(part))) {
     throw new Error(invalid);
   }
   const { root, identity } = await resolveStartup(project, []);
@@ -27,18 +28,10 @@ export async function sqliteTarget(project, binding) {
   if (!within || isAbsolute(within) || within.startsWith('..' + sep)) throw new Error(invalid);
   const parent = dirname(file);
   if (await realpath(parent).catch(() => '') !== parent) throw new Error('The SQLite database folder is missing or unsafe.');
-  const files = await Promise.all(suffixes.map(async suffix => {
-    try {
-      const candidate = file + suffix;
-      const stat = await lstat(candidate, { bigint: true });
-      if (!stat.isFile() || stat.nlink !== 1n || await realpath(candidate) !== candidate) throw new Error(invalid);
-      return stat;
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }));
-  const [main] = files;
+  const { main, files, identity: fileIdentity, revision, orphaned } = sqliteFileState(file);
   const key = databaseKey(identity, path, files.map(stat => stat && [String(stat.ino), String(stat.dev), String(stat.birthtimeNs)]));
   const writable = !files.some(Boolean) && await access(parent, constants.W_OK).then(() => true, () => false);
-  return { file, parent, path, main, key, writable };
+  return { file, parent, path, main, key, writable, fileIdentity, revision, orphaned };
 }
 
 export function sqliteAdapter(directory, { command = run } = {}) {

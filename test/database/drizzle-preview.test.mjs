@@ -55,9 +55,10 @@ test('Drizzle configuration accepts a static PostgreSQL target and rejects ambig
   const detect = (source, files = ['drizzle.config.ts']) => drizzleConfig('.', files, async () => source);
   assert.deepEqual(await detect(config), { file: 'drizzle.config.ts', variable: 'STACKFORGE_DRIZZLE_TEST_URL',
     out: 'lib/migrations', historySchema: 'drizzle', historyTable: '__drizzle_migrations' });
+  assert.equal((await detect(config.replace('postgresql', 'sqlite'))).engine, 'sqlite');
   for (const input of [
     config.replace('./lib/migrations', '../outside'),
-    config.replace('postgresql', 'sqlite'),
+    config.replace('postgresql', 'turso'),
     config.replace('out:', '...overrides, out:'),
     config.replace('out:', 'dialect: "postgresql", out:'),
     config.replace('out:', 'driver: "pglite", out:'),

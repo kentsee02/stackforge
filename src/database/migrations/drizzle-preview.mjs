@@ -7,6 +7,7 @@ import { resolveStartup } from '../../projects/project-startup.mjs';
 import { throwIfCancelled } from '../../platform/process.mjs';
 import { drizzleStatements } from './drizzle-sql.mjs';
 import { previewMysqlDrizzle } from './drizzle-mysql.mjs';
+import { previewSqliteDrizzle } from './drizzle-sqlite.mjs';
 import { readMigrationFile } from './migration-files.mjs';
 
 const maxEntries = 200;
@@ -26,9 +27,10 @@ async function migrationFiles(folder, { out, engine }, signal) {
   }
   if ((await readdir(directory)).some(name => /^\d{14}_/.test(name))) throw new Error();
   const journal = JSON.parse(text);
-  const mysql = engine === 'mysql';
-  if (!(mysql ? ['5', '7'].includes(journal.version) && journal.dialect === 'mysql' :
-      journal.version === '7' && journal.dialect === 'postgresql') ||
+  const dialect = engine ?? 'postgresql';
+  const journalVersions = { mysql: ['5', '7'], sqlite: ['5', '6', '7'], postgresql: ['7'] }[dialect];
+  const entryVersions = { mysql: ['5'], sqlite: ['5', '6'], postgresql: ['7'] }[dialect];
+  if (!journalVersions.includes(journal.version) || journal.dialect !== dialect ||
       !Array.isArray(journal.entries) || !journal.entries.length || journal.entries.length > maxEntries) throw new Error();
   const tags = new Set();
   const result = [];
@@ -36,7 +38,7 @@ async function migrationFiles(folder, { out, engine }, signal) {
   for (const [index, entry] of journal.entries.entries()) {
     throwIfCancelled(signal);
     const { tag, when, idx, version } = entry;
-    if (idx !== index || version !== (mysql ? '5' : '7') || !Number.isSafeInteger(when) || when <= previous ||
+    if (idx !== index || !entryVersions.includes(version) || !Number.isSafeInteger(when) || when <= previous ||
         typeof tag !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(tag) || tags.has(tag.toLowerCase())) throw new Error();
     tags.add(tag.toLowerCase());
     previous = when;
@@ -180,14 +182,14 @@ async function reviewedRollback(root, selection, revisions, applied, signal) {
   }
 }
 
-export async function previewDrizzle({ project, requirementId, command, resolveClient, probe, signal, approval, rollback, verifyTarget }) {
+export async function previewDrizzle({ project, requirementId, command, resolveClient, probe, signal, approval, rollback, verifyTarget, databaseFile }) {
   const { root, identity, requirements, connections } = await discoverDatabases(project, { includeConnections: true });
   const requirement = requirements.find(item => item.id === requirementId && item.migrationAdapter === 'drizzle');
   if (!requirement) throw new Error(invalid);
   const config = connections.get(requirement.id);
   const { source, directory, environmentVariable: variable } = requirement;
   const location = directory === '.' ? '' : directory + '/';
-  const result = { source, variable, ...(config.engine === 'mysql' ? { engine: 'mysql', history: config.historyTable } :
+  const result = { source, variable, ...(config.engine ? { engine: config.engine, history: config.historyTable } :
     { history: config.historySchema + '.' + config.historyTable }) };
   const respond = (status, fields) => ({ ...result, status, ...fields });
   let migration;
@@ -202,6 +204,8 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   result.format = format;
   result.migrations = files.map(({ file }) => ({ file: location + file, state: 'unverified' }));
   if (config.environmentConflict) return respond('environment-conflict', { sources: config.environmentSources });
+  if (config.engine === 'sqlite') return previewSqliteDrizzle({ project, identity, config, requirement, databaseFile, approval,
+    rollback, migration, readFiles, respond, signal, verifyTarget });
   if (requirement.status !== 'configured') return respond('configuration-needed');
   if (!localHosts.includes(requirement.host)) return respond('remote-target');
   const value = databaseConnectionValue(config.value, requirement.engine);

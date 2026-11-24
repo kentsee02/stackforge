@@ -79,16 +79,20 @@ export async function drizzleConfig(folder, files, readText) {
   const config = staticObject(match[1] ?? match[2]);
   const credential = config?.dbCredentials;
   const variable = credential?.url?.[envReference];
-  if (!['postgresql', 'mysql'].includes(config?.dialect) || Object.hasOwn(config, 'driver') || !variable || Object.keys(credential).length !== 1) return;
+  const sqlite = config?.dialect === 'sqlite';
+  const sqliteFile = sqlite && typeof credential?.url === 'string' ? credential.url : undefined;
+  if (!['postgresql', 'mysql', 'sqlite'].includes(config?.dialect) || Object.hasOwn(config, 'driver')) return;
+  if (credential === undefined ? !sqlite : !credential || Object.keys(credential).length !== 1 || (!variable && sqliteFile === undefined)) return;
   const out = config.out === undefined ? 'drizzle' : typeof config.out === 'string' && config.out.replace(/^\.\//, '').replace(/\/$/, '');
   if (!out || out.length > 160 || out.split('/').some(part => !/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$/.test(part))) return;
   const history = config.migrations;
   if (history !== undefined && (!history || Object.getPrototypeOf(history) !== null ||
       Object.keys(history).some(key => !['schema', 'table'].includes(key)))) return;
-  if (config.dialect === 'mysql' && history?.schema !== undefined) return;
+  if (config.dialect !== 'postgresql' && history?.schema !== undefined) return;
   const historySchema = history?.schema ?? 'drizzle';
   const historyTable = history?.table ?? '__drizzle_migrations';
   if (typeof historySchema !== 'string' || typeof historyTable !== 'string' ||
       !identifier.test(historySchema) || !identifier.test(historyTable)) return;
-  return { file, variable, out, historySchema, historyTable, ...(config.dialect === 'mysql' && { engine: 'mysql' }) };
+  return { file, variable, out, historySchema, historyTable,
+    ...(config.dialect !== 'postgresql' && { engine: config.dialect }), ...(sqliteFile !== undefined && { sqliteFile }) };
 }

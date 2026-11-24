@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createApp } from '../../src/http/server.mjs';
 import { run } from '../../src/platform/process.mjs';
 import { cloneGithub } from '../../src/projects/project-clone.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 // Pin the upstream files so a change in coverage can be reproduced.
 const cases = [
@@ -20,11 +21,12 @@ const cases = [
   { repo: 'BootcampToProd/flyway-with-spring-boot-maven', commit: '046d4ae118e99f9197bea434daf870873c789b2e', adapter: 'flyway', live: true, flywayProfile: 'stage' },
   { repo: 'h3yzack/springboot3-liquibase-example', commit: 'baa98678824b59476bf09805ac516e4aa8729916', adapter: 'liquibase', live: true },
   { repo: 'jhipster/jhipster-sample-app', commit: '6b000b5d23a36c45e01472471b84a44fa2464044', adapter: 'liquibase' },
-  { repo: 'talenteddeveloper/spring-boot-flyway-demo', commit: '77403a2a10af102452b6f026bf6473021decbf99', adapter: 'flyway', number: 10 }
+  { repo: 'talenteddeveloper/spring-boot-flyway-demo', commit: '77403a2a10af102452b6f026bf6473021decbf99', adapter: 'flyway', number: 10 },
+  { repo: 'arjunemirchandani/electron-db', commit: '43be51f7a44f23e05f481b3745f44cfe6fdea38c', adapter: 'drizzle', number: 14, sqlite: true }
 ];
-const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12], [2]];
+const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12], [2], [8]];
 const selectedCases = new Set(process.argv.filter(arg => arg.startsWith('--case=')).map(arg => arg.slice('--case='.length)));
-assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-3])$/.test(value)), 'Select a case from PUB-01 through PUB-13.');
+assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-5])$/.test(value)), 'Select a case from PUB-01 through PUB-15.');
 const selected = number => !selectedCases.size || selectedCases.has('PUB-' + String(number).padStart(2, '0'));
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-public-migrations-')));
 const repositories = new Map();
@@ -213,6 +215,30 @@ async function scan(api, project, adapter) {
   }));
 }
 
+async function assertLiveSqlite(api, project, format, count) {
+  const databaseFile = 'stackforge-test.sqlite';
+  const { requirements } = await api(project.id + '/database-discovery');
+  const requirement = requirements.find(item => item.migrationAdapter === 'drizzle');
+  assert.equal(requirement.engine, 'sqlite');
+  const body = { requirementId: requirement.id, databaseFile };
+  const preview = () => api(project.id + '/database-drizzle-preview', body);
+  const plan = await preview();
+  assert.equal(plan.format, format);
+  assert.equal(plan.status, 'pending', JSON.stringify(plan));
+  assert.ok(plan.reviewSql && plan.planId);
+  const applied = await api(project.id + '/database-drizzle-apply', { ...body, planId: plan.planId, confirmName: databaseFile });
+  assert.equal(applied.status, 'applied', JSON.stringify(applied));
+  assert.equal((await preview()).status, 'current');
+  const db = new DatabaseSync(join(project.path, databaseFile), { readOnly: true });
+  try {
+    assert.equal(db.prepare('SELECT count(*) AS total FROM __drizzle_migrations').get().total, count);
+    const sql = db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'notes_fts'").get()?.sql;
+    if (count === 8) assert.match(sql, /USING fts5/i);
+    if (format === 'v1') assert.match(db.prepare('SELECT name FROM __drizzle_migrations').get().name, /^\d{14}_/);
+  } finally { db.close(); }
+  return ['apply', 'schema', 'history'];
+}
+
 let api;
 try {
   app.listen(0, '127.0.0.1');
@@ -258,11 +284,15 @@ try {
     console.log(JSON.stringify({ repository: item.repo, commit: item.commit, adapter: item.adapter, previews: importedResults }));
     assert.ok(importedResults.some(result => ['ready', 'configuration-needed'].includes(result.status) && result.count > 0),
       'The expected public repository migration preview is unavailable: ' + item.repo);
-    if (live && (item.live || ['drizzle', 'alembic'].includes(item.adapter) || efCli && item.efExport)) {
+    if (live && !item.sqlite && (item.live || ['drizzle', 'alembic'].includes(item.adapter) || efCli && item.efExport)) {
       console.log(JSON.stringify({ repository: item.repo, postgres: await assertLiveMigration(api, cloned, item.adapter, 'postgres', item.flywayProfile) }));
     }
     if (liveMysql && item.number === 10) {
       console.log(JSON.stringify({ repository: item.repo, mysql: await assertLiveMigration(api, cloned, item.adapter, 'mysql') }));
+    }
+    if (item.sqlite) {
+      console.log(JSON.stringify({ repository: item.repo, commit: item.commit,
+        sqlite: await assertLiveSqlite(api, cloned, 'journal-v7', 8) }));
     }
   }
   for (const { number, engine, path } of [
@@ -319,6 +349,23 @@ try {
     assert.equal(preview.status, 'configuration-needed');
     console.log(JSON.stringify({ repository: 'drizzle-team/drizzle-orm', commit, format,
       mysql: await assertLiveMigration(api, imported, 'drizzle', 'mysql') }));
+  }
+  if (selected(15)) {
+    const commit = '5d71fc408add08bd207f4753f4554578ec9e0640';
+    const folder = '20230330185056_fancy_bug';
+    const checkout = join(root, 'drizzle-upstream-sqlite');
+    await mkdir(checkout);
+    const git = args => run('git', args, { cwd: checkout, timeout: 120000, stdoutOnly: true });
+    await git(['init']);
+    await git(['fetch', '--depth=1', 'https://github.com/drizzle-team/drizzle-orm.git', commit]);
+    const path = join(root, 'drizzle-sqlite-v1');
+    await mkdir(join(path, 'drizzle', folder), { recursive: true });
+    await writeFile(join(path, 'package.json'), JSON.stringify({ devDependencies: { 'drizzle-kit': '*' } }));
+    await writeFile(join(path, 'drizzle.config.ts'), "export default { dialect: 'sqlite', dbCredentials: { url: 'file:stackforge-test.sqlite' } };\n");
+    await writeFile(join(path, 'drizzle', folder, 'migration.sql'),
+      await git(['show', commit + ':integration-tests/drizzle2/sqlite/' + folder + '/migration.sql']));
+    const imported = await api('import', { path }, 201);
+    console.log(JSON.stringify({ repository: 'drizzle-team/drizzle-orm', commit, sqlite: await assertLiveSqlite(api, imported, 'v1', 1) }));
   }
 } finally {
   for (const id of databaseProjects) {
