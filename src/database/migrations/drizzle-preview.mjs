@@ -6,16 +6,17 @@ import { databaseConnectionValue, discoverDatabases } from '../discovery.mjs';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { throwIfCancelled } from '../../platform/process.mjs';
 import { drizzleStatements } from './drizzle-sql.mjs';
+import { previewMysqlDrizzle } from './drizzle-mysql.mjs';
 import { readMigrationFile } from './migration-files.mjs';
 
 const maxEntries = 200;
 const localHosts = ['127.0.0.1', '::1', 'localhost'];
-const invalid = 'Choose a detected Drizzle PostgreSQL configuration.';
+const invalid = 'Choose a detected Drizzle migration configuration.';
 const changed = 'The Drizzle migration preview changed. Check again before applying.';
 const badRollback = 'Choose a verified project PostgreSQL database, a prior Drizzle revision, and a supported rollback SQL file inside the project.';
 const signingKey = randomBytes(32);
 
-async function migrationFiles(folder, out, signal) {
+async function migrationFiles(folder, { out, engine }, signal) {
   const directory = join(folder, out);
   let text;
   try { text = await readMigrationFile(join(directory, 'meta', '_journal.json'), 256 * 1024); }
@@ -25,7 +26,9 @@ async function migrationFiles(folder, out, signal) {
   }
   if ((await readdir(directory)).some(name => /^\d{14}_/.test(name))) throw new Error();
   const journal = JSON.parse(text);
-  if (journal.version !== '7' || journal.dialect !== 'postgresql' ||
+  const mysql = engine === 'mysql';
+  if (!(mysql ? ['5', '7'].includes(journal.version) && journal.dialect === 'mysql' :
+      journal.version === '7' && journal.dialect === 'postgresql') ||
       !Array.isArray(journal.entries) || !journal.entries.length || journal.entries.length > maxEntries) throw new Error();
   const tags = new Set();
   const result = [];
@@ -33,7 +36,7 @@ async function migrationFiles(folder, out, signal) {
   for (const [index, entry] of journal.entries.entries()) {
     throwIfCancelled(signal);
     const { tag, when, idx, version } = entry;
-    if (idx !== index || version !== '7' || !Number.isSafeInteger(when) || when <= previous ||
+    if (idx !== index || version !== (mysql ? '5' : '7') || !Number.isSafeInteger(when) || when <= previous ||
         typeof tag !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(tag) || tags.has(tag.toLowerCase())) throw new Error();
     tags.add(tag.toLowerCase());
     previous = when;
@@ -43,7 +46,7 @@ async function migrationFiles(folder, out, signal) {
     bytes -= Buffer.byteLength(sql);
     result.push({ file: out + '/' + file, tag, when, hash: createHash('sha256').update(sql).digest('hex'), sql });
   }
-  return { format: 'journal-v7', files: result };
+  return { format: 'journal-v' + journal.version, files: result };
 }
 
 async function folderMigrations(directory, out, signal) {
@@ -184,10 +187,12 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   const config = connections.get(requirement.id);
   const { source, directory, environmentVariable: variable } = requirement;
   const location = directory === '.' ? '' : directory + '/';
-  const result = { source, variable, history: config.historySchema + '.' + config.historyTable };
+  const result = { source, variable, ...(config.engine === 'mysql' ? { engine: 'mysql', history: config.historyTable } :
+    { history: config.historySchema + '.' + config.historyTable }) };
   const respond = (status, fields) => ({ ...result, status, ...fields });
   let migration;
-  try { migration = await migrationFiles(resolve(root, directory), config.out, signal); }
+  const readFiles = () => migrationFiles(resolve(root, directory), config, signal);
+  try { migration = await readFiles(); }
   catch (error) {
     if (error.name === 'AbortError') throw error;
     return respond('files-unavailable');
@@ -199,11 +204,12 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   if (config.environmentConflict) return respond('environment-conflict', { sources: config.environmentSources });
   if (requirement.status !== 'configured') return respond('configuration-needed');
   if (!localHosts.includes(requirement.host)) return respond('remote-target');
-  const value = databaseConnectionValue(config.value, 'postgres');
+  const value = databaseConnectionValue(config.value, requirement.engine);
   if (!value) return respond('configuration-needed');
   const url = new URL(value);
   const sslmode = url.searchParams.get('sslmode') ?? 'prefer';
-  if (!['disable', 'prefer', 'require'].includes(sslmode) || [...url.searchParams.keys()].some(key => key !== 'sslmode')) {
+  if (config.engine === 'mysql' ? Boolean(url.search) :
+      !['disable', 'prefer', 'require'].includes(sslmode) || [...url.searchParams.keys()].some(key => key !== 'sslmode')) {
     return respond('configuration-needed');
   }
   const address = requirement.host === 'localhost' ? await localhostEndpoint(requirement.port, probe) : requirement.host;
@@ -213,6 +219,8 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   await resolveStartup(project, [], identity);
   const client = await resolveClient?.(target);
   if (client && !(await client.installation(probe)).portOpen) return respond('docker-unreachable');
+  if (config.engine === 'mysql') return previewMysqlDrizzle({ project, identity, requirement, config, value, url, target, client,
+    command, signal, approval, rollback, verifyTarget, readFiles, migration, respond });
   const applicationName = client && 'stackforge_migration_' + randomBytes(12).toString('hex');
   let state, session;
   try {

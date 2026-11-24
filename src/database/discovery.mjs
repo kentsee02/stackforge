@@ -258,8 +258,9 @@ export async function discoverDatabases(project, { includeConnections = false, i
         const environmentConflict = new Set(defined.map(([, value]) => value)).size > 1 ||
           Boolean(process.env.DOTENV_CONFIG_PATH);
         const value = defined[0]?.[1];
-        const parsed = connection(value, 'postgres');
-        const state = environmentConflict || parsed.engine !== 'postgres' ? { engine: 'postgres', status: 'ambiguous' } : parsed;
+        const engine = drizzle.engine ?? 'postgres';
+        const parsed = connection(value, engine);
+        const state = environmentConflict || parsed.engine !== engine ? { engine, status: 'ambiguous' } : parsed;
         const id = add(directory, file, variable, { ...state, orm: 'Drizzle',
           environmentVariable: variable, migrationAdapter: 'drizzle' });
         if (includeConnections && id) connections.set(id, { ...drizzle, value, environmentConflict,

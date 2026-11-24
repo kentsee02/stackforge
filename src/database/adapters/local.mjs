@@ -111,7 +111,8 @@ export function localSession(target, credentials, command = run, signal) {
     const args = engine === 'postgres'
       ? ['-X', '-w', '-qAt', '-F', '\t', '-v', 'ON_ERROR_STOP=1', '-h', host, '-p', String(port), '-U', user, '-d', database ?? 'postgres']
       : ['--no-defaults', '--no-login-paths', '--protocol=TCP', '--connect-timeout=4', '--batch', '--raw', '--skip-column-names',
-        '--binary-mode', '--local-infile=0', '--host=' + host, '--port=' + port, '--user=' + user, ...(database ? ['--database=' + database] : [])];
+        '--binary-mode', '--skip-reconnect', '--local-infile=0', '--host=' + host, '--port=' + port, '--user=' + user,
+        ...(database ? ['--database=' + database] : [])];
     try {
       return (await command(client, args, { env, input: Buffer.from(sql + '\n'), timeout, stdoutOnly: true, stdoutLimit: 256 * 1024, signal })).trimEnd();
     } catch (error) {

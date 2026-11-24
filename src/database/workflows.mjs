@@ -371,7 +371,8 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       const done = previewDrizzle({ ...options, approval: payload, async verifyTarget(target) {
         const activeIds = await refreshDatabaseBindings(project.id, true);
         if (databaseRegistry.usesEndpoint(project.id, target, activeIds)) {
-          throw new Error('Another project uses this PostgreSQL database. Choose a separate database for guided setup.');
+          const engine = target.engine === 'mysql' ? 'MySQL' : 'PostgreSQL';
+          throw new Error('Another project uses this ' + engine + ' database. Choose a separate database for guided setup.');
         }
       } }).then(async result => {
         await record(['applied', 'rolled-back'].includes(result.status) ? 'succeeded' : 'failed');

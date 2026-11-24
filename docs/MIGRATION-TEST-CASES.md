@@ -30,6 +30,7 @@ npm run test:native-migrations -- --mysql-only
 npm run test:native-migrations -- --tags-only
 npm run test:native-migrations -- --alembic-only
 npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
+npm run test:public-migrations -- --mysql --case=PUB-12 --case=PUB-13
 ```
 
 ## Public repositories and expected results
@@ -47,6 +48,8 @@ npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
 | PUB-09 Liquibase | [Liquibase PostgreSQL formatted SQL fixture](https://github.com/liquibase/liquibase/blob/75773ed9b45b0a5adf3c42872d2e5494da669427/liquibase-integration-tests/src/test/resources/changelogs/pgsql/complete/basic.formatted.sql) | Import the upstream SQL file with a test-only properties file that points to it. | Apply the original changeset and check its recorded history. The native suite separately tests rollback. |
 | PUB-10 Flyway | [Spring Boot Flyway demo](https://github.com/talenteddeveloper/spring-boot-flyway-demo/tree/77403a2a10af102452b6f026bf6473021decbf99) | Detect the two versioned migrations in Spring Boot's default classpath location. | Apply the original table and seed migrations on MySQL 8.4 and verify both checksums. |
 | PUB-11 Liquibase | [Liquibase MySQL table and view fixture](https://github.com/liquibase/liquibase/blob/75773ed9b45b0a5adf3c42872d2e5494da669427/liquibase-integration-tests/src/test/resources/changelogs/mysql/complete/createtable.and.view.changelog.xml) | Import the original XML with a test-only properties file that points to it. | Create the table and view on MySQL 8.4, verify their history, then preview and roll them back in reverse order. |
+| PUB-12 Drizzle | [Official MySQL v5 journal fixture](https://github.com/drizzle-team/drizzle-orm/tree/a086f59fba7f46f3a077893ba912c99e91eaa760/integration-tests/drizzle2/mysql) | Import the upstream journal and SQL through a minimal test project. | Review and apply the original SQL on MySQL 8.4, then verify the checksum and timestamp. |
+| PUB-13 Drizzle | [Official MySQL v1 folder fixture](https://github.com/drizzle-team/drizzle-orm/tree/5d71fc408add08bd207f4753f4554578ec9e0640/integration-tests/drizzle2/mysql) | Import the upstream folder SQL through a minimal test project. | Review and apply the original SQL on MySQL 8.4, then verify the checksum and folder name. |
 
 ## Adapter-specific cases
 
@@ -59,6 +62,10 @@ npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
 | DRZ-05 | Project PostgreSQL migration renames and drops columns and inserts data | Display the full pending SQL and verify resulting columns, rows and Drizzle history. If SQL alters approved history, roll back the entire batch. | `test:development-postgres` |
 | DRZ-06 | Reviewed explicit rollback SQL to an earlier journal revision | Reject escaped paths and stale scripts. Preserve tables and history when the script fails or is cancelled. End the cancelled PostgreSQL session. On success remove only the selected revision suffix and verify migrations can be reapplied. | `test:development-postgres`, `test:browser` |
 | DRZ-07 | Drizzle v1 folders and out-of-order application | Match history by folder name and hash. Apply an older missing migration and roll it back using recorded application order. Verify the v1 history columns. | `test:development-postgres` |
+| DRZ-08 | Drizzle MySQL legacy journals, custom history and exact approval | Verify a version 7 journal with version 5 entries and the official version 5 journal. Confirm writes require a matching database name and unchanged SQL and database. Compare the resulting records and actual row data. | `test:development-mysql`, PUB-12 |
+| DRZ-09 | Drizzle MySQL v1 folders, upgrade boundary and older pending migrations | Report when the v1 source needs an upstream history upgrade. Apply an older missing folder and verify both checksum and folder name in history. | `test:development-mysql`, PUB-13 |
+| DRZ-10 | Unsafe MySQL SQL or a failure after committed DDL | Refuse unexpected client commands, executable comments, and edits to the history ledger. Detect a partially applied table, leave the failed migration out of history, and block a retry. | `test:development-mysql` |
+| DRZ-11 | Cancel a live Drizzle MySQL session | Terminate the tagged session, keep the recovery marker, and verify that later SQL did not run. | `test:development-mysql` |
 | ALE-01 | Linear, branching, merging, incomplete and dynamic Python revisions | Verify literal DAGs and flag unresolved, duplicate or linked sources. | `test` |
 | ALE-02 | Default or customized PostgreSQL version table | Compare the selected table. Report missing, restricted, conflicting or replaced targets. | `test:development-postgres`, `test:database-integration` |
 | ALE-03 | Upgrade a public sequence to a known revision; downgrade and replay | After each operation, recorded heads match the selected target. | `test:public-migrations -- --postgres` |
@@ -89,7 +96,7 @@ npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
 
 ## Remaining coverage
 
-- Drizzle writes cover supported legacy v7 and v1 PostgreSQL layouts. Other engines and arbitrary runtime SQL remain open. Recovery also supports a verified database archive.
+- Drizzle writes cover legacy and v1 PostgreSQL and MySQL layouts. SQLite, other engines, and arbitrary runtime SQL remain open. MySQL uses archive recovery because schema changes can commit before a batch ends. Legacy-to-v1 history upgrades run upstream.
 - Alembic writes cover supported staged revisions and connection-aware project environments with listed local modules. External packages, `depends_on` execution and nontransactional migrations remain open.
 - EF Core executes reviewed PostgreSQL and SQL Server exports on project-owned targets. Direct project-tool invocation and unsupported SQL constructs remain open.
 - Flyway writes cover supported standalone, Spring Boot, Maven SQL profiles and literal Gradle SQL locations on project PostgreSQL and MySQL. Java migrations, callbacks and licensed Undo remain open.

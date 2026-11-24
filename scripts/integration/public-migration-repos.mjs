@@ -24,7 +24,7 @@ const cases = [
 ];
 const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12], [2]];
 const selectedCases = new Set(process.argv.filter(arg => arg.startsWith('--case=')).map(arg => arg.slice('--case='.length)));
-assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|10|11)$/.test(value)), 'Select a case from PUB-01 through PUB-11.');
+assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-3])$/.test(value)), 'Select a case from PUB-01 through PUB-13.');
 const selected = number => !selectedCases.size || selectedCases.has('PUB-' + String(number).padStart(2, '0'));
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-public-migrations-')));
 const repositories = new Map();
@@ -73,8 +73,9 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres', f
   const database = await api(endpoint);
   assert.equal(database.status, 'ready');
   if (adapter === 'drizzle') {
-    const connection = database.connections.find(item => item.variable === 'POSTGRES_URL');
-    assert.ok(connection, 'Expected the upstream Drizzle POSTGRES_URL');
+    const variable = engine === 'mysql' ? 'DRIZZLE_DATABASE_URL' : 'POSTGRES_URL';
+    const connection = database.connections.find(item => item.variable === variable);
+    assert.ok(connection, 'Expected the Drizzle ' + variable);
     await api(endpoint, { mode: 'save', requirementId: connection.id, revision: connection.revision });
     const { requirements } = await api(project.id + '/database-discovery');
     const requirementId = requirements.find(item => item.migrationAdapter === adapter).id;
@@ -82,6 +83,7 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres', f
     const pending = await preview();
     assert.equal(pending.status, 'pending');
     assert.ok(pending.planId);
+    if (engine === 'mysql') assert.match(pending.reviewSql, /CREATE TABLE `cities_migration`/);
     const applied = await api(project.id + '/database-drizzle-apply', { requirementId, planId: pending.planId, confirmName: name });
     assert.equal(applied.status, 'applied');
     assert.equal((await preview()).status, 'current');
@@ -285,6 +287,38 @@ try {
     const imported = await api('import', { path: wrapper }, 201);
     console.log(JSON.stringify({ repository: 'liquibase/liquibase', commit, file: path,
       [engine]: await assertLiveMigration(api, imported, 'liquibase', engine) }));
+  }
+  const upstreamDrizzleMysql = [
+    { number: 12, commit: 'a086f59fba7f46f3a077893ba912c99e91eaa760',
+      paths: ['meta/_journal.json', '0000_nostalgic_carnage.sql'], format: 'journal-v5' },
+    { number: 13, commit: '5d71fc408add08bd207f4753f4554578ec9e0640',
+      paths: ['20230331135521_nostalgic_carnage/migration.sql'], format: 'v1' }
+  ];
+  for (const { number, commit, paths, format } of upstreamDrizzleMysql) {
+    if (!liveMysql || !selected(number)) continue;
+    const checkout = join(root, 'drizzle-upstream-' + number);
+    await mkdir(checkout);
+    const git = args => run('git', args, { cwd: checkout, timeout: 120000, stdoutOnly: true });
+    await git(['init']);
+    await git(['fetch', '--depth=1', 'https://github.com/drizzle-team/drizzle-orm.git', commit]);
+    const path = join(root, 'drizzle-mysql-' + number);
+    await mkdir(path);
+    await writeFile(join(path, 'package.json'), JSON.stringify({ devDependencies: { 'drizzle-kit': '*' } }));
+    await writeFile(join(path, 'drizzle.config.ts'), "export default { dialect: 'mysql', dbCredentials: { url: process.env.DRIZZLE_DATABASE_URL } };\n");
+    for (const file of paths) {
+      const destination = join(path, 'drizzle', ...file.split('/'));
+      await mkdir(join(destination, '..'), { recursive: true });
+      await writeFile(destination, await git(['show', commit + ':integration-tests/drizzle2/mysql/' + file]));
+    }
+    const imported = await api('import', { path }, 201);
+    const { requirements } = await api(imported.id + '/database-discovery');
+    const requirement = requirements.find(item => item.migrationAdapter === 'drizzle');
+    assert.equal(requirement.engine, 'mysql');
+    const preview = await api(imported.id + '/database-drizzle-preview', { requirementId: requirement.id });
+    assert.equal(preview.format, format);
+    assert.equal(preview.status, 'configuration-needed');
+    console.log(JSON.stringify({ repository: 'drizzle-team/drizzle-orm', commit, format,
+      mysql: await assertLiveMigration(api, imported, 'drizzle', 'mysql') }));
   }
 } finally {
   for (const id of databaseProjects) {

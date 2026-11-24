@@ -541,8 +541,15 @@ try {
   const drizzlePanel = page.locator('.drizzle-preview');
   const drizzleState = { variable: 'POSTGRES_URL', target: ownedTarget, history: 'drizzle.__drizzle_migrations',
     rollbackTargets: [null], migrations: [{ state: 'applied', file: 'drizzle/0000_create.sql' }] };
+  let drizzleMysqlStatus;
   await page.route('**/api/projects/' + cloned.id + '/database-drizzle-preview', route => {
     const selection = route.request().postDataJSON();
+    if (drizzleMysqlStatus) return route.fulfill({ json: {
+      engine: 'mysql', status: drizzleMysqlStatus, variable: 'DRIZZLE_DATABASE_URL',
+      target: { ...ownedTarget, port: 3306 }, history: ownedTarget.name + '.__drizzle_migrations',
+      migrations: [{ state: 'pending', file: 'drizzle/20260101000000_create/migration.sql' }],
+      ...(drizzleMysqlStatus === 'pending' && { planId: 'drizzle-mysql', reviewSql: 'CREATE TABLE messages (id INT);' })
+    } });
     if (!selection.operation) return route.fulfill({ json: { ...drizzleState, status: 'current' } });
     assert.deepEqual([selection.operation, selection.revision, selection.scriptFile], ['rollback', null, 'drizzle/revert.sql']);
     return route.fulfill({ json: { ...drizzleState, status: 'rollback-planned', planId: 'drizzle-rollback',
@@ -563,7 +570,18 @@ try {
   await drizzlePanel.getByLabel('输入目标数据库名称以确认。').fill(ownedTarget.name);
   await drizzlePanel.getByRole('button', { name: '执行已审核的回滚' }).click();
   await contains('.drizzle-preview [role="status"]', '回滚已完成，数据库历史已验证。');
+  drizzleMysqlStatus = 'pending';
+  await drizzlePanel.getByRole('button', { name: '重新检测' }).click();
+  await contains('.drizzle-preview form', 'MySQL 也可能已提交结构变更');
+  assert.equal(await drizzlePanel.getByRole('button', { name: '应用 Drizzle 迁移' }).isDisabled(), true);
+  await drizzlePanel.getByLabel('输入目标数据库名称以确认。').fill(ownedTarget.name);
+  assert.equal(await drizzlePanel.getByRole('button', { name: '应用 Drizzle 迁移' }).isEnabled(), true);
+  drizzleMysqlStatus = 'recovery-required';
+  await drizzlePanel.getByRole('button', { name: '重新检测' }).click();
+  await contains('.drizzle-preview [role="status"]', 'MySQL 可能已提交部分变更');
+  assert.equal(await drizzlePanel.locator('form').isVisible(), false);
   await page.locator('#language').selectOption('en');
+  await contains('.drizzle-preview [role="status"]', 'MySQL may have committed some changes');
   const startup = page.locator('#project-startup');
   if (await startup.getAttribute('open') === null) await startup.locator('summary').click();
   await page.locator('#project-startup-add').click();

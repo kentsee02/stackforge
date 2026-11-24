@@ -4,11 +4,11 @@ The [architecture specification](../ARCHITECTURE.md) defines the product boundar
 
 ## Current priority
 
-Complete the remaining migration coverage before starting project activity history. All five adapters support detection, history checks and reviewed writes for their supported PostgreSQL layouts. Flyway and Liquibase also have a project MySQL write path. EF Core can apply and downgrade reviewed SQL exports on a project SQL Server target.
+Complete the remaining migration coverage before starting project activity history. All five adapters support detection, history checks and reviewed writes for their supported PostgreSQL layouts. Drizzle, Flyway and Liquibase also have a project MySQL write path. EF Core can apply and downgrade reviewed SQL exports on a project SQL Server target.
 
 ### Open migration work
 
-1. **Drizzle additional engines and native layouts.** Expand beyond PostgreSQL v7 and v1 and verify the different history contracts with the upstream runtime. Keep the supported PostgreSQL journal and folder formats compatible.
+1. **Drizzle additional engines and native layouts.** Evaluate SQLite next. Verify its history, file identity, reviewed writes, and recovery on the supported upstream layout. PostgreSQL and MySQL now cover legacy journals and v1 folders with their respective history contracts.
 2. **Alembic runtime coverage.** Handle external pinned dependencies, cross-branch `depends_on` execution and nontransactional revisions. Verify runtime isolation and expose partial results when atomic execution is unavailable.
 3. **Liquibase execution filters.** Verify context and label filtering against the exact changeset range, including eligible preconditions and runtime property inputs.
 4. **Flyway runtime integration.** Cover project-managed Maven and Gradle behavior such as Java migrations and callbacks separately from the reviewed SQL locations already supported. Undo requires an eligible Flyway edition and an undo migration for live verification.

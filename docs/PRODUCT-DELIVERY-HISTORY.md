@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.51.0 Drizzle MySQL migration support
+
+- Detect static MySQL configurations and preview legacy journal and v1 folder migrations. Compare timestamps or folder names and hashes against MySQL history.
+- Review and apply supported SQL to a verified project-owned MySQL 8.4 database. Invalidate approval if files, history, ownership, or the database changes.
+- Keep interrupted runs visible and block automatic retry. Use the existing MySQL archive workflow for recovery to an empty database.
+
 ## v0.50.0 Migration runtime coverage
 
 - Added EF Core SQL Server SQL export review, transactional application and downgrade on a verified project-owned SQL Server 2022 instance.

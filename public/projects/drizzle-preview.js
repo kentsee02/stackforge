@@ -26,6 +26,24 @@ const statuses = {
 };
 
 const states = { applied: 'Applied', pending: 'Pending', unverified: 'Unverified' };
+const mysqlStatuses = {
+  'files-unavailable': 'The MySQL Drizzle journal or one of its SQL files could not be verified.',
+  'configuration-needed': 'Save a supported direct MySQL URL in the displayed variable, then check again.',
+  'remote-target': 'Choose a local MySQL URL to verify migration history.',
+  'docker-unreachable': 'Open Project MySQL and verify that the container is running and its port is reachable.',
+  'project-mysql-required': 'To apply these migrations, configure a project-owned MySQL database.',
+  'history-upgrade-required': 'Upgrade the legacy MySQL migration history with Drizzle before using these v1 folders.',
+  'unscoped-account': 'MySQL migrations require an account with grants restricted to the target database.',
+  'recovery-required': 'MySQL may have committed some changes. Check the target and restore a verified backup to an empty project database before retrying.',
+  'apply-unverified': 'MySQL changes ran, but the resulting migration history could not be verified.',
+  authentication: 'MySQL rejected the username or password.',
+  database: 'The configured MySQL database is missing.',
+  server: 'No server responded on this port. Start MySQL and check again.',
+  permission: 'MySQL denied access. Check the account permissions or server access rules.',
+  tls: 'MySQL could not establish the requested TLS connection.',
+  client: 'Install mysql and add it to PATH to check this database.',
+  connection: 'Could not verify the MySQL connection.'
+};
 
 export function drizzlePreview(projectId, requirement, { request, post }) {
   const details = document.createElement('details');
@@ -79,7 +97,6 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
   review.className = 'drizzle-sql-review';
   range.className = 'hint';
   risk.className = 'hint';
-  setText(risk, 'Review the full SQL and back up this project database. The migration may change or remove existing data.');
   label.className = 'inline-field';
   confirm.autocomplete = 'off';
   confirm.spellcheck = false;
@@ -122,7 +139,8 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
       const address = endpoint && (endpoint.host.includes(':') ? '[' + endpoint.host + ']' : endpoint.host);
       target.textContent = [result.variable, endpoint && address + ':' + endpoint.port + '/' + endpoint.name, result.history].filter(Boolean).join(' · ');
       target.hidden = false;
-      setText(status, [statuses[result.status], result.sources?.join(', '),
+      const mysql = result.engine === 'mysql';
+      setText(status, [(mysql && mysqlStatuses[result.status]) || statuses[result.status], result.sources?.join(', '),
         result.applyBlocked && 'This batch contains SQL outside the supported migration commands for this database.']);
       files.replaceChildren();
       for (const migration of result.migrations ?? []) {
@@ -146,6 +164,8 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
         plan = { id: result.planId, name: endpoint.name, selection };
         review.hidden = risk.hidden = !result.reviewSql;
         review.textContent = result.reviewSql ?? '';
+        setText(risk, mysql ? 'Back up the database before applying. MySQL schema changes can commit even when a later statement fails.' :
+          'Review the full SQL and back up this project database. The migration may change or remove existing data.');
         range.hidden = !result.toRevision;
         range.textContent = result.toRevision ? result.fromRevision + ' → ' + result.toRevision : '';
         setText(apply, selection ? 'Run reviewed rollback' : 'Apply Drizzle migrations');
