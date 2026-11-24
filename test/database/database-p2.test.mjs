@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { link, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
-import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +12,8 @@ import { archiveBackup, inspectArchive } from '../../src/database/backup/archive
 import { run } from '../../src/platform/process.mjs';
 import { databaseVault } from '../../src/database/security/vault.mjs';
 import { cloneGithub } from '../../src/projects/project-clone.mjs';
+
+const sqlite = await import('node:sqlite').catch(() => undefined);
 
 async function fixture(t, adapters, options) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-p2-')));
@@ -225,8 +226,9 @@ process.stdout.write('ready\\n'); setInterval(()=>{},1000);`);
 });
 
 test('Drizzle SQLite binds approval to the file and SQL, rolls back failures, and recognizes restored history', {
-  timeout: 45000, skip: !DatabaseSync.prototype.setAuthorizer
+  timeout: 45000, skip: !sqlite?.DatabaseSync.prototype.setAuthorizer
 }, async t => {
+  const { DatabaseSync } = sqlite;
   const { project, request, register } = await fixture(t);
   const file = join(project, 'notes.sqlite');
   const config = async filename => writeFile(join(project, 'drizzle.config.ts'), `export default { dialect: 'sqlite',

@@ -16,6 +16,13 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm run check
       - run: npm test
+      - uses: actions/setup-node@v4
+        if: matrix.os == 'windows-latest' && matrix.node == 22
+        with:
+          node-version: '22.12.0'
+      - name: Verify public Drizzle SQLite previews on the minimum Node version
+        if: matrix.os == 'windows-latest' && matrix.node == 22
+        run: npm run test:public-migrations -- --case=PUB-14 --case=PUB-15
   database-integration:
     strategy:
       matrix:

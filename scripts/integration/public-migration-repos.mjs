@@ -9,7 +9,6 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createApp } from '../../src/http/server.mjs';
 import { run } from '../../src/platform/process.mjs';
 import { cloneGithub } from '../../src/projects/project-clone.mjs';
-import { DatabaseSync } from 'node:sqlite';
 
 // Pin the upstream files so a change in coverage can be reproduced.
 const cases = [
@@ -224,12 +223,18 @@ async function assertLiveSqlite(api, project, format, count) {
   const preview = () => api(project.id + '/database-drizzle-preview', body);
   const plan = await preview();
   assert.equal(plan.format, format);
+  const sqlite = await import('node:sqlite').catch(() => undefined);
+  if (!sqlite?.DatabaseSync.prototype.setAuthorizer) {
+    assert.equal(plan.status, 'sqlite-runtime');
+    assert.equal(plan.planId, undefined);
+    return ['preview'];
+  }
   assert.equal(plan.status, 'pending', JSON.stringify(plan));
   assert.ok(plan.reviewSql && plan.planId);
   const applied = await api(project.id + '/database-drizzle-apply', { ...body, planId: plan.planId, confirmName: databaseFile });
   assert.equal(applied.status, 'applied', JSON.stringify(applied));
   assert.equal((await preview()).status, 'current');
-  const db = new DatabaseSync(join(project.path, databaseFile), { readOnly: true });
+  const db = new sqlite.DatabaseSync(join(project.path, databaseFile), { readOnly: true });
   try {
     assert.equal(db.prepare('SELECT count(*) AS total FROM __drizzle_migrations').get().total, count);
     const sql = db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'notes_fts'").get()?.sql;

@@ -7,6 +7,7 @@ This archive preserves release work and regression notes. Current priorities are
 - Inspect legacy journal and v1 folder history for SQLite files resolved inside the project.
 - Review and apply a supported batch in one transaction, or create a missing target after the staged migration succeeds.
 - Verified the original eight migrations from electron-db and the Drizzle team's upstream v1 SQLite fixture.
+- v0.52.1 fixes migration preview on Windows when Node.js 22.12 provides the volume identifier only through an open file handle.
 
 ## v0.51.0 Drizzle MySQL migration support
 
