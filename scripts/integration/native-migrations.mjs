@@ -359,7 +359,37 @@ def downgrade():
   assert.equal((await branchRequest('execute', 'apply', { ...custom, planId: customUpgrade.planId, confirmName: branchDb })).status, 'applied');
   const customDown = await branchRequest('preview', 'rollback', { ...custom, revision: 'base' });
   assert.equal((await branchRequest('execute', 'rollback', { ...custom, revision: 'base', planId: customDown.planId, confirmName: branchDb })).status, 'rolled-back');
-  console.log('Verified Alembic multiple heads, explicit branched rollback, and version history.');
+  const dependency = join(branched, 'alembic/versions/branch_b.py');
+  const dependent = `from alembic import op
+revision = 'branch_b'
+down_revision = 'root_node'
+depends_on = 'branch_a'
+def upgrade():
+    op.execute('CREATE TABLE branch_b (id integer)')
+    op.execute('SELECT id FROM branch_a')
+def downgrade():
+    op.execute('DROP TABLE branch_b')
+`;
+  await writeFile(dependency, "raise RuntimeError('Project code must not run during planning')\n" + dependent);
+  const safePreview = await branchRequest('preview', 'apply');
+  assert.equal((await branchRequest('execute', 'apply', { planId: safePreview.planId, confirmName: branchDb })).status, 'execution-failed');
+  assert.equal((await branchQuery('SELECT count(*) FROM alembic_version;')).trim(), '0');
+  await writeFile(dependency, dependent);
+  const crossBranch = await branchRequest('preview', 'apply');
+  assert.deepEqual(crossBranch.migrations.map(row => row.revision), ['root_node', 'branch_a', 'branch_b']);
+  assert.deepEqual(crossBranch.expectedHeads, ['branch_b']);
+  assert.equal((await branchQuery("SELECT count(*) FROM alembic_version;")).trim(), '0');
+  await writeFile(dependency, dependent + '\n# Changed after review\n');
+  await branchRequest('execute', 'apply', { planId: crossBranch.planId, confirmName: branchDb }, 409);
+  await writeFile(dependency, dependent);
+  assert.equal((await branchRequest('execute', 'apply', { planId: crossBranch.planId, confirmName: branchDb })).status, 'applied');
+  assert.equal((await branchQuery('SELECT version_num FROM alembic_version;')).trim(), 'branch_b');
+  const reverse = await branchRequest('preview', 'rollback', { revision: 'base' });
+  assert.deepEqual(reverse.expectedHeads, []);
+  assert.deepEqual(reverse.migrations.map(row => row.revision), ['branch_b', 'branch_a', 'root_node']);
+  assert.equal((await branchRequest('execute', 'rollback', { revision: 'base', planId: reverse.planId, confirmName: branchDb })).status, 'rolled-back');
+  assert.equal((await branchQuery("SELECT to_regclass('branch_a') IS NULL AND to_regclass('branch_b') IS NULL;")).trim(), 't');
+  console.log('Verified Alembic multiple heads, cross-branch dependencies, reviewed rollback, and version history.');
 }
 
 async function testStructuredLiquibase() {

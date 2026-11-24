@@ -82,7 +82,7 @@ Stop the project, review the SQL files, and type the database name to apply an e
 
 SQLite apply requires Node.js 24.10 or later. It writes schema, data and history in one transaction. Enter the SQLite filename to confirm. Use the SQLite backup and restore workflow to recover a previous state.
 
-**Preview Alembic migrations** lists revision order and branch heads from a standard `alembic.ini` layout, including one in a nested Python service. Choose a project-owned PostgreSQL database or a saved direct loopback PostgreSQL URL, then select **Check database history** to compare `public.alembic_version` with the local graph. The read-only check reports what the version table records. Use the project's Alembic environment for custom layouts, schema verification, and applying migrations.
+**Preview Alembic migrations** lists revisions and branch heads from a standard `alembic.ini` layout, including nested Python services. Check history on a project-owned PostgreSQL database or a saved direct loopback URL. For a project-owned database, review and confirm an upgrade or downgrade. Plans for literal cross-branch `depends_on` show the affected revisions and the heads that should be recorded after execution.
 
 **Preview EF Core migrations** lists local migration IDs and source files by `.csproj` and `DbContext`. It supports standard generated partial classes, single-file declarations, and literal compile links within the repository. The preview reads files and reports database status as unverified. Use the project's EF Core tooling for custom build behavior, database history, or applying migrations.
 

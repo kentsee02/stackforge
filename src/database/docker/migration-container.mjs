@@ -37,7 +37,7 @@ export async function buildMigrationImage({ cli, reference, dockerfile, allowBui
   } finally { await rm(staging, { recursive: true, force: true }); }
 }
 
-export async function runMigrationContainer({ cli, container, image, args, files, directory, env, signal, verify, cancel }) {
+export async function runMigrationContainer({ cli, container, image, args, files, directory, env, signal, verify, cancel, offline = false }) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const staging = await mkdtemp(join(directory, 'native-migration-'));
   const folder = join(staging, 'files');
@@ -55,7 +55,7 @@ export async function runMigrationContainer({ cli, container, image, args, files
     if (folder.slice(process.platform === 'win32' ? 2 : 0).includes(':')) throw new Error();
     await verify();
     throwIfCancelled(signal);
-    worker = (await cli(['container', 'create', '--name', name, '--network', 'container:' + container,
+    worker = (await cli(['container', 'create', '--name', name, '--network', offline ? 'none' : 'container:' + container,
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only', '--label', 'io.stackforge.migration-worker=' + name,
       '--tmpfs', '/tmp:rw,nosuid,nodev,size=128m', '--env', 'HOME=/tmp',
       '--volume', folder + ':/stackforge:ro', ...Object.keys(env).flatMap(key => ['--env', key]), image, ...args],
@@ -77,7 +77,7 @@ export async function runMigrationContainer({ cli, container, image, args, files
     if (/^[a-f\d]{64}$/.test(worker ?? '')) {
       await cli(['container', 'rm', '--force', worker], cleanup).catch(() => {});
     }
-    if (started && !finished) await cancel().catch(() => {});
+    if (started && !finished && cancel) await cancel().catch(() => {});
     await rm(staging, { recursive: true, force: true });
   }
 }

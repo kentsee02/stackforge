@@ -24,6 +24,9 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   const form = document.createElement('form');
   const scope = document.createElement('p');
   scope.className = 'hint';
+  const expectedHeads = document.createElement('p');
+  expectedHeads.className = 'hint';
+  expectedHeads.hidden = true;
   const files = document.createElement('ul');
   files.className = 'check-list';
   const reverse = document.createElement('pre');
@@ -42,7 +45,7 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   const controls = document.createElement('fieldset');
   controls.className = 'migration-history-controls';
   controls.append(labelledMigrationControl('Type the target database name to confirm.', confirm), submit);
-  form.append(scope, files, reverse, note, recovery, controls);
+  form.append(scope, expectedHeads, files, reverse, note, recovery, controls);
   section.append(actions, status, cancel, form);
 
   let plan, active;
@@ -165,6 +168,8 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
       scope.textContent = [[result.tool, result.version].filter(Boolean).join(' '), result.directory, host + ':' + port + '/' + name,
         result.history.schema + '.' + result.history.table,
         result.toRevision && result.fromRevision + ' → ' + result.toRevision, result.rollbackTag, result.scriptFile].filter(Boolean).join(' · ');
+      expectedHeads.hidden = !Array.isArray(result.expectedHeads);
+      if (!expectedHeads.hidden) setText(expectedHeads, ['Recorded revisions after migration', result.expectedHeads.join(', ') || 'base']);
       files.replaceChildren(...result.migrations.map(item => {
         const line = document.createElement('li');
         line.textContent = item.revision + ' · ' + item.file;

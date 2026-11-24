@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,7 +25,7 @@ const cases = [
 ];
 const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12], [2], [8]];
 const selectedCases = new Set(process.argv.filter(arg => arg.startsWith('--case=')).map(arg => arg.slice('--case='.length)));
-assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-5])$/.test(value)), 'Select a case from PUB-01 through PUB-15.');
+assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-6])$/.test(value)), 'Select a case from PUB-01 through PUB-16.');
 const selected = number => !selectedCases.size || selectedCases.has('PUB-' + String(number).padStart(2, '0'));
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-public-migrations-')));
 const repositories = new Map();
@@ -46,7 +46,7 @@ const app = createApp({
   }
 });
 
-async function assertLiveMigration(api, project, adapter, engine = 'postgres', flywayProfile) {
+async function assertLiveMigration(api, project, adapter, engine = 'postgres', flywayProfile, dependencyFixture = false) {
   const server = createServer().listen(0, '127.0.0.1');
   await once(server, 'listening');
   const { port } = server.address();
@@ -142,16 +142,33 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres', f
   const migrate = async (operation, revision, expected) => {
     const selection = { adapter, operation, revision, sourceId, targetId };
     const before = await api(project.id + '/database-native-migration', { ...selection, mode: 'preview' });
-    assert.equal(before.toRevision, revision ?? (await history()).heads[0]);
+    const { heads } = await history();
+    assert.equal(before.toRevision, revision ?? (heads.length === 1 ? heads[0] : 'heads'));
     const after = await api(project.id + '/database-native-migration', { ...selection, mode: 'execute', planId: before.planId, confirmName: name });
     assert.equal(after.status, expected);
+    return before;
   };
   await migrate('apply', first, 'applied');
   assert.deepEqual((await history()).database.heads, [first]);
   await migrate('rollback', 'base', 'rolled-back');
   assert.deepEqual((await history()).database.heads, []);
-  await migrate('apply', undefined, 'applied');
+  const applied = await migrate('apply', undefined, 'applied');
   assert.equal((await history()).database.status, 'current');
+  if (dependencyFixture) {
+    assert.deepEqual(applied.migrations.map(row => row.revision), ['96e796392533', 'dbdbc1b19cf2', '1095cdf9f350']);
+    assert.deepEqual(applied.expectedHeads, ['1095cdf9f350']);
+    assert.deepEqual((await history()).database.heads, applied.expectedHeads);
+    const { container } = JSON.parse(await readFile(join(root, 'state', 'databases.json'), 'utf8')).development[project.id];
+    assert.match(container, /^[a-f\d]{64}$/);
+    const query = sql => run('docker', ['exec', container, 'psql', '-XqAt', '-U', 'stackforge', '-d', name,
+      '-v', 'ON_ERROR_STOP=1', '-c', sql], { stdoutOnly: true, timeout: 15000 });
+    assert.equal((await query("SELECT to_regclass('transaction') IS NOT NULL AND to_regclass('transaction_id_seq') IS NOT NULL;")).trim(), 't');
+    const rolledBack = await migrate('rollback', 'base', 'rolled-back');
+    assert.deepEqual(rolledBack.expectedHeads, []);
+    assert.deepEqual((await history()).database.heads, []);
+    assert.equal((await query("SELECT to_regclass('transaction') IS NULL AND to_regclass('transaction_id_seq') IS NULL;")).trim(), 't');
+    return ['apply-to-revision', 'depends-on', 'effective-history', 'rollback-to-base', 'physical-schema'];
+  }
   return ['apply-to-revision', 'rollback-to-base', 'apply-all', 'history'];
 }
 
@@ -371,6 +388,31 @@ try {
       await git(['show', commit + ':integration-tests/drizzle2/sqlite/' + folder + '/migration.sql']));
     const imported = await api('import', { path }, 201);
     console.log(JSON.stringify({ repository: 'drizzle-team/drizzle-orm', commit, sqlite: await assertLiveSqlite(api, imported, 'v1', 1) }));
+  }
+  if (live && selected(16)) {
+    const upstream = [
+      { repo: 'inveniosoftware/invenio-db', commit: 'fac3e569a8cada66e924965578814484e77724f5',
+        directory: 'invenio_db/alembic', files: ['96e796392533_create_database_migrations.py', 'dbdbc1b19cf2_create_transaction_table.py'] },
+      { repo: 'inveniosoftware/invenio-records', commit: 'ed89fd8997e5a398c88dd869da926a0fadb2e879',
+        directory: 'invenio_records/alembic', files: ['1095cdf9f350_create_records_branch.py'] }
+    ];
+    const path = join(root, 'invenio-alembic');
+    const migrations = join(path, 'alembic', 'versions');
+    await mkdir(migrations, { recursive: true });
+    await mkdir(join(path, 'prisma'));
+    await writeFile(join(path, 'alembic.ini'), '[alembic]\nscript_location = %(here)s/alembic\n');
+    await writeFile(join(path, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
+    for (const { repo, commit, directory, files } of upstream) {
+      const checkout = join(root, 'invenio-upstream-' + commit.slice(0, 8));
+      await mkdir(checkout);
+      const git = args => run('git', args, { cwd: checkout, timeout: 120000, stdoutOnly: true });
+      await git(['init']);
+      await git(['fetch', '--depth=1', 'https://github.com/' + repo + '.git', commit]);
+      for (const file of files) await writeFile(join(migrations, file), await git(['show', commit + ':' + directory + '/' + file]));
+    }
+    const imported = await api('import', { path }, 201);
+    console.log(JSON.stringify({ repositories: upstream.map(({ repo, commit }) => ({ repo, commit })),
+      postgres: await assertLiveMigration(api, imported, 'alembic', 'postgres', undefined, true) }));
   }
 } finally {
   for (const id of databaseProjects) {

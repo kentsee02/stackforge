@@ -517,6 +517,8 @@ export const messages = [
   ['执行计划前请备份 MySQL。迁移失败或取消时，部分结构变更可能已经提交。', 'Back up the MySQL database before running this plan. A failed or cancelled migration can leave schema changes committed.'],
   ['应用已审核的迁移', 'Apply reviewed migrations'],
   ['迁移资源文件', 'Migration resource'],
+  ['迁移后记录的版本', 'Recorded revisions after migration'],
+  ['无法预览 Alembic 跨分支依赖。请检查 Docker 后重试。', 'Could not preview Alembic dependencies. Check Docker and try again.'],
   ['使用项目的 Alembic 环境', 'Use the project Alembic environment'],
   ['本地 Python 文件，用逗号分隔', 'Local Python files, comma separated'],
   ['请选择支持传入连接的 Alembic 环境，并列出所需的本地 Python 文件。', 'Choose an Alembic environment that accepts the supplied connection and list its local Python files.'],

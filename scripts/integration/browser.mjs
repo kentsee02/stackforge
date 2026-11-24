@@ -377,7 +377,8 @@ try {
     if (payload.adapter === 'alembic') {
       assert.equal(payload.operation, 'apply');
       assert.equal(payload.revision, 'start');
-      return route.fulfill({ json: { ...reviewedPlan, tool: 'Alembic', version: '1.20.1', fromRevision: 'base', toRevision: 'start' } });
+      return route.fulfill({ json: { ...reviewedPlan, tool: 'Alembic', version: '1.20.1', fromRevision: 'base', toRevision: 'start',
+        expectedHeads: ['start'] } });
     }
     if (payload.adapter === 'ef-core') {
       assert.equal(payload.operation, 'rollback');
@@ -521,10 +522,12 @@ try {
   await alembic.getByLabel('Target revision').selectOption('start');
   await alembic.getByRole('button', { name: 'Preview migration plan' }).click();
   await contains('.alembic-preview .native-migration form', 'base → start');
+  await contains('.alembic-preview .native-migration form', 'Recorded revisions after migration · start');
   await ef.getByLabel('History schema').fill('public');
   await efTarget.selectOption(ownedTarget.id);
   await efTarget.selectOption(ownedSql.id);
   await page.locator('#language').selectOption('zh-CN');
+  await contains('.alembic-preview .native-migration form', '迁移后记录的版本 · start');
   const efNative = ef.locator('.native-migration');
   await efNative.getByLabel('目标版本').selectOption('base');
   await efNative.getByLabel('EF Core SQL 文件的项目相对路径').fill('artifacts/rollback.sql');

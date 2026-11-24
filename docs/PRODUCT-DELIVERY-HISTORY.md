@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.53.0 Alembic cross-branch dependencies
+
+- Plan literal `depends_on` dependencies with the pinned Alembic runtime using an offline graph and show the effective history heads.
+- Verify the reviewed set and dependency order during apply and downgrade, then verify the version table before commit.
+- Exercise the original Invenio DB and Invenio Records revisions against disposable PostgreSQL.
+
 ## v0.52.0 Drizzle SQLite migration support
 
 - Inspect legacy journal and v1 folder history for SQLite files resolved inside the project.
