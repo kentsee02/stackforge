@@ -58,7 +58,7 @@ function preparationError(status) {
   return Object.assign(new Error('The Alembic dependency runtime could not be prepared.'), { dependencyStatus: status });
 }
 
-export async function withAlembicDependencyRuntime({ scope, image, directory, signal, lock, verify }, execute) {
+export async function withIsolatedAlembicRuntime({ scope, image, directory, signal, lock, verify }, execute) {
   const { cli, container } = scope;
   const owner = randomBytes(16).toString('hex');
   const name = 'stackforge-alembic-' + owner;
@@ -73,25 +73,27 @@ export async function withAlembicDependencyRuntime({ scope, image, directory, si
         mode === 'isolated' && marked === owner) return id;
   }
   try {
-    let result;
-    try {
-      throwIfCancelled(signal);
-      await cli(['volume', 'create', '--driver', 'local', '--label', label + '=' + owner, name], maintenance);
-      const verifyInstall = async () => {
-        if (!await ownedVolume()) throw preparationError('dependency-install-failed');
-      };
-      result = await runMigrationContainer({ cli, image, directory, signal, network: 'bridge', mounts: [mount], user: '0:0', timeout: 120000,
-        args: [], env: {}, verify: verifyInstall,
-        files: new Map([['run.py', installer], ['requirements.txt', lock.requirements], ['packages.json', JSON.stringify(lock.packages)]]) });
-    } catch (error) {
-      if (error.name === 'AbortError') throw error;
-      throwIfCancelled(signal);
-      throw preparationError('dependency-install-failed');
+    if (lock) {
+      let result;
+      try {
+        throwIfCancelled(signal);
+        await cli(['volume', 'create', '--driver', 'local', '--label', label + '=' + owner, name], maintenance);
+        const verifyInstall = async () => {
+          if (!await ownedVolume()) throw preparationError('dependency-install-failed');
+        };
+        result = await runMigrationContainer({ cli, image, directory, signal, network: 'bridge', mounts: [mount], user: '0:0', timeout: 120000,
+          args: [], env: {}, verify: verifyInstall,
+          files: new Map([['run.py', installer], ['requirements.txt', lock.requirements], ['packages.json', JSON.stringify(lock.packages)]]) });
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        throwIfCancelled(signal);
+        throw preparationError('dependency-install-failed');
+      }
+      const status = result.trim();
+      if (status === 'base-conflict') throw preparationError('dependency-base-conflict');
+      if (status === 'incomplete') throw preparationError('dependency-lock-incomplete');
+      if (status !== 'ready') throw preparationError('dependency-install-failed');
     }
-    const status = result.trim();
-    if (status === 'base-conflict') throw preparationError('dependency-base-conflict');
-    if (status === 'incomplete') throw preparationError('dependency-lock-incomplete');
-    if (status !== 'ready') throw preparationError('dependency-install-failed');
     await verify();
     throwIfCancelled(signal);
     let network;
@@ -106,9 +108,9 @@ export async function withAlembicDependencyRuntime({ scope, image, directory, si
       throwIfCancelled(signal);
       throw preparationError('dependency-network-failed');
     }
-    return await execute({ network, mounts: [mount + ',readonly'], host: databaseHost,
+    return await execute({ network, mounts: lock ? [mount + ',readonly'] : [], host: databaseHost,
       async verify() {
-        if (await ownedNetwork() !== network || !await ownedVolume()) throw preparationError('dependency-network-failed');
+        if (await ownedNetwork() !== network || lock && !await ownedVolume()) throw preparationError('dependency-network-failed');
       } });
   } finally {
     const network = await ownedNetwork(maintenance).catch(() => undefined);
@@ -116,6 +118,6 @@ export async function withAlembicDependencyRuntime({ scope, image, directory, si
       await cli(['network', 'disconnect', '--force', network, container], maintenance).catch(() => {});
       await cli(['network', 'rm', network], maintenance).catch(() => {});
     }
-    if (await ownedVolume(maintenance).catch(() => false)) await cli(['volume', 'rm', name], maintenance).catch(() => {});
+    if (lock && await ownedVolume(maintenance).catch(() => false)) await cli(['volume', 'rm', name], maintenance).catch(() => {});
   }
 }

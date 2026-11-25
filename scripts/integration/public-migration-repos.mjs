@@ -25,7 +25,7 @@ const cases = [
 ];
 const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12], [2], [8]];
 const selectedCases = new Set(process.argv.filter(arg => arg.startsWith('--case=')).map(arg => arg.slice('--case='.length)));
-assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-7])$/.test(value)), 'Select a case from PUB-01 through PUB-17.');
+assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-8])$/.test(value)), 'Select a case from PUB-01 through PUB-18.');
 const selected = number => !selectedCases.size || selectedCases.has('PUB-' + String(number).padStart(2, '0'));
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-public-migrations-')));
 const repositories = new Map();
@@ -172,7 +172,13 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres', f
     const before = await api(migrationRoute, { ...selection, mode: 'preview' });
     const { heads } = await history();
     assert.equal(before.toRevision, revision ?? (heads.length === 1 ? heads[0] : 'heads'));
-    const after = await api(migrationRoute, { ...selection, mode: 'execute', planId: before.planId, confirmName: name });
+    const body = { ...selection, mode: 'execute', planId: before.planId, confirmName: name };
+    if (dependencyFixture?.nontransactional) {
+      assert.equal(before.nontransactional, true);
+      await api(migrationRoute, body, 409);
+      body.acceptPartialCommit = true;
+    }
+    const after = await api(migrationRoute, body);
     assert.equal(after.status, expected, JSON.stringify(after));
     return before;
   };
@@ -185,14 +191,21 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres', f
   const applied = await migrate('apply', undefined, 'applied');
   assert.equal((await history()).database.status, 'current');
   if (dependencyFixture) {
-    const revisions = ['96e796392533', 'dbdbc1b19cf2', '1095cdf9f350', ...(dependencyLock ? ['862037093962'] : [])];
-    assert.deepEqual(applied.migrations.map(row => row.revision), revisions);
-    assert.deepEqual(applied.expectedHeads, [revisions.at(-1)]);
-    assert.deepEqual((await history()).database.heads, applied.expectedHeads);
     const { container } = JSON.parse(await readFile(join(root, 'state', 'databases.json'), 'utf8')).development[project.id];
     assert.match(container, /^[a-f\d]{64}$/);
     const query = sql => run('docker', ['exec', container, 'psql', '-XqAt', '-U', 'stackforge', '-d', name,
       '-v', 'ON_ERROR_STOP=1', '-c', sql], { stdoutOnly: true, timeout: 15000 });
+    if (dependencyFixture.nontransactional) {
+      assert.equal((await query("SELECT indisvalid FROM pg_index WHERE indexrelid = 'ix_1'::regclass")).trim(), 't');
+      assert.equal((await query('SELECT data FROM table_1')).trim(), 'aboba');
+      await migrate('rollback', 'base', 'rolled-back');
+      assert.equal((await query("SELECT to_regclass('table_1') IS NULL AND to_regclass('public.__stackforge_alembic_pending') IS NULL")).trim(), 't');
+      return ['concurrent-index', 'applied-data', 'reviewed-downgrade', 'recovery-marker-cleared'];
+    }
+    const revisions = ['96e796392533', 'dbdbc1b19cf2', '1095cdf9f350', ...(dependencyLock ? ['862037093962'] : [])];
+    assert.deepEqual(applied.migrations.map(row => row.revision), revisions);
+    assert.deepEqual(applied.expectedHeads, [revisions.at(-1)]);
+    assert.deepEqual((await history()).database.heads, applied.expectedHeads);
     assert.equal((await query("SELECT to_regclass('transaction') IS NOT NULL AND to_regclass('transaction_id_seq') IS NOT NULL;")).trim(), 't');
     if (dependencyLock) {
       assert.equal((await query("SELECT to_regclass('records_metadata') IS NOT NULL AND to_regclass('records_metadata_version') IS NOT NULL;")).trim(), 't');
@@ -466,6 +479,24 @@ try {
       console.log(JSON.stringify({ repositories,
         postgres: await assertLiveMigration(api, imported, 'alembic', 'postgres', undefined, { lock }) }));
     }
+  }
+  if (live && selected(18)) {
+    const repo = 'ionsome/alembic-asyncpg-concurrently-poc';
+    const commit = '09486481681447199fea0a60cb9ce7a3c505e5be';
+    const checkout = join(root, 'alembic-concurrent-upstream');
+    await mkdir(checkout);
+    const git = args => run('git', args, { cwd: checkout, timeout: 120000, stdoutOnly: true });
+    await git(['init']);
+    await git(['fetch', '--depth=1', 'https://github.com/' + repo + '.git', commit]);
+    const path = join(root, 'alembic-concurrent');
+    await mkdir(join(path, 'alembic', 'versions'), { recursive: true });
+    await mkdir(join(path, 'prisma'));
+    await writeFile(join(path, 'alembic.ini'), '[alembic]\nscript_location = %(here)s/alembic\n');
+    await writeFile(join(path, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
+    await writeFile(join(path, 'alembic/versions/202209161323_first.py'), await git(['show', commit + ':migrations/202209161323_first.py']));
+    const project = await api('import', { path }, 201);
+    console.log(JSON.stringify({ repository: repo, commit,
+      postgres: await assertLiveMigration(api, project, 'alembic', 'postgres', undefined, { nontransactional: true }) }));
   }
 } finally {
   for (const id of databaseProjects) {

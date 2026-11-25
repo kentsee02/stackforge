@@ -9,6 +9,7 @@ const outcomes = {
   'dependency-lock-incomplete': 'The dependency lock is missing a compatible transitive package.',
   'dependency-network-failed': 'Could not isolate the Alembic runtime on the project database network.',
   'execution-failed': 'The migration tool could not finish. Check the current history before retrying.',
+  'execution-partial': 'Changes may already be committed. Restore a verified backup to an empty project database before retrying.',
   'execution-unverified': 'The tool finished, but the expected history could not be verified. Check the database before retrying.'
 };
 
@@ -48,7 +49,13 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   submit.type = 'submit';
   const controls = document.createElement('fieldset');
   controls.className = 'migration-history-controls';
-  controls.append(labelledMigrationControl('Type the target database name to confirm.', confirm), submit);
+  const acceptPartialCommit = document.createElement('input');
+  acceptPartialCommit.type = 'checkbox';
+  const backupConfirmation = labelledMigrationControl('I have a verified backup and accept that some changes may commit before a failure.', acceptPartialCommit);
+  backupConfirmation.hidden = true;
+  controls.append(labelledMigrationControl('Type the target database name to confirm.', confirm));
+  if (source.adapter === 'alembic') controls.append(backupConfirmation);
+  controls.append(submit);
   form.append(scope, expectedHeads, files, reverse, note, recovery, controls);
   section.append(actions, status, cancel, form);
 
@@ -120,6 +127,7 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
     section.hidden = !visible;
     form.hidden = true;
     confirm.value = '';
+    acceptPartialCommit.checked = false;
     setText(status, '');
   }
   reset();
@@ -130,7 +138,8 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
     const timeout = liquibaseRollback || mode === 'execute' && targetSelection.dependencyLock ? 360000 : mode === 'preview' ? 220000 : 240000;
     return post('/api/projects/' + projectId + '/database-native-migration', token, {
       sourceId: source.id, adapter: source.adapter, operation, mode, ...targetSelection,
-      ...(mode === 'execute' && { planId: plan.planId, confirmName: confirm.value })
+      ...(mode === 'execute' && { planId: plan.planId, confirmName: confirm.value,
+        ...(plan.nontransactional && { acceptPartialCommit: acceptPartialCommit.checked }) })
     }, timeout, active.signal);
   }
 
@@ -204,6 +213,7 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
           operation === 'apply' ? 'Review the listed files. Applying the plan runs their SQL against the selected database.' :
           'Review the rollback SQL. It can remove schema objects or data.';
       setText(note, message);
+      backupConfirmation.hidden = !result.nontransactional;
       setText(recovery, result.target.engine === 'mysql'
         ? 'Back up the MySQL database before running this plan. A failed or cancelled migration can leave schema changes committed.'
         : result.target.engine === 'sqlserver' ? 'Back up the project SQL Server database before running the plan.'
@@ -215,10 +225,12 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
       setText(status, '');
     }));
   }
-  confirm.addEventListener('input', () => { submit.disabled = !plan || confirm.value !== plan.target.name; });
+  const canSubmit = () => plan && confirm.value === plan.target.name && (!plan.nontransactional || acceptPartialCommit.checked);
+  confirm.addEventListener('input', () => { submit.disabled = !canSubmit(); });
+  acceptPartialCommit.addEventListener('change', () => { submit.disabled = !canSubmit(); });
   form.addEventListener('submit', event => {
     event.preventDefault();
-    if (!plan || confirm.value !== plan.target.name) return;
+    if (!canSubmit()) return;
     void work(async () => {
       setText(status, plan.dependencyLock ? 'Installing approved Python wheels and running the migration…' :
         'Running the migration tool and verifying database history…');

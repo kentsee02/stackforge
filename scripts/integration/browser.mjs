@@ -379,7 +379,8 @@ try {
       assert.equal(payload.revision, 'start');
       assert.equal(payload.dependencyLock, 'requirements-alembic.lock');
       return route.fulfill({ json: { ...reviewedPlan, tool: 'Alembic', version: '1.20.1', fromRevision: 'base', toRevision: 'start',
-        expectedHeads: ['start'], dependencyLock: payload.dependencyLock, packages: [{ name: 'sqlalchemy-utils', version: '0.42.1' }] } });
+        expectedHeads: ['start'], dependencyLock: payload.dependencyLock, packages: [{ name: 'sqlalchemy-utils', version: '0.42.1' }],
+        nontransactional: true } });
     }
     if (payload.adapter === 'ef-core') {
       assert.equal(payload.operation, 'rollback');
@@ -526,12 +527,17 @@ try {
   await contains('.alembic-preview .native-migration form', 'base → start');
   await contains('.alembic-preview .native-migration form', 'Recorded revisions after migration · start');
   await contains('.alembic-preview .native-migration form', 'Locked Python package · sqlalchemy-utils==0.42.1');
+  await alembic.getByLabel('Type the target database name to confirm.').fill(ownedTarget.name);
+  assert.equal(await alembic.getByRole('button', { name: 'Apply reviewed migrations' }).isDisabled(), true);
+  await alembic.getByLabel('I have a verified backup and accept that some changes may commit before a failure.').check();
+  assert.equal(await alembic.getByRole('button', { name: 'Apply reviewed migrations' }).isEnabled(), true);
   await ef.getByLabel('History schema').fill('public');
   await efTarget.selectOption(ownedTarget.id);
   await efTarget.selectOption(ownedSql.id);
   await page.locator('#language').selectOption('zh-CN');
   await contains('.alembic-preview .native-migration form', '迁移后记录的版本 · start');
   await contains('.alembic-preview .native-migration form', '锁定的 Python 包 · sqlalchemy-utils==0.42.1');
+  assert.equal(await alembic.getByLabel('我有经过验证的备份，并接受失败前可能已有部分变更提交。').isChecked(), true);
   await alembic.getByLabel('项目内的依赖锁文件（可选）').fill('different.lock');
   assert.equal(await alembic.locator('.native-migration form').isVisible(), false);
   const efNative = ef.locator('.native-migration');

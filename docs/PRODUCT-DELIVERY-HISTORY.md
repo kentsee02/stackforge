@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.55.0 Alembic nontransactional revisions
+
+- Review revisions containing Alembic autocommit blocks and require backup confirmation.
+- Execute on an isolated project PostgreSQL connection with per-revision transactions and a session advisory lock.
+- Block retries after possible partial commits until recovery, and verify concurrent index creation and archive recovery.
+
 ## v0.54.0 Alembic locked Python dependencies
 
 - Show reviewed Python packages and exact versions in the migration plan. Bind approval to the lock file bytes.

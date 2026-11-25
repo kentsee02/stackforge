@@ -4,7 +4,7 @@ import { throwIfCancelled } from '../../platform/process.mjs';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { localSession } from '../adapters/local.mjs';
 import { buildMigrationImage, runMigrationContainer } from '../docker/migration-container.mjs';
-import { alembicDependencyPath, withAlembicDependencyRuntime } from '../docker/alembic-dependency-runtime.mjs';
+import { alembicDependencyPath, withIsolatedAlembicRuntime } from '../docker/alembic-dependency-runtime.mjs';
 import { databaseKey, discoverDatabases } from '../discovery.mjs';
 import { compareAlembicHistory } from './alembic-history.mjs';
 import { readAlembicDependencyLock } from './alembic-dependency-lock.mjs';
@@ -20,6 +20,9 @@ const changed = 'The migration plan changed or expired. Preview it again.';
 const unsupported = 'Guided Alembic requires a verified revision graph and self-contained migration scripts.';
 const environmentUnsupported = 'Choose an Alembic environment that accepts the supplied connection and list its local Python files.';
 const invalidHistory = 'Check the migration history and target database before preparing a write.';
+const marker = 'public.__stackforge_alembic_pending';
+const markerQuery = "SELECT to_regclass('" + marker + "') IS NOT NULL";
+const recovery = 'An interrupted Alembic migration requires recovery. Restore a verified backup to an empty project database before retrying.';
 const dockerfile = [
   'FROM python@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df',
   'RUN python -m pip --isolated install --no-cache-dir --only-binary=:all: alembic==' + version +
@@ -35,6 +38,7 @@ const runner = [
   'from alembic.config import Config',
   'from alembic.migration import MigrationContext',
   'from sqlalchemy import URL, create_engine, event',
+  'from sqlalchemy.pool import NullPool',
   'if os.environ.get("SF_LOCKED_DEPENDENCIES"):',
   '    sys.path.append(' + JSON.stringify(alembicDependencyPath) + ')',
   'url = URL.create("postgresql+psycopg", username=os.environ["SF_USER"], password=os.environ["SF_PASSWORD"],',
@@ -55,30 +59,55 @@ const runner = [
   '    options["on_version_apply"] = record_step',
   'config = Config()',
   'config.set_main_option("script_location", "/stackforge/alembic")',
-  'with create_engine(url).begin() as connection:',
-  '    connection.exec_driver_sql("SET LOCAL lock_timeout = \'5s\'")',
-  '    connection.exec_driver_sql("SET LOCAL statement_timeout = \'130s\'")',
-  '    connection.exec_driver_sql("SELECT pg_advisory_xact_lock(hashtext(\'stackforge:alembic\'::text))")',
+  'nontransactional = os.environ.get("SF_NONTRANSACTIONAL") == "1"',
+  'options["transaction_per_migration"] = nontransactional',
+  'operation, revision = sys.argv[1:]',
+  '',
+  'def check_target(connection, expected):',
   '    target = connection.exec_driver_sql("SELECT current_database(), pg_postmaster_start_time()::text, "',
   '       "(SELECT oid::text FROM pg_catalog.pg_database WHERE datname=current_database())").one()',
   '    if list(target) != json.loads(os.environ["SF_TARGET"]):',
   '        raise RuntimeError("Database target changed")',
   '    context = MigrationContext.configure(connection, opts=options)',
-  '    if sorted(context.get_current_heads()) != json.loads(os.environ["SF_CURRENT"]):',
+  '    if sorted(context.get_current_heads()) != json.loads(os.environ[expected]):',
   '        raise RuntimeError("Alembic history changed")',
+  '',
+  'def migrate(connection):',
   '    config.attributes.update(connection=connection, options=options)',
-  '    operation, revision = sys.argv[1:]',
+  '    action = command.upgrade if operation == "apply" else command.downgrade',
+  '    if nontransactional:',
+  '        action(config, revision)',
+  '        return',
   '    def deny_commit(_connection):',
   '        raise RuntimeError("The project environment tried to commit the migration transaction")',
   '    event.listen(connection, "commit", deny_commit)',
   '    try:',
-  '        (command.upgrade if operation == "apply" else command.downgrade)(config, revision)',
+  '        action(config, revision)',
   '    finally:',
   '        event.remove(connection, "commit", deny_commit)',
+  '',
+  'def check_outcome(connection):',
   '    if reviewed is not None and observed != set(reviewed):',
   '        raise RuntimeError("Alembic did not run the reviewed range")',
-  '    if sorted(context.get_current_heads()) != json.loads(os.environ["SF_EXPECTED"]):',
-  '        raise RuntimeError("Alembic did not record the expected revision")',
+  '    check_target(connection, "SF_EXPECTED")',
+  '',
+  'with create_engine(url, poolclass=NullPool).connect() as connection:',
+  '    with connection.begin():',
+  '        connection.exec_driver_sql("SET lock_timeout = \'5s\'; SET statement_timeout = \'130s\'")',
+  '        connection.exec_driver_sql("SELECT pg_advisory_lock(hashtext(\'stackforge:alembic\'::text))")',
+  '        check_target(connection, "SF_CURRENT")',
+  '        if connection.exec_driver_sql(' + JSON.stringify(markerQuery) + ').scalar_one():',
+  '            raise RuntimeError("Alembic recovery is required")',
+  '        if nontransactional:',
+  '            connection.exec_driver_sql("CREATE TABLE ' + marker + ' (started_at timestamptz NOT NULL DEFAULT clock_timestamp())")',
+  '        else:',
+  '            migrate(connection)',
+  '            check_outcome(connection)',
+  '    if nontransactional:',
+  '        migrate(connection)',
+  '        with connection.begin():',
+  '            check_outcome(connection)',
+  '            connection.exec_driver_sql("DROP TABLE ' + marker + '")',
   ''
 ].join('\n');
 const environment = [
@@ -100,7 +129,7 @@ const projectEnvironment = [
   '    global configured',
   '    if args or kwargs.get("connection") is not settings["connection"] or kwargs.get("url") is not None:',
   '        raise RuntimeError("The project environment did not use the supplied connection")',
-  '    kwargs.update(settings["options"], transactional_ddl=True, transaction_per_migration=False)',
+  '    kwargs.update(settings["options"], transactional_ddl=True)',
   '    configure(**kwargs)',
   '    configured = True',
   'sys.path.insert(0, "/stackforge/project")',
@@ -159,7 +188,7 @@ async function readSource(project, sourceId, scanned, signal, runtime) {
       const filename = posix.basename(row.file);
       if (!/^[\w.-]+\.py$/.test(filename) || remaining <= 0) throw new Error();
       const text = await readMigrationFile(join(scanned.root, row.file), Math.min(remaining, 256 * 1024));
-      if (!/^def upgrade\s*\(/m.test(text) || /\bautocommit_block\s*\(/.test(text)) throw new Error();
+      if (!/^def upgrade\s*\(/m.test(text)) throw new Error();
       remaining -= Buffer.byteLength(text);
       files.set('alembic/versions/' + filename, text);
     }
@@ -214,6 +243,9 @@ export async function nativeAlembicMigration({ project, payload, target, client,
   const scope = await client.migrationScope();
   const credentials = await client.credentials();
   const session = localSession(target, credentials, client.command, signal);
+  if (history.schema + '.' + history.table === marker) throw new Error(invalidHistory);
+  const interrupted = async () => (await session.query(markerQuery + ';', target.name)).trim() === 't';
+  if (await interrupted()) throw new Error(recovery);
   const readIdentity = () => migrationDatabaseIdentity(session, target.name, history, 'alembic');
   const compare = () => compareAlembicHistory({ revisions, history, selection: target, credentials, resolveClient: async () => client,
     signal, includeFingerprint: true });
@@ -230,6 +262,7 @@ export async function nativeAlembicMigration({ project, payload, target, client,
   const { expected, range } = localPlan ?? await planAlembicDependencies({
     revisions, heads: state.heads, operation, selected, scope, image, directory, signal
   });
+  const nontransactional = range.some(({ file }) => /\bautocommit_block\s*\(/.test(source.files.get('alembic/versions/' + posix.basename(file))));
   if (operation === 'rollback' && range.some(row => !/^def downgrade\s*\(/m.test(source.files.get('alembic/versions/' + posix.basename(row.file))))) {
     throw new Error('A selected Alembic revision does not declare a downgrade.');
   }
@@ -245,16 +278,18 @@ export async function nativeAlembicMigration({ project, payload, target, client,
   const expires = mode === 'preview' ? String(Date.now() + 300000) : /^(\d{13})\.[a-f\d]{64}$/.exec(payload.planId ?? '')?.[1];
   const signature = createHmac('sha256', signingKey).update(JSON.stringify([
     expires, project.id, scanned.identity, sourceId, source.fingerprint, operation, selected,
-    target, scope.container, image, history, before, state.fingerprint, expected, reviewedRange, lock?.fingerprint
+    target, scope.container, image, history, before, state.fingerprint, expected, reviewedRange, lock?.fingerprint, nontransactional
   ])).digest('hex');
   const planId = expires + '.' + signature;
   const plan = { target, history, tool: 'Alembic', version, directory: source.directory,
     ...(source.resources.length && { resources: source.resources }),
     ...(lock && { dependencyLock: lock.path, packages: lock.packages }),
+    ...(nontransactional && { nontransactional: true }),
     fromRevision: state.heads.join(', ') || 'base', toRevision: selected, ...(crossBranch && { expectedHeads: expected }),
     migrations: range.map(({ file, revision }) => ({ file, revision })) };
   if (mode === 'preview') return { status: 'planned', planId, ...plan };
   if (!expires || Number(expires) <= Date.now() || payload.planId !== planId || payload.confirmName !== target.name) throw new Error(changed);
+  if (nontransactional && payload.acceptPartialCommit !== true) throw new Error('Confirm that you have a verified backup before running the nontransactional migration.');
   await verifyShared(target);
   const verifyInputs = async () => {
     const latest = await discoverDatabases(project, { includeMigrations: true });
@@ -265,18 +300,21 @@ export async function nativeAlembicMigration({ project, payload, target, client,
   };
   const verifyDatabase = async () => {
     await scope.verify();
+    if (await interrupted()) throw new Error(recovery);
     if (databaseKey(await readIdentity()) !== databaseKey(before) || (await compare()).fingerprint !== state.fingerprint) throw new Error(changed);
   };
   await verifyInputs();
   const application = 'stackforge_migration_' + randomBytes(12).toString('hex');
-  const files = crossBranch ? new Map([...source.files, ['reviewed-graph.json', JSON.stringify(reviewedGraph)]]) : source.files;
+  const checkRange = crossBranch || nontransactional;
+  const files = checkRange ? new Map([...source.files, ['reviewed-graph.json', JSON.stringify(reviewedGraph)]]) : source.files;
   const execute = dependencies => runMigrationContainer({ ...scope, image, args: [operation, selected], files, directory, signal,
     network: dependencies?.network, mounts: dependencies?.mounts,
     env: { SF_USER: credentials.user, SF_PASSWORD: credentials.password, SF_PORT: String(scope.port), SF_DATABASE: target.name,
       SF_APPLICATION: application, SF_SCHEMA: history.schema, SF_TABLE: history.table,
       SF_TARGET: JSON.stringify([target.name, before.startedAt, before.oid]), SF_CURRENT: JSON.stringify(state.heads), SF_EXPECTED: JSON.stringify(expected),
-      ...(crossBranch && { SF_CHECK_RANGE: '1', PYTHONHASHSEED: '0' }),
-      ...(dependencies && { SF_LOCKED_DEPENDENCIES: '1', SF_HOST: dependencies.host }) },
+      ...(checkRange && { SF_CHECK_RANGE: '1', PYTHONHASHSEED: '0' }),
+      ...(dependencies && { SF_HOST: dependencies.host }),
+      ...(lock && { SF_LOCKED_DEPENDENCIES: '1' }), ...(nontransactional && { SF_NONTRANSACTIONAL: '1' }) },
     cancel: () => scope.cancel(application),
     async verify() {
       await dependencies?.verify();
@@ -284,15 +322,16 @@ export async function nativeAlembicMigration({ project, payload, target, client,
     }
   });
   try {
-    if (lock) {
-      await withAlembicDependencyRuntime({ scope, image, directory, signal, lock, async verify() {
+    if (lock || nontransactional) {
+      await withIsolatedAlembicRuntime({ scope, image, directory, signal, lock, async verify() {
         await verifyInputs();
         await verifyShared(target);
         await verifyDatabase();
       } }, execute);
     } else await execute();
   } catch (error) {
-    if (error.name === 'AbortError' || error.message === changed) throw error;
+    if (error.name === 'AbortError' || error.message === changed || error.message === recovery) throw error;
+    if (nontransactional && await interrupted().catch(() => true)) return { status: 'execution-partial' };
     return { status: error.dependencyStatus ?? 'execution-failed' };
   }
   try {

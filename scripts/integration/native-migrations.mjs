@@ -389,7 +389,33 @@ def downgrade():
   assert.deepEqual(reverse.migrations.map(row => row.revision), ['branch_b', 'branch_a', 'root_node']);
   assert.equal((await branchRequest('execute', 'rollback', { revision: 'base', planId: reverse.planId, confirmName: branchDb })).status, 'rolled-back');
   assert.equal((await branchQuery("SELECT to_regclass('branch_a') IS NULL AND to_regclass('branch_b') IS NULL;")).trim(), 't');
-  console.log('Verified Alembic multiple heads, cross-branch dependencies, reviewed rollback, and version history.');
+  const { archive: backupTarget } = await api(branchedId + '/database-development');
+  const exported = await archive(branchedId, '', backupTarget.id);
+  if (!exported.ok) assert.fail(await exported.text());
+  const backup = Buffer.from(await exported.arrayBuffer());
+  await writeFile(dependency, dependent.replace("    op.execute('SELECT id FROM branch_a')",
+    "    with op.get_context().autocommit_block():\n        op.execute('INSERT INTO branch_b VALUES (42)')\n    raise RuntimeError('test partial commit')"));
+  const partial = await branchRequest('preview', 'apply');
+  assert.equal(partial.nontransactional, true);
+  const attempted = await branchRequest('execute', 'apply', { planId: partial.planId, confirmName: branchDb, acceptPartialCommit: true });
+  assert.equal(attempted.status, 'execution-partial');
+  assert.equal((await branchQuery('SELECT id FROM branch_b;')).trim(), '42');
+  assert.equal((await branchQuery("SELECT to_regclass('public.__stackforge_alembic_pending') IS NOT NULL;")).trim(), 't');
+  const retry = await branchRequest('preview', 'apply', {}, 409);
+  assert.match(retry.error, /requires recovery/);
+  await removeDatabase(branchedId);
+  const recovered = await database(branchedId, branchDb);
+  const { archive: restoreTarget } = await api(branchedId + '/database-development');
+  const inspection = await archive(branchedId, '/preview', restoreTarget.id, backup);
+  const approval = await inspection.json();
+  assert.equal(inspection.status, 200, approval.error);
+  const restored = await archive(branchedId, '/restore', restoreTarget.id, backup, {
+    'X-StackForge-Preview': approval.id, 'X-StackForge-Target': Buffer.from(branchDb).toString('base64')
+  });
+  assert.equal((await restored.json()).restored, true);
+  assert.equal((await recovered("SELECT to_regclass('branch_b') IS NULL AND to_regclass('public.__stackforge_alembic_pending') IS NULL;")).trim(), 't');
+  assert.equal((await recovered('SELECT count(*) FROM alembic_version;')).trim(), '0');
+  console.log('Verified Alembic multiple heads, cross-branch dependencies, partial commit protection, and archive recovery.');
 }
 
 async function testStructuredLiquibase() {
