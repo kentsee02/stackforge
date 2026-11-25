@@ -490,6 +490,30 @@ async function testStructuredLiquibase() {
   assert.equal(result.status, 'rolled-back');
   assert.equal((await structuredQuery('SELECT count(*) FROM databasechangelog;')).trim(), '0');
   assert.equal((await tableCount()).trim(), '0');
+  const filtersXml = join(structured, 'changes/filtered.xml');
+  const rootTag = '<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" ' +
+    'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' +
+    'xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">';
+  const filteredChange = '<changeSet id="filtered" author="fixture" context="stage" labels="feature">' +
+    '<preConditions onFail="HALT" onSqlOutput="TEST"><not><tableExists tableName="${selectedTable}"/></not></preConditions>' +
+    '<createTable tableName="${selectedTable}"><column name="value" type="int"/></createTable></changeSet>';
+  await writeFile(filtersXml, rootTag + filteredChange + '</databaseChangeLog>');
+  await writeFile(join(structured, 'liquibase.properties'), 'changeLogFile=changes/filtered.xml\n');
+  const filteredSource = (await api(structuredId + '/database-discovery')).migrationSources.find(item => item.adapter === 'liquibase');
+  const selected = { sourceId: filteredSource.id, contextFilter: 'stage', labelFilter: 'feature',
+    liquibaseProperties: ['selectedTable=chosen_table'] };
+  const chosen = await requestPlan('preview', 'apply', selected);
+  assert.match(chosen.sql, /CREATE TABLE (?:public\.)?chosen_table/i);
+  await requestPlan('execute', 'apply', { ...selected, liquibaseProperties: ['selectedTable=other_table'], planId: chosen.planId,
+    confirmName: structuredName }, 409);
+  assert.equal((await requestPlan('execute', 'apply', { ...selected, planId: chosen.planId, confirmName: structuredName })).status, 'applied');
+  const fails = '<changeSet id="blocked" author="fixture" context="stage" labels="feature">' +
+    '<preConditions onFail="HALT" onSqlOutput="TEST"><tableExists tableName="absent_prerequisite"/></preConditions>' +
+    '<createTable tableName="blocked_table"><column name="value" type="int"/></createTable></changeSet>';
+  await writeFile(filtersXml, rootTag + filteredChange + fails + '</databaseChangeLog>');
+  const stopped = await requestPlan('preview', 'apply', selected, 409);
+  assert.match(stopped.error, /could not verify the filtered changesets/i);
+  assert.equal((await structuredQuery("SELECT to_regclass('blocked_table') IS NULL;")).trim(), 't');
   console.log('Verified structured Liquibase JSON, YAML and XML with read-only rollback preview and native rollback.');
 }
 

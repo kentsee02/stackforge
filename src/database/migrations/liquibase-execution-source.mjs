@@ -21,6 +21,7 @@ const simpleFields = new Set([
   'defaultValue', 'defaultValueNumeric', 'defaultValueBoolean', 'defaultValueDate', 'defaultValueComputed',
   'defaultNullValue', 'remarks', 'cascadeConstraints', 'incrementBy', 'startValue', 'minValue', 'maxValue', 'cycle', 'cacheSize',
   'splitStatements', 'stripComments', 'endDelimiter', 'encoding', 'separator', 'quotchar',
+  'context', 'contexts', 'contextFilter', 'labels', 'dbms',
   'commentLineStartsWith', 'header', 'index', 'usePreparedStatements', 'onlyUpdate'
 ]);
 
@@ -29,6 +30,8 @@ const schemaLocation = /^https?:\/\/www\.liquibase\.org\/xml\/ns\/dbchangelog\s+
 const includePath = /^(?:[A-Za-z0-9_-][\w.-]*\/)*[A-Za-z0-9_-][\w.-]*\/?$/;
 const validKey = key => elements.has(key) || simpleFields.has(key);
 const resourceField = { sqlFile: 'path', loadData: 'file', loadUpdateData: 'file' };
+const xmlPreconditions = new Set(['preConditions', 'and', 'or', 'not', 'dbms', 'tableExists', 'columnExists', 'primaryKeyExists', 'indexExists',
+  'sequenceExists', 'viewExists']);
 
 function collectResource(name, fields, resources) {
   if (!Object.hasOwn(resourceField, name)) return true;
@@ -52,15 +55,17 @@ function reviewedXml(text, resources) {
     const tag = /^<([A-Za-z_][\w:.-]*)([\s\S]*)>$/.exec(token);
     if (!tag) continue;
     const [, name, rest] = tag;
-    if (!elements.has(name)) return false;
+    if (!elements.has(name) && !xmlPreconditions.has(name)) return false;
     const attributes = liquibaseXmlAttributes(rest.replace(/\/$/, ''), true);
     if (!attributes) return false;
+    if (name === 'preConditions' && (attributes.onSqlOutput !== 'TEST' ||
+        [attributes.onFail, attributes.onError].some(value => value !== undefined && value !== 'HALT'))) return false;
     if (!collectResource(name, attributes, resources)) return false;
     for (const [key, value] of Object.entries(attributes)) {
       if (name === 'databaseChangeLog' && (key === 'xmlns' && value === dbNamespace ||
           key === 'xmlns:xsi' && value === 'http://www.w3.org/2001/XMLSchema-instance' ||
           key === 'xsi:schemaLocation' && schemaLocation.test(value))) continue;
-      if (!simpleFields.has(key)) return false;
+      if (!simpleFields.has(key) && !(name === 'preConditions' && ['onSqlOutput', 'onFail', 'onError'].includes(key))) return false;
     }
   }
   return true;

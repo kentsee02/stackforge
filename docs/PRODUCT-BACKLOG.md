@@ -8,9 +8,8 @@ Complete the remaining migration coverage before starting project activity histo
 
 ### Open migration work
 
-1. **Liquibase execution filters.** Verify context and label filtering against the exact changeset range, including eligible preconditions and runtime property inputs.
-2. **Flyway runtime integration.** Cover project-managed Maven and Gradle behavior such as Java migrations and callbacks separately from the reviewed SQL locations already supported. Undo requires an eligible Flyway edition and an undo migration for live verification.
-3. **Additional Drizzle engines and layouts.** Evaluate hosted dialects and SQLite batches that require custom runtime controls. PostgreSQL, MySQL and local SQLite cover legacy journals and v1 folders.
+1. **Flyway runtime integration.** Cover project-managed Maven and Gradle behavior such as Java migrations and callbacks separately from the reviewed SQL locations already supported. Undo requires an eligible Flyway edition and an undo migration for live verification.
+2. **Additional Drizzle engines and layouts.** Evaluate hosted dialects and SQLite batches that require custom runtime controls. PostgreSQL, MySQL and local SQLite cover legacy journals and v1 folders.
 
 ### Acceptance criteria
 

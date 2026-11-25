@@ -35,6 +35,7 @@ npm run test:public-migrations -- --case=PUB-14 --case=PUB-15
 npm run test:public-migrations -- --postgres --case=PUB-02 --case=PUB-16
 npm run test:public-migrations -- --postgres --case=PUB-17
 npm run test:public-migrations -- --postgres --case=PUB-18
+npm run test:public-migrations -- --postgres --case=PUB-19
 ```
 
 ## Public repositories and expected results
@@ -59,6 +60,7 @@ npm run test:public-migrations -- --postgres --case=PUB-18
 | PUB-16 Alembic | [Invenio DB](https://github.com/inveniosoftware/invenio-db/tree/fac3e569a8cada66e924965578814484e77724f5/invenio_db/alembic) and [Invenio Records](https://github.com/inveniosoftware/invenio-records/tree/ed89fd8997e5a398c88dd869da926a0fadb2e879/invenio_records/alembic) | Import three unchanged revisions from the two packages with a test-only configuration. | Apply their dependency chain and verify that only the effective head is recorded. Check the transaction table and sequence, then downgrade and verify both objects are removed. |
 | PUB-17 Alembic | [Invenio Records table migration](https://github.com/inveniosoftware/invenio-records/blob/ed89fd8997e5a398c88dd869da926a0fadb2e879/invenio_records/alembic/862037093962_create_records_tables.py) | Import the unchanged revision and upstream prerequisites with a test lock for SQLAlchemy-Utils 0.42.1. | Reject stale bytes, a bad hash, and a lock with missing transitive packages before database writes. Apply and downgrade the original tables and verify Docker resources are cleaned up. |
 | PUB-18 Alembic | [Concurrent PostgreSQL index example](https://github.com/ionsome/alembic-asyncpg-concurrently-poc/tree/09486481681447199fea0a60cb9ce7a3c505e5be) | Import the unchanged upstream revision with a test PostgreSQL project configuration. | Require backup confirmation, apply the original autocommit block, verify the valid index and row, and confirm the downgrade removes the table. |
+| PUB-19 Liquibase | [Official contexts and labels fixture](https://github.com/liquibase/liquibase/blob/75773ed9b45b0a5adf3c42872d2e5494da669427/liquibase-integration-tests/src/test/resources/changelogs/h2/complete/simple.changelog.labels.context.xml) | Import the original XML with a test-only PostgreSQL configuration. | Select the second context and label, verify the exact history with gaps, and review and apply its rollback. |
 
 ## Adapter-specific cases
 
@@ -116,5 +118,5 @@ npm run test:public-migrations -- --postgres --case=PUB-18
 - Alembic writes cover literal `depends_on` revision IDs, listed local modules, hash-pinned PyPI wheels, and reviewed `autocommit_block` revisions on project PostgreSQL. Custom connection management and other dependency sources require the project runtime.
 - EF Core executes reviewed PostgreSQL and SQL Server exports on project-owned targets. Direct project-tool invocation and unsupported SQL constructs remain open.
 - Flyway writes cover supported standalone, Spring Boot, Maven SQL profiles and literal Gradle SQL locations on project PostgreSQL and MySQL. Java migrations, callbacks and licensed Undo remain open.
-- Liquibase writes cover supported formatted and declarative changelogs, including declared local SQL and CSV resources, with rollback by count or tag. Runtime configuration, context and label filters, and other external inputs remain open. PUB-08 covers source discovery.
+- Liquibase writes cover supported formatted and declarative changelogs, local SQL/CSV resources, context and label filters, and rollback by count or tag. Reviewed XML supports catalog preconditions with HALT behavior and literal values in eligible attributes. Arbitrary preconditions and runtime property sources require the project tool.
 - A history match verifies recorded migrations. Schema drift and data correctness need separate checks.

@@ -394,6 +394,7 @@ try {
     if (payload.adapter === 'liquibase') {
       assert.equal(payload.operation, 'rollback');
       assert.equal(payload.table, 'DATABASECHANGELOG');
+      assert.deepEqual([payload.contextFilter, payload.labelFilter, payload.liquibaseProperties], ['stage', 'feature', ['table=invoice']]);
       if (payload.rollbackTag) {
         assert.equal(payload.rollbackTag, 'release-one');
         assert.equal(payload.rollbackCount, undefined);
@@ -472,6 +473,9 @@ try {
   await liquibase.locator(':scope > form button').click();
   await liquibase.locator('.native-migration datalist option[value="release-one"]').waitFor({ state: 'attached' });
   const liquibaseNative = liquibase.locator('.native-migration');
+  await liquibaseNative.getByLabel('上下文过滤（可选）').fill('stage');
+  await liquibaseNative.getByLabel('标签过滤（可选）').fill('feature');
+  await liquibaseNative.getByLabel('以 name=value 输入字面属性，用逗号分隔').fill('table=invoice');
   await liquibaseNative.getByLabel('要回滚的变更集数量').fill('2');
   await liquibaseNative.getByRole('button', { name: '预览回滚计划' }).click();
   await contains('.liquibase-preview .native-migration pre', 'DROP TABLE invoice;');

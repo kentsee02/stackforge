@@ -25,7 +25,7 @@ const cases = [
 ];
 const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12], [2], [8]];
 const selectedCases = new Set(process.argv.filter(arg => arg.startsWith('--case=')).map(arg => arg.slice('--case='.length)));
-assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-8])$/.test(value)), 'Select a case from PUB-01 through PUB-18.');
+assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-9])$/.test(value)), 'Select a case from PUB-01 through PUB-19.');
 const selected = number => !selectedCases.size || selectedCases.has('PUB-' + String(number).padStart(2, '0'));
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-public-migrations-')));
 const repositories = new Map();
@@ -99,7 +99,7 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres', f
     const { id: sourceId } = source;
     const { id: targetId } = discovery.sqlMigrationTargets.find(item => engine === 'mysql' ? item.projectMysql : item.projectPostgres);
     const endpoint = project.id + '/database-native-migration';
-    const selection = { adapter, sourceId, targetId, operation: 'apply' };
+    const selection = { adapter, sourceId, targetId, operation: 'apply', ...dependencyFixture?.liquibaseFilters };
     const check = () => api(project.id + '/database-' + adapter + '-preview', { sourceId, targetId });
     const previewPlan = extras => api(endpoint, { ...selection, ...extras, mode: 'preview' });
     const execute = (planId, extras) => api(endpoint, { ...selection, ...extras, mode: 'execute', planId, confirmName: name });
@@ -121,6 +121,17 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres', f
     const applied = await execute(plan.planId);
     assert.equal(applied.status, 'applied');
     const after = await check();
+    if (dependencyFixture?.liquibaseFilters) {
+      assert.deepEqual(plan.migrations.map(item => item.revision), ['nvoxland:2']);
+      assert.deepEqual(after.database.items.map(item => item.state), ['pending', 'pending', 'recorded']);
+      const rollback = { ...selection, operation: 'rollback', rollbackCount: 1 };
+      const undo = await api(endpoint, { ...rollback, mode: 'preview' });
+      assert.match(undo.undo.join('\n'), /DROP TABLE (?:public\.)?company/i);
+      const reverted = await api(endpoint, { ...rollback, mode: 'execute', planId: undo.planId, confirmName: name });
+      assert.equal(reverted.status, 'rolled-back', JSON.stringify(reverted));
+      assert.deepEqual((await check()).database.items.map(item => item.state), ['pending', 'pending', 'pending']);
+      return ['context-filter', 'label-filter', 'history-with-gaps', 'reviewed-rollback'];
+    }
     assert.equal(after.database.status, 'recorded');
     assert.ok(after.database.items.every(item => item.state === (adapter === 'flyway' ? 'applied' : 'recorded')));
     if (adapter === 'liquibase' && engine === 'mysql') {
@@ -497,6 +508,24 @@ try {
     const project = await api('import', { path }, 201);
     console.log(JSON.stringify({ repository: repo, commit,
       postgres: await assertLiveMigration(api, project, 'alembic', 'postgres', undefined, { nontransactional: true }) }));
+  }
+  if (live && selected(19)) {
+    const repo = 'liquibase/liquibase';
+    const commit = '75773ed9b45b0a5adf3c42872d2e5494da669427';
+    const checkout = join(root, 'liquibase-filter-upstream');
+    await mkdir(checkout);
+    const git = args => run('git', args, { cwd: checkout, timeout: 120000, stdoutOnly: true });
+    await git(['init']);
+    await git(['fetch', '--depth=1', 'https://github.com/' + repo + '.git', commit]);
+    const path = join(root, 'liquibase-filters');
+    await mkdir(join(path, 'prisma'), { recursive: true });
+    await writeFile(join(path, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
+    await writeFile(join(path, 'liquibase.properties'), 'changeLogFile=labels.xml\n');
+    const source = 'liquibase-integration-tests/src/test/resources/changelogs/h2/complete/simple.changelog.labels.context.xml';
+    await writeFile(join(path, 'labels.xml'), await git(['show', commit + ':' + source]));
+    const project = await api('import', { path }, 201);
+    console.log(JSON.stringify({ repository: repo, commit, source, postgres: await assertLiveMigration(api, project, 'liquibase', 'postgres',
+      undefined, { liquibaseFilters: { contextFilter: 'secondContext', labelFilter: 'second' } }) }));
   }
 } finally {
   for (const id of databaseProjects) {

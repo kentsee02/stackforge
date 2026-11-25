@@ -97,8 +97,19 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   const availableTags = document.createElement('datalist');
   availableTags.id = 'rollback-tags-' + projectId + '-' + source.id;
   rollbackTag.setAttribute('list', availableTags.id);
-  if (source.adapter === 'liquibase') actions.append(labelledMigrationControl('Changesets to roll back', rollbackCount),
-    labelledMigrationControl('Rollback tag (optional)', rollbackTag), availableTags);
+  const contextFilter = document.createElement('input');
+  const labelFilter = document.createElement('input');
+  const liquibaseProperties = document.createElement('input');
+  for (const field of [contextFilter, labelFilter, liquibaseProperties]) {
+    field.maxLength = field === liquibaseProperties ? 2000 : 256;
+    field.autocomplete = 'off';
+    field.spellcheck = false;
+    field.addEventListener('input', () => reset(true));
+  }
+  if (source.adapter === 'liquibase') actions.append(
+    labelledMigrationControl('Context filter (optional)', contextFilter), labelledMigrationControl('Label filter (optional)', labelFilter),
+    labelledMigrationControl('Literal properties, comma separated as name=value', liquibaseProperties),
+    labelledMigrationControl('Changesets to roll back', rollbackCount), labelledMigrationControl('Rollback tag (optional)', rollbackTag), availableTags);
   function setRevisions(ids) {
     const previous = revision.value;
     const automatic = new Option('', '');
@@ -183,6 +194,11 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
           projectEnvironment: true, runtimeFiles: runtimeFiles.value.split(',').map(file => file.trim()).filter(Boolean)
         }),
         ...(source.adapter === 'alembic' && lockFile && { dependencyLock: lockFile }),
+        ...(source.adapter === 'liquibase' && {
+          ...(contextFilter.value.trim() && { contextFilter: contextFilter.value.trim() }),
+          ...(labelFilter.value.trim() && { labelFilter: labelFilter.value.trim() }),
+          ...(liquibaseProperties.value.trim() && { liquibaseProperties: liquibaseProperties.value.split(',').map(value => value.trim()) })
+        }),
         ...(source.adapter === 'liquibase' && operation === 'rollback' && (tag ? { rollbackTag: tag } : { rollbackCount: Number(rollbackCount.value) })) };
       const result = await send('preview', operation, targetSelection);
       plan = { operation, targetSelection, ...result };

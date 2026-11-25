@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.56.0 Liquibase execution filters
+
+- Preview context and label selections with the pinned tool and verify the exact recorded changesets, including non-prefix histories.
+- Support reviewed XML preconditions that test read-only catalog state and literal properties in supported XML attributes.
+- Exercise the original Liquibase context and label fixture on project PostgreSQL.
+
 ## v0.55.0 Alembic nontransactional revisions
 
 - Review revisions containing Alembic autocommit blocks and require backup confirmation.
