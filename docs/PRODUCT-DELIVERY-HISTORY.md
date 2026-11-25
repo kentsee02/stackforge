@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.58.0 Drizzle SQLite table rebuilds and Turso preview
+
+- Review a single pending SQLite file with Drizzle's generated table rebuild, compare copied row counts, and check foreign keys before committing the schema and history together.
+- Preview migration files from static Turso configurations on import and clone. The preview uses the local journal or folder and leaves database history unverified.
+- Exercise the original SQLite rebuild from `elizaos.github.io` and eleven original Turso migration files from `peerly`.
+
 ## v0.57.0 Flyway compiled Java migrations and callbacks
 
 - Review versioned Flyway classes and Java callbacks from an explicitly selected Maven or Gradle classes directory.

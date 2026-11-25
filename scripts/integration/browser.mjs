@@ -562,14 +562,17 @@ try {
   const drizzlePanel = page.locator('.drizzle-preview');
   const drizzleState = { variable: 'POSTGRES_URL', target: ownedTarget, history: 'drizzle.__drizzle_migrations',
     rollbackTargets: [null], migrations: [{ state: 'applied', file: 'drizzle/0000_create.sql' }] };
-  let drizzleMysqlStatus, drizzleSqlite;
+  let drizzleMysqlStatus, drizzleSqlite, drizzleHosted;
   await page.route('**/api/projects/' + cloned.id + '/database-drizzle-preview', route => {
     const selection = route.request().postDataJSON();
+    if (drizzleHosted) return route.fulfill({ json: { engine: 'turso', status: 'hosted-preview', variable: 'TURSO_DATABASE_URL',
+      migrations: [{ state: 'unverified', file: 'drizzle/0000_create.sql' }] } });
     if (drizzleSqlite) {
       const selected = selection.databaseFile;
       return route.fulfill({ json: { engine: 'sqlite', chooseFile: true,
         status: selected ? 'pending' : 'configuration-needed',
-        ...(selected && { target: { path: selected, name: 'app.sqlite' }, planId: 'sqlite-plan', reviewSql: 'CREATE TABLE notes (id INTEGER);' }) } });
+        ...(selected && { target: { path: selected, name: 'app.sqlite' }, rebuild: true, planId: 'sqlite-plan',
+          reviewSql: 'CREATE TABLE __new_notes (id INTEGER);' }) } });
     }
     if (drizzleMysqlStatus) return route.fulfill({ json: {
       engine: 'mysql', status: drizzleMysqlStatus, variable: 'DRIZZLE_DATABASE_URL',
@@ -614,15 +617,21 @@ try {
   await contains('.drizzle-preview [role="status"]', 'Choose a SQLite database file inside the project');
   await drizzlePanel.getByLabel('SQLite file path inside the project').fill('data/app.sqlite');
   await drizzlePanel.getByRole('button', { name: 'Check again' }).click();
-  await contains('.drizzle-preview form', 'Back up the SQLite file before applying');
+  await contains('.drizzle-preview form', 'checks copied row counts and foreign keys');
   assert.equal(await drizzlePanel.getByRole('button', { name: 'Apply Drizzle migrations' }).isDisabled(), true);
   await drizzlePanel.getByLabel('Type the target database name to confirm.').fill('app.sqlite');
   assert.equal(await drizzlePanel.getByRole('button', { name: 'Apply Drizzle migrations' }).isEnabled(), true);
   await page.locator('#language').selectOption('zh-CN');
-  await contains('.drizzle-preview form', '应用前请备份 SQLite 文件');
+  await contains('.drizzle-preview form', '验证复制的行数和外键');
   await drizzlePanel.getByLabel('项目内的 SQLite 文件路径').fill('other.sqlite');
   assert.equal(await drizzlePanel.locator('form').isVisible(), false);
+  drizzleHosted = true;
+  await drizzlePanel.getByRole('button', { name: '重新检测' }).click();
+  await contains('.drizzle-preview [role="status"]', '可以预览 Turso 的迁移文件');
+  assert.equal(await drizzlePanel.getByLabel('项目内的 SQLite 文件路径').isVisible(), false);
+  assert.equal(await drizzlePanel.locator('form').isVisible(), false);
   await page.locator('#language').selectOption('en');
+  await contains('.drizzle-preview [role="status"]', 'Turso migration files are available for preview');
   const startup = page.locator('#project-startup');
   if (await startup.getAttribute('open') === null) await startup.locator('summary').click();
   await page.locator('#project-startup-add').click();

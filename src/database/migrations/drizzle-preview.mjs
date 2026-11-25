@@ -14,6 +14,7 @@ const maxEntries = 200;
 const localHosts = ['127.0.0.1', '::1', 'localhost'];
 const invalid = 'Choose a detected Drizzle migration configuration.';
 const changed = 'The Drizzle migration preview changed. Check again before applying.';
+const hostedPreview = 'Turso migration files are available for preview. Use the project runtime to verify or change hosted migration history.';
 const badRollback = 'Choose a verified project PostgreSQL database, a prior Drizzle revision, and a supported rollback SQL file inside the project.';
 const signingKey = randomBytes(32);
 
@@ -27,7 +28,7 @@ async function migrationFiles(folder, { out, engine }, signal) {
   }
   if ((await readdir(directory)).some(name => /^\d{14}_/.test(name))) throw new Error();
   const journal = JSON.parse(text);
-  const dialect = engine ?? 'postgresql';
+  const dialect = engine === 'turso' ? 'sqlite' : engine ?? 'postgresql';
   const journalVersions = { mysql: ['5', '7'], sqlite: ['5', '6', '7'], postgresql: ['7'] }[dialect];
   const entryVersions = { mysql: ['5'], sqlite: ['5', '6'], postgresql: ['7'] }[dialect];
   if (!journalVersions.includes(journal.version) || journal.dialect !== dialect ||
@@ -187,6 +188,7 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   const requirement = requirements.find(item => item.id === requirementId && item.migrationAdapter === 'drizzle');
   if (!requirement) throw new Error(invalid);
   const config = connections.get(requirement.id);
+  if (config.engine === 'turso' && (approval || rollback)) throw new Error(hostedPreview);
   const { source, directory, environmentVariable: variable } = requirement;
   const location = directory === '.' ? '' : directory + '/';
   const result = { source, variable, ...(config.engine ? { engine: config.engine, history: config.historyTable } :
@@ -203,6 +205,7 @@ export async function previewDrizzle({ project, requirementId, command, resolveC
   const named = format === 'v1';
   result.format = format;
   result.migrations = files.map(({ file }) => ({ file: location + file, state: 'unverified' }));
+  if (config.engine === 'turso') return respond('hosted-preview');
   if (config.environmentConflict) return respond('environment-conflict', { sources: config.environmentSources });
   if (config.engine === 'sqlite') return previewSqliteDrizzle({ project, identity, config, requirement, databaseFile, approval,
     rollback, migration, readFiles, respond, signal, verifyTarget });

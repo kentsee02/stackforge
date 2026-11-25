@@ -1,6 +1,7 @@
 import * as sqlite from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { sqliteFileState } from '../adapters/sqlite-file.mjs';
+import { drizzleSqliteRebuild } from './drizzle-sqlite-rebuild.mjs';
 
 const supported = [
   'CREATE_INDEX', 'CREATE_TABLE', 'CREATE_TRIGGER', 'CREATE_VIEW', 'DELETE', 'DROP_INDEX', 'DROP_TABLE', 'DROP_TRIGGER',
@@ -31,17 +32,21 @@ function history(db, table, named) {
   return { layout, populated, rows };
 }
 
-function migrate(db, table, named, pending) {
+function migrate(db, table, named, pending, rebuild) {
   const constants = sqlite.constants;
   const relation = 'main."' + table + '"';
   const record = db.prepare(`INSERT INTO ${relation} (hash, created_at${named ? ', name, applied_at' : ''})
     VALUES (?, ?${named ? ', ?, ?' : ''})`);
   const ledger = table.toLowerCase();
+  let renamesTable = false;
   const authorizer = (action, first, second, schema) => {
     const a = first?.toLowerCase();
     const b = second?.toLowerCase();
     const blocked = constants.SQLITE_DENY;
     const ok = constants.SQLITE_OK;
+    // SQLite updates its own temp catalog while renaming tables, even on a fresh connection.
+    if (renamesTable && schema === 'temp' && a === 'sqlite_temp_master' &&
+        (action === constants.SQLITE_READ || action === constants.SQLITE_UPDATE)) return ok;
     if (schema && schema !== 'main' || a === ledger || action === constants.SQLITE_ALTER_TABLE && b === ledger) return blocked;
     if (action === constants.SQLITE_CREATE_VTABLE || action === constants.SQLITE_DROP_VTABLE) return b === 'fts5' ? ok : blocked;
     if (action === constants.SQLITE_PRAGMA) {
@@ -53,7 +58,20 @@ function migrate(db, table, named, pending) {
   };
   for (const file of pending) {
     db.setAuthorizer(authorizer);
-    try { db.exec(file.sql); }
+    try {
+      if (rebuild) {
+        for (const item of rebuild) {
+          renamesTable = Boolean(item.renamesTable);
+          if (item.count) {
+            const count = name => db.prepare('SELECT count(*) AS total FROM main."' + name + '"').get().total;
+            if (count(item.count[0]) !== count(item.count[1])) throw new Error('Rebuild changed the number of rows');
+          }
+          const statement = db.prepare(item.sql);
+          if (statement.sourceSQL.trim() !== item.sql.trim()) throw new Error('Expected one rebuild statement');
+          statement.run();
+        }
+      } else db.exec(file.sql);
+    }
     finally { db.setAuthorizer(null); }
     record.run(file.hash, file.when, ...(named ? [file.tag, new Date().toISOString()] : []));
   }
@@ -78,7 +96,8 @@ try {
   db = new sqlite.DatabaseSync(file, { readOnly: !writing, allowExtension: false, enableDoubleQuotedStringLiterals: true });
   db.enableDefensive?.(true);
   db.exec('PRAGMA trusted_schema=OFF; PRAGMA busy_timeout=1500;');
-  if (writing) db.exec('PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;');
+  const rebuild = writing && pending.length === 1 && drizzleSqliteRebuild(pending[0].sql);
+  if (writing) db.exec('PRAGMA foreign_keys=' + (rebuild ? 'OFF' : 'ON') + '; BEGIN IMMEDIATE;');
   else db.exec('BEGIN;');
   const current = checkFile();
   if (!staged && (current.identity !== initial.identity || current.revision !== initial.revision)) throw invalid();
@@ -87,11 +106,12 @@ try {
     if (JSON.stringify(state) !== JSON.stringify(expected)) throw invalid();
     if (state.layout === 'absent') db.exec(`CREATE TABLE main."${table}" (id INTEGER PRIMARY KEY,
       hash TEXT NOT NULL, created_at NUMERIC${named ? ', name TEXT, applied_at TEXT' : ''});`);
-    migrate(db, table, named, pending);
+    migrate(db, table, named, pending, rebuild);
     const expectedRows = [...state.rows, ...pending.map(item => [String(item.when), item.hash, ...(named ? [item.tag] : [])])];
     const after = history(db, table, named);
+    if (db.prepare('PRAGMA main.foreign_key_check').get()) throw new Error('SQLITE_DRIZZLE_FOREIGN_KEYS');
     if (after.layout !== (named ? 'v1' : 'legacy') || JSON.stringify(after.rows) !== JSON.stringify(expectedRows) ||
-        db.prepare('PRAGMA main.foreign_key_check').get() || checkFile().identity !== current.identity) throw invalid();
+        checkFile().identity !== current.identity) throw invalid();
   } else {
     const after = checkFile();
     if (after.identity !== current.identity || after.revision !== current.revision) throw invalid();
@@ -100,8 +120,8 @@ try {
   process.stdout.write(JSON.stringify({ state, canWrite }));
 } catch (error) {
   const status = /locked|busy/i.test(error.message) ? 'SQLITE_DRIZZLE_LOCKED' :
-    error.message === 'SQLITE_DRIZZLE_CHANGED' ? error.message :
-      /authorization denied|not authorized/i.test(error.message) ? 'SQLITE_DRIZZLE_UNSUPPORTED' : 'SQLITE_DRIZZLE_FAILED';
+    ['SQLITE_DRIZZLE_CHANGED', 'SQLITE_DRIZZLE_FOREIGN_KEYS'].includes(error.message) ? error.message :
+      /authorization denied|not authorized|access to .* is prohibited/i.test(error.message) ? 'SQLITE_DRIZZLE_UNSUPPORTED' : 'SQLITE_DRIZZLE_FAILED';
   process.stderr.write(status);
   process.exitCode = 1;
 } finally { db?.close(); }

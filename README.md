@@ -82,6 +82,8 @@ Stop the project, review the SQL files, and type the database name to apply an e
 
 SQLite apply requires Node.js 24.10 or later. It writes schema, data and history in one transaction. Enter the SQLite filename to confirm. Use the SQLite backup and restore workflow to recover a previous state.
 
+StackForge can review a generated SQLite table rebuild when it is the sole pending migration. It compares copied row counts and checks foreign keys before committing. For Turso it lists local migration files with unverified history. Verify or change the hosted database using the project's Turso runtime.
+
 **Preview Alembic migrations** lists revisions and branch heads from a standard `alembic.ini` layout, including nested Python services. Check history on a project-owned PostgreSQL database or a saved direct loopback URL. For a project-owned database, review and confirm an upgrade or downgrade. Plans for literal cross-branch `depends_on` show the affected revisions and the heads that should be recorded after execution.
 
 If the migration imports additional Python packages, enter a project-relative **Dependency lock file**. Use one exact version and at least one SHA-256 wheel hash per package, including any transitive packages the runtime still needs. For example, this lock entry selects the public SQLAlchemy-Utils wheel used by the Invenio integration test.

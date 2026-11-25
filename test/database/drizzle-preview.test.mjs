@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { discoverDatabases } from '../../src/database/discovery.mjs';
 import { drizzleConfig } from '../../src/database/migrations/drizzle-config.mjs';
+import { drizzleSqliteRebuild } from '../../src/database/migrations/drizzle-sqlite-rebuild.mjs';
 import { previewDrizzle } from '../../src/database/migrations/drizzle-preview.mjs';
 import { drizzleStatements } from '../../src/database/migrations/drizzle-sql.mjs';
 
@@ -56,9 +57,10 @@ test('Drizzle configuration accepts a static PostgreSQL target and rejects ambig
   assert.deepEqual(await detect(config), { file: 'drizzle.config.ts', variable: 'STACKFORGE_DRIZZLE_TEST_URL',
     out: 'lib/migrations', historySchema: 'drizzle', historyTable: '__drizzle_migrations' });
   assert.equal((await detect(config.replace('postgresql', 'sqlite'))).engine, 'sqlite');
+  assert.equal((await detect(config.replace('postgresql', 'turso'))).engine, 'turso');
   for (const input of [
     config.replace('./lib/migrations', '../outside'),
-    config.replace('postgresql', 'turso'),
+    config.replace('postgresql', 'cockroach'),
     config.replace('out:', '...overrides, out:'),
     config.replace('out:', 'dialect: "postgresql", out:'),
     config.replace('out:', 'driver: "pglite", out:'),
@@ -68,6 +70,26 @@ test('Drizzle configuration accepts a static PostgreSQL target and rejects ambig
     'runProjectCode();\n' + config
   ]) assert.equal(await detect(input), undefined);
   assert.equal(await detect(config, ['drizzle.config.ts', 'drizzle.config.js']), undefined);
+});
+
+test('Drizzle SQLite permits only a matched table copy inside the foreign key controls', () => {
+  const plan = [
+    'PRAGMA foreign_keys=OFF;',
+    'CREATE TABLE __new_notes (id integer, value text);',
+    'INSERT INTO __new_notes (id, value) SELECT id, value FROM notes;',
+    'DROP TABLE notes;',
+    'ALTER TABLE __new_notes RENAME TO notes;',
+    'PRAGMA foreign_keys=ON;'
+  ];
+  const batches = statements => drizzleSqliteRebuild(statements.join('--> statement-breakpoint\n'));
+  assert.deepEqual(batches(plan)[2].count, ['notes', '__new_notes']);
+  for (const changed of [
+    plan.slice(0, -1),
+    [...plan.slice(1, -1), plan[0], plan.at(-1)],
+    [...plan.slice(0, 2), plan[2].replace('SELECT id, value', 'SELECT value, id'), ...plan.slice(3)],
+    [...plan.slice(0, 3), 'DROP TABLE people;', ...plan.slice(4)],
+    [...plan, 'ATTACH DATABASE \'another.db\' AS another;']
+  ]) assert.equal(batches(changed), undefined);
 });
 
 test('Drizzle preview stops before connecting on missing or conflicting configuration and invalid journals', async t => {

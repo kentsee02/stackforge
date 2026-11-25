@@ -252,14 +252,16 @@ export async function discoverDatabases(project, { includeConnections = false, i
       const drizzle = await drizzleConfig(folder, files, projectText);
       if (drizzle) {
         const { file, variable } = drizzle;
-        const defined = variable ? environmentEntries.filter(([name, values]) => !name.endsWith('.env.example') && Object.hasOwn(values, variable))
+        const hosted = drizzle.engine === 'turso';
+        const defined = variable && !hosted ? environmentEntries.filter(([name, values]) => !name.endsWith('.env.example') && Object.hasOwn(values, variable))
           .map(([name, values]) => [name, values[variable]]) : [];
-        if (variable && Object.hasOwn(process.env, variable)) defined.push(['Process environment', process.env[variable]]);
+        if (!hosted && variable && Object.hasOwn(process.env, variable)) defined.push(['Process environment', process.env[variable]]);
         const environmentConflict = new Set(defined.map(([, value]) => value)).size > 1 ||
-          Boolean(variable && process.env.DOTENV_CONFIG_PATH);
+          Boolean(!hosted && variable && process.env.DOTENV_CONFIG_PATH);
         const value = drizzle.sqliteFile ?? defined[0]?.[1];
-        const engine = drizzle.engine ?? 'postgres';
-        const parsed = engine === 'sqlite' ? { engine, ...(value && { path: value.replace(/^file:/i, '') }),
+        const engine = hosted ? 'sqlite' : drizzle.engine ?? 'postgres';
+        const parsed = hosted ? { engine, variant: 'turso', status: 'declared' } :
+          engine === 'sqlite' ? { engine, ...(value && { path: value.replace(/^file:/i, '') }),
           status: value ? 'configured' : 'missing' } : connection(value, engine);
         const state = environmentConflict || parsed.engine !== engine ? { engine, status: 'ambiguous' } : parsed;
         const id = add(directory, file, variable, { ...state, orm: 'Drizzle',

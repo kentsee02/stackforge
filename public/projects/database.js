@@ -226,7 +226,7 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
         const status = verification === 'connected' ? 'Connection previously verified' : verification === 'missing' ? 'Database is missing' :
           item.status === 'missing' && item.environmentVariable ? missingVariable :
             discoveryStates[item.status] ?? 'Declared dependency';
-        row.append([discoveredEngines[item.engine], item.source, target].filter(Boolean).join(' · '), ' · ');
+        row.append([item.variant === 'turso' ? 'Turso' : discoveredEngines[item.engine], item.source, target].filter(Boolean).join(' · '), ' · ');
         const label = document.createElement('span');
         setText(label, status);
         row.append(label);

@@ -37,6 +37,7 @@ npm run test:public-migrations -- --postgres --case=PUB-17
 npm run test:public-migrations -- --postgres --case=PUB-18
 npm run test:public-migrations -- --postgres --case=PUB-19
 npm run test:public-migrations -- --postgres --case=PUB-20
+npm run test:public-migrations -- --case=PUB-21 --case=PUB-22
 ```
 
 ## Public repositories and expected results
@@ -63,6 +64,8 @@ npm run test:public-migrations -- --postgres --case=PUB-20
 | PUB-18 Alembic | [Concurrent PostgreSQL index example](https://github.com/ionsome/alembic-asyncpg-concurrently-poc/tree/09486481681447199fea0a60cb9ce7a3c505e5be) | Import the unchanged upstream revision with a test PostgreSQL project configuration. | Require backup confirmation, apply the original autocommit block, verify the valid index and row, and confirm the downgrade removes the table. |
 | PUB-19 Liquibase | [Official contexts and labels fixture](https://github.com/liquibase/liquibase/blob/75773ed9b45b0a5adf3c42872d2e5494da669427/liquibase-integration-tests/src/test/resources/changelogs/h2/complete/simple.changelog.labels.context.xml) | Import the original XML with a test-only PostgreSQL configuration. | Select the second context and label, verify the exact history with gaps, and review and apply its rollback. |
 | PUB-20 Flyway | [alist-tvbox Java migration](https://github.com/power721/alist-tvbox/blob/9485146ef42ca18a336e21416cd51a27f79133ae/src/main/java/db/migration/current/V19__LiveFollow.java) | Compile the original revision at Java 21 and test class output layouts for Maven and Gradle. | Reject a changed class after approval, then run the original JDBC migration and test-only SQL and Java callbacks. Verify PostgreSQL objects and SQL/JDBC history rows. |
+| PUB-21 Drizzle | [elizaos.github.io SQLite table rebuild](https://github.com/elizaOS/elizaos.github.io/blob/838529c24739284153d6c399467a9dc9cc067e9b/drizzle/0003_rapid_kree.sql) | Import the original config and four SQL files. Seed the first three revisions and their hashes in a disposable SQLite file. | Require Node.js 24.10+. Run the original fourth migration. An orphan foreign key must roll back the whole batch. After correcting it, verify the copied row, referencing child, indexes and four recorded migrations. |
+| PUB-22 Drizzle | [peerly Turso journal](https://github.com/aryanbatras/peerly/tree/a08eacfcdcb76c4c1e3f90a1e9c0417162a66255/drizzle) | Import and clone the unmodified project. Detect Turso and list its eleven original migration files with unverified history. | Set placeholder test credentials in the temporary clone, verify that neither value is returned, and reject write approval and local file overrides. |
 
 ## Adapter-specific cases
 
@@ -83,6 +86,8 @@ npm run test:public-migrations -- --postgres --case=PUB-20
 | DRZ-13 | SQLite file identity, unsafe SQL and recovery | Reject stale SQL, a same-path replacement, hard links, a locked file and a target shared with another registered project. Roll back DDL and history on denied or invalid SQL. Preserve WAL data and recognize restored history. | `test`, Node.js 24.10+ |
 | DRZ-14 | SQLite migration panel in English and Chinese | Show the target input only when needed. Require an exact filename and clear approval when the selected file changes. | `test:browser` |
 | DRZ-15 | SQLite preview on Windows with Node.js 22.12 | Read both real repository layouts when Windows pathname stats omit the volume identifier. Report pending migrations without offering a write approval. | PUB-14 and PUB-15 on Windows with Node.js 22.12 |
+| DRZ-16 | SQLite table rebuild | Review the generated copy, drop and rename sequence. Reject mismatched columns, unrelated database commands and missing or misplaced foreign key controls. Preserve data and history when validation fails. | `test`, PUB-21, `test:browser` |
+| DRZ-17 | Turso source-only preview | Identify the declared dialect, list local files, hide local file selection and write controls, and localize the hosted preview status. | PUB-22, `test:browser` |
 | ALE-01 | Linear, branching, merging, incomplete and dynamic Python revisions | Verify literal DAGs and flag unresolved, duplicate or linked sources. | `test` |
 | ALE-02 | Default or customized PostgreSQL version table | Compare the selected table. Report missing, restricted, conflicting or replaced targets. | `test:development-postgres`, `test:database-integration` |
 | ALE-03 | Upgrade a public sequence to a known revision; downgrade and replay | After each operation, recorded heads match the selected target. | `test:public-migrations -- --postgres` |
@@ -116,7 +121,7 @@ npm run test:public-migrations -- --postgres --case=PUB-20
 
 ## Remaining coverage
 
-- Drizzle writes cover legacy and v1 PostgreSQL, MySQL, and local SQLite layouts. SQLite requires Node.js 24.10+ for writes. Hosted dialects and SQLite batches that change connection settings, attach databases, or require unsupported virtual table modules remain open. MySQL and SQLite support archive recovery. Legacy-to-v1 history upgrades run upstream.
+- Drizzle writes cover legacy and v1 PostgreSQL, MySQL, and local SQLite layouts. SQLite requires Node.js 24.10+ for writes. The generated table rebuild is eligible when it is the single pending file. Use the project runtime for arbitrary connection settings, attached databases, unsupported virtual table modules and Turso history or writes. MySQL and SQLite support archive recovery. Legacy-to-v1 history upgrades run upstream.
 - Alembic writes cover literal `depends_on` revision IDs, listed local modules, hash-pinned PyPI wheels, and reviewed `autocommit_block` revisions on project PostgreSQL. Custom connection management and other dependency sources require the project runtime.
 - EF Core executes reviewed PostgreSQL and SQL Server exports on project-owned targets. Direct project-tool invocation and unsupported SQL constructs remain open.
 - Flyway writes cover supported SQL locations, migration SQL callbacks and selected classpath packages containing compiled versioned Java migrations or Java callbacks. PUB-20 requires Java 21 for compiling the original test revision. Live licensed Undo remains open.

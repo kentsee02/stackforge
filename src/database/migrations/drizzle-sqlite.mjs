@@ -6,6 +6,7 @@ import { sqliteTarget } from '../adapters/sqlite.mjs';
 import { discoverDatabases } from '../discovery.mjs';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { run, throwIfCancelled } from '../../platform/process.mjs';
+import { drizzleSqliteRebuild, hasSqliteForeignKeyControl } from './drizzle-sqlite-rebuild.mjs';
 
 const worker = fileURLToPath(new URL('./drizzle-sqlite-worker.mjs', import.meta.url));
 const signingKey = randomBytes(32);
@@ -20,7 +21,7 @@ async function native(action, file, input, signal) {
     return JSON.parse(result);
   } catch (error) {
     if (error.name === 'AbortError') throw error;
-    const match = /SQLITE_DRIZZLE_(CHANGED|LOCKED|UNSUPPORTED|FAILED)/.exec(error.message);
+    const match = /SQLITE_DRIZZLE_(CHANGED|LOCKED|UNSUPPORTED|FOREIGN_KEYS|FAILED)/.exec(error.message);
     return { error: match?.[1] ?? 'FAILED' };
   }
 }
@@ -77,8 +78,10 @@ export async function previewSqliteDrizzle({ project, identity, config, requirem
     return respond('current', fields);
   }
   if (!info.canWrite) return respond('sqlite-runtime', fields);
+  const controls = pending.some(file => hasSqliteForeignKeyControl(file.sql));
+  const rebuild = controls && pending.length === 1 && Boolean(drizzleSqliteRebuild(pending[0].sql));
   const reviewSql = pending.map(file => '-- ' + pathOf(file) + '\n' + file.sql).join('\n\n');
-  if (Buffer.byteLength(reviewSql) > 256 * 1024 || !target.main && !target.writable) {
+  if (controls && !rebuild || Buffer.byteLength(reviewSql) > 256 * 1024 || !target.main && !target.writable) {
     if (approval) throw new Error(changed);
     return respond('pending', { ...fields, applyBlocked: true });
   }
@@ -87,7 +90,7 @@ export async function previewSqliteDrizzle({ project, identity, config, requirem
   const planId = expires + '.' + createHmac('sha256', signingKey).update(JSON.stringify([
     expires, project.id, identity, requirement.id, config.out, table, path, original, state, filesKey(migration)
   ])).digest('hex');
-  if (!approval) return respond('pending', { ...fields, reviewSql, planId });
+  if (!approval) return respond('pending', { ...fields, reviewSql, planId, ...(rebuild && { rebuild: true }) });
   if (!expires || Number(expires) <= Date.now() || approval.planId !== planId || approval.confirmName !== fields.target.name) throw new Error(changed);
   await verifyTarget({ engine: 'sqlite', file: target.file });
   const latest = await discoverDatabases(project, { includeConnections: true });
@@ -120,7 +123,8 @@ export async function previewSqliteDrizzle({ project, identity, config, requirem
     } finally { await rm(staging, { recursive: true, force: true }); }
   }
   if (result.error === 'CHANGED') throw new Error(changed);
-  if (result.error) return respond(({ LOCKED: 'sqlite-locked', UNSUPPORTED: 'sqlite-sql-blocked' })[result.error] ?? 'apply-failed', fields);
+  if (result.error) return respond(({ LOCKED: 'sqlite-locked', UNSUPPORTED: 'sqlite-sql-blocked',
+    FOREIGN_KEYS: 'sqlite-foreign-keys' })[result.error] ?? 'apply-failed', fields);
   const appliedTarget = await checkTarget().catch(() => undefined);
   if (!appliedTarget || target.main && appliedTarget.fileIdentity !== original.identity) return respond('apply-unverified', fields);
   const after = await native('preview', target.file, { table, named, original: fileVersion(appliedTarget) }, signal);

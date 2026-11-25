@@ -8,8 +8,7 @@ Complete the remaining migration coverage before starting project activity histo
 
 ### Open migration work
 
-1. **Additional Drizzle engines and layouts.** Evaluate hosted dialects and SQLite batches that require custom runtime controls. PostgreSQL, MySQL and local SQLite cover legacy journals and v1 folders.
-2. **Flyway licensed Undo verification.** Reviewed Java migrations from compiled Maven and Gradle outputs and SQL/Java callbacks are supported. Live Undo coverage requires an authorized Flyway Teams or Enterprise license and a matching undo migration.
+- **Flyway licensed Undo.** StackForge can list `U` migration files. Native Undo still needs a licensed runtime and end-to-end verification. With an authorized Flyway Teams or Enterprise license and a matching versioned undo migration, verify native preview, exact rollback range, resulting schema and retained history on a disposable project database before enabling writes.
 
 ### Acceptance criteria
 
@@ -33,6 +32,7 @@ Complete the remaining migration coverage before starting project activity histo
 - **Additional local database operations.** Evaluate backup, restore and lifecycle coverage individually for MongoDB, Redis and SQL Server. Project SQL Server currently supports container lifecycle and reviewed EF Core migration.
 - **Native PostgreSQL and MySQL provisioning.** Evaluate setup on supported operating systems using their service and permissions model.
 - **Cloud database lifecycle.** Evaluate provider-specific creation, lifecycle and deletion with separate provider permissions.
+- **Additional hosted Drizzle dialects.** Turso has source preview. Evaluate provider authentication, target identity, history verification and recovery separately before enabling writes. Validate CockroachDB, SingleStore and SQL Server against their own dialects.
 
 ## Completed foundations
 

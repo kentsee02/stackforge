@@ -52,8 +52,13 @@ const sqliteStatuses = {
   'sqlite-locked': 'The SQLite database is locked. Stop the writer or retry.',
   'sqlite-runtime': 'Use Node.js 24.10 or later to apply SQLite migrations in StackForge.',
   'sqlite-sql-blocked': 'SQLite rolled back the batch because it contains unsupported migration commands.',
+  'sqlite-foreign-keys': 'SQLite rolled back the migration because the resulting data failed its foreign key check.',
   'apply-failed': 'Could not apply the SQLite migrations. The batch was rolled back.',
   'apply-unverified': 'SQLite changes ran, but the resulting migration history could not be verified.'
+};
+const tursoStatuses = {
+  'files-unavailable': 'The Turso Drizzle journal or one of its SQL files could not be verified.',
+  'hosted-preview': 'Turso migration files are available for preview. Use the project runtime to verify or change hosted migration history.'
 };
 
 export function drizzlePreview(projectId, requirement, { request, post }) {
@@ -161,7 +166,8 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
       databaseChoice.hidden = !result.chooseFile;
       const mysql = result.engine === 'mysql';
       const sqlite = result.engine === 'sqlite';
-      setText(status, [(sqlite && sqliteStatuses[result.status]) || (mysql && mysqlStatuses[result.status]) || statuses[result.status], result.sources?.join(', '),
+      const engineStatuses = { mysql: mysqlStatuses, sqlite: sqliteStatuses, turso: tursoStatuses }[result.engine];
+      setText(status, [engineStatuses?.[result.status] || statuses[result.status], result.sources?.join(', '),
         result.applyBlocked && 'This batch contains SQL outside the supported migration commands for this database.']);
       files.replaceChildren();
       for (const migration of result.migrations ?? []) {
@@ -185,8 +191,9 @@ export function drizzlePreview(projectId, requirement, { request, post }) {
         plan = { id: result.planId, name: endpoint.name, selection };
         review.hidden = risk.hidden = !result.reviewSql;
         review.textContent = result.reviewSql ?? '';
-        setText(risk, mysql ? 'Back up the database before applying. MySQL schema changes can commit even when a later statement fails.' : sqlite ?
-          'Back up the SQLite file before applying. If the selected file is missing, StackForge will create it.' :
+        setText(risk, mysql ? 'Back up the database before applying. MySQL schema changes can commit even when a later statement fails.' :
+          result.rebuild ? 'Back up the SQLite file before applying. StackForge checks copied row counts and foreign keys before committing the table rebuild.' :
+          sqlite ? 'Back up the SQLite file before applying. If the selected file is missing, StackForge will create it.' :
           'Review the full SQL and back up this project database. The migration may change or remove existing data.');
         range.hidden = !result.toRevision;
         range.textContent = result.toRevision ? result.fromRevision + ' → ' + result.toRevision : '';

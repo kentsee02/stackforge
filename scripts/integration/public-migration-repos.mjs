@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,11 +21,12 @@ const cases = [
   { repo: 'h3yzack/springboot3-liquibase-example', commit: 'baa98678824b59476bf09805ac516e4aa8729916', adapter: 'liquibase', live: true },
   { repo: 'jhipster/jhipster-sample-app', commit: '6b000b5d23a36c45e01472471b84a44fa2464044', adapter: 'liquibase' },
   { repo: 'talenteddeveloper/spring-boot-flyway-demo', commit: '77403a2a10af102452b6f026bf6473021decbf99', adapter: 'flyway', number: 10 },
-  { repo: 'arjunemirchandani/electron-db', commit: '43be51f7a44f23e05f481b3745f44cfe6fdea38c', adapter: 'drizzle', number: 14, sqlite: true }
+  { repo: 'arjunemirchandani/electron-db', commit: '43be51f7a44f23e05f481b3745f44cfe6fdea38c', adapter: 'drizzle', number: 14, sqlite: true },
+  { repo: 'aryanbatras/peerly', commit: 'a08eacfcdcb76c4c1e3f90a1e9c0417162a66255', adapter: 'drizzle', number: 22, hosted: true }
 ];
-const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12], [2], [8]];
+const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12], [2], [8], [11]];
 const selectedCases = new Set(process.argv.filter(arg => arg.startsWith('--case=')).map(arg => arg.slice('--case='.length)));
-assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-9]|20)$/.test(value)), 'Select a case from PUB-01 through PUB-20.');
+assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-9]|2[0-2])$/.test(value)), 'Select a case from PUB-01 through PUB-22.');
 const selected = number => !selectedCases.size || selectedCases.has('PUB-' + String(number).padStart(2, '0'));
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-public-migrations-')));
 const repositories = new Map();
@@ -298,13 +299,20 @@ async function assertEfCoreExport(api, project, discovery, name) {
   return ['native-cli-sql-export', 'apply', 'rollback-to-base', 'custom-history-schema'];
 }
 
-async function scan(api, project, adapter) {
+async function scan(api, project, adapter, hosted) {
   const discovery = await api(project.id + '/database-discovery');
   if (adapter === 'drizzle') {
     const requirement = discovery.requirements.find(item => item.migrationAdapter === adapter);
     assert.ok(requirement, 'Drizzle requirement was not detected');
     const preview = await api(project.id + '/database-drizzle-preview', { requirementId: requirement.id });
-    assert.equal(preview.status, 'configuration-needed');
+    assert.equal(preview.status, hosted ? 'hosted-preview' : 'configuration-needed');
+    if (hosted) {
+      assert.equal(requirement.variant, 'turso');
+      assert.equal(preview.engine, 'turso');
+      assert.equal(preview.target, undefined);
+      assert.equal(preview.planId, undefined);
+      assert.ok(preview.migrations.every(migration => migration.state === 'unverified'));
+    }
     assert.ok(preview.migrations.length);
     return [{ source: preview.source, status: preview.status, count: preview.migrations.length }];
   }
@@ -387,14 +395,27 @@ try {
     const parentDir = join(root, 'clones-' + index);
     await mkdir(parentDir);
     const cloned = await api('clone', { repository: url, parentDir, requestId: randomUUID() }, 201);
-    const importedResults = await scan(api, imported, item.adapter);
-    assert.deepEqual(await scan(api, cloned, item.adapter), importedResults);
+    const importedResults = await scan(api, imported, item.adapter, item.hosted);
+    assert.deepEqual(await scan(api, cloned, item.adapter, item.hosted), importedResults);
     assert.deepEqual(importedResults.map(result => result.count), expectedCounts[index], item.repo);
     console.log(JSON.stringify({ repository: item.repo, commit: item.commit, adapter: item.adapter, previews: importedResults }));
-    assert.ok(importedResults.some(result => ['ready', 'configuration-needed'].includes(result.status) && result.count > 0),
+    assert.ok(importedResults.some(result => ['ready', 'configuration-needed', 'hosted-preview'].includes(result.status) && result.count > 0),
       'The expected public repository migration preview is unavailable: ' + item.repo);
-    if (live && !item.sqlite && (item.live || ['drizzle', 'alembic'].includes(item.adapter) || efCli && item.efExport)) {
+    if (live && !item.sqlite && !item.hosted && (item.live || ['drizzle', 'alembic'].includes(item.adapter) || efCli && item.efExport)) {
       console.log(JSON.stringify({ repository: item.repo, postgres: await assertLiveMigration(api, cloned, item.adapter, 'postgres', item.flywayProfile) }));
+    }
+    if (item.hosted) {
+      await writeFile(join(cloned.path, '.env'), 'TURSO_DATABASE_URL=libsql://turso-test.invalid\nTURSO_AUTH_TOKEN=fixture-token\n');
+      const endpoint = cloned.id + '/database-drizzle-';
+      const discovery = await api(cloned.id + '/database-discovery');
+      const requirementId = discovery.requirements.find(item => item.migrationAdapter === 'drizzle').id;
+      const preview = await api(endpoint + 'preview', { requirementId, databaseFile: 'override.sqlite' });
+      assert.equal(preview.status, 'hosted-preview');
+      assert.equal(preview.planId, undefined);
+      assert.equal(preview.target, undefined);
+      assert.doesNotMatch(JSON.stringify({ discovery, preview }), /turso-test\.invalid|fixture-token/);
+      const rejected = await api(endpoint + 'apply', { requirementId, planId: 'fixture', confirmName: 'override.sqlite' }, 409);
+      assert.match(rejected.error, /Turso migration files/);
     }
     if (liveMysql && item.number === 10) {
       console.log(JSON.stringify({ repository: item.repo, mysql: await assertLiveMigration(api, cloned, item.adapter, 'mysql') }));
@@ -602,6 +623,11 @@ public final class RecordCallback implements Callback {
         postgres: await assertLiveMigration(api, project, 'flyway', 'postgres', undefined, { flywayScope, classes }) }));
     }
   }
+  if (selected(21)) {
+    const sqlite = await import('node:sqlite').catch(() => undefined);
+    if (!sqlite?.DatabaseSync.prototype.setAuthorizer && selectedCases.size) assert.fail('PUB-21 requires Node.js 24.10 or later.');
+    if (sqlite?.DatabaseSync.prototype.setAuthorizer) await assertPublicSqliteRebuild(api);
+  }
 } finally {
   for (const id of databaseProjects) {
     try {
@@ -618,4 +644,71 @@ public final class RecordCallback implements Callback {
   await app.shutdownTasks();
   await new Promise(resolve => app.close(resolve));
   await rm(root, { recursive: true, force: true });
+}
+
+async function assertPublicSqliteRebuild(api) {
+  const repo = 'elizaOS/elizaos.github.io', commit = '838529c24739284153d6c399467a9dc9cc067e9b';
+  const checkout = join(root, 'drizzle-rebuild-upstream');
+  await mkdir(checkout);
+  const git = args => run('git', args, { cwd: checkout, timeout: 120000 });
+  await git(['init']);
+  await git(['fetch', '--depth=1', 'https://github.com/' + repo + '.git', commit]);
+  await git(['checkout', '--detach', commit]);
+  const path = join(root, 'drizzle-rebuild');
+  await mkdir(join(path, 'drizzle/meta'), { recursive: true });
+  await mkdir(join(path, 'data'));
+  for (const file of ['package.json', 'drizzle.config.ts']) await copyFile(join(checkout, file), join(path, file));
+  const journalPath = 'drizzle/meta/_journal.json';
+  const journal = JSON.parse(await readFile(join(checkout, journalPath), 'utf8'));
+  const entries = journal.entries.slice(0, 4);
+  const sql = await Promise.all(entries.map(async ({ tag }) => {
+    const file = 'drizzle/' + tag + '.sql';
+    await copyFile(join(checkout, file), join(path, file));
+    return readFile(join(path, file), 'utf8');
+  }));
+  await writeFile(join(path, journalPath), JSON.stringify({ ...journal, entries }));
+  const project = await api('import', { path }, 201);
+  const discovery = await api(project.id + '/database-discovery');
+  const requirementId = discovery.requirements.find(item => item.migrationAdapter === 'drizzle').id;
+  const preview = () => api(project.id + '/database-drizzle-preview', { requirementId });
+  const apply = plan => api(project.id + '/database-drizzle-apply', { requirementId, planId: plan.planId, confirmName: 'db.sqlite' });
+  const { DatabaseSync } = await import('node:sqlite');
+  const withDatabase = callback => {
+    const db = new DatabaseSync(join(path, 'data/db.sqlite'));
+    try { return callback(db); }
+    finally { db.close(); }
+  };
+  withDatabase(db => {
+    db.exec('PRAGMA foreign_keys=OFF; CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY, hash TEXT NOT NULL, created_at NUMERIC);');
+    const record = db.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)');
+    for (const [index, entry] of entries.slice(0, 3).entries()) {
+      db.exec(sql[index]);
+      record.run(createHash('sha256').update(sql[index]).digest('hex'), entry.when);
+    }
+    db.exec(`INSERT INTO users (username) VALUES ('sample');
+      INSERT INTO user_daily_summaries (id, username, date, summary) VALUES ('kept', 'sample', '2025-01-01', 'original text');
+      CREATE TABLE summary_children (parent text REFERENCES user_daily_summaries(id) ON DELETE CASCADE);
+      INSERT INTO summary_children VALUES ('kept'), ('invalid-parent');`);
+  });
+  let plan = await preview();
+  assert.ok(plan.rebuild && plan.planId, JSON.stringify(plan));
+  assert.equal((await apply(plan)).status, 'sqlite-foreign-keys');
+  withDatabase(db => {
+    assert.equal(db.prepare("SELECT summary FROM user_daily_summaries WHERE id = 'kept'").get().summary, 'original text');
+    assert.equal(db.prepare('SELECT count(*) AS total FROM __drizzle_migrations').get().total, 3);
+    db.exec("DELETE FROM summary_children WHERE parent = 'invalid-parent'");
+  });
+  plan = await preview();
+  assert.ok(plan.rebuild && plan.planId, JSON.stringify(plan));
+  const result = await apply(plan);
+  assert.equal(result.status, 'applied', JSON.stringify(result));
+  assert.equal((await preview()).status, 'current');
+  withDatabase(db => {
+    assert.deepEqual(Object.values(db.prepare("SELECT summary, interval_type FROM user_summaries WHERE id = 'kept'").get()), ['original text', 'day']);
+    assert.equal(db.prepare('SELECT parent FROM summary_children').get().parent, 'kept');
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+    assert.equal(db.prepare("SELECT count(*) AS total FROM sqlite_schema WHERE type = 'index' AND name LIKE 'idx_user_daily_summaries_%'").get().total, 3);
+    assert.equal(db.prepare('SELECT count(*) AS total FROM __drizzle_migrations').get().total, 4);
+  });
+  console.log(JSON.stringify({ repository: repo, commit, sqlite: ['foreign-key-failure-rollback', 'preserved-child-row', 'table-rebuild', 'indexes', 'verified-history'] }));
 }

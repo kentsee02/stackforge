@@ -80,9 +80,14 @@ export async function drizzleConfig(folder, files, readText) {
   const credential = config?.dbCredentials;
   const variable = credential?.url?.[envReference];
   const sqlite = config?.dialect === 'sqlite';
+  const turso = config?.dialect === 'turso';
   const sqliteFile = sqlite && typeof credential?.url === 'string' ? credential.url : undefined;
-  if (!['postgresql', 'mysql', 'sqlite'].includes(config?.dialect) || Object.hasOwn(config, 'driver')) return;
-  if (credential === undefined ? !sqlite : !credential || Object.keys(credential).length !== 1 || (!variable && sqliteFile === undefined)) return;
+  if (!['postgresql', 'mysql', 'sqlite', 'turso'].includes(config?.dialect) || Object.hasOwn(config, 'driver')) return;
+  if (turso) {
+    if (credential !== undefined && (!credential || Object.keys(credential).some(key => !['url', 'authToken'].includes(key)) ||
+        !variable && typeof credential.url !== 'string')) return;
+  } else if (credential === undefined ? !sqlite : !credential || Object.keys(credential).length !== 1 ||
+      !variable && sqliteFile === undefined) return;
   const out = config.out === undefined ? 'drizzle' : typeof config.out === 'string' && config.out.replace(/^\.\//, '').replace(/\/$/, '');
   if (!out || out.length > 160 || out.split('/').some(part => !/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$/.test(part))) return;
   const history = config.migrations;
