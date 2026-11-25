@@ -141,6 +141,8 @@ Restore checks compatibility and integrity, previews the exact target, and check
 
 Creation jobs own resumable checkpoints and history. Finite project operations such as installing dependencies or running checks have their own running state and cancellation. Services have a process lifecycle and readiness. Database actions can have separate previews and audit outcomes.
 
+Project activity reads recent terminal outcomes by stable project ID from the project and database operation journals. A row contains an action, controlled outcome and timestamps. Commands, process output, credentials and target details stay out of the activity response. The database audit journal keeps its existing format and location. Reads examine a bounded recent window and show up to 50 outcomes for the selected project.
+
 Reuse process launch, cancellation, timeouts, and redaction where their behavior agrees. Keep each workflow's state transitions, completion semantics, and storage contract. A late cancellation must not undo a completed result. A global queue or task history across all workflows is a separate product candidate.
 
 ### 3.7 Integrations

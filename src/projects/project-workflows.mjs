@@ -22,7 +22,7 @@ export class ProjectActionError extends Error {
 }
 
 export function createProjectWorkflows({ projectConfig, operations, runtime, removals, configWrites, removeProject,
-  databaseBusy, chooseDatabase, recordDatabase, verifyDeletion, syncDatabaseBindings, openProject }) {
+  databaseBusy, chooseDatabase, recordDatabase, recordActivity, verifyDeletion, syncDatabaseBindings, openProject }) {
   async function saveSettings(project, work) {
     const saving = work();
     configWrites.set(project.path, saving);
@@ -93,11 +93,12 @@ export function createProjectWorkflows({ projectConfig, operations, runtime, rem
     }
     try {
       const target = action === 'run-check' ? { ...project, customChecks: projectConfig.checks(project) } : project;
+      const activity = action === 'run-check' && typeof payload.check === 'string' ? 'check-' + payload.check.split(':').at(-1) : action;
       operations.start(target, action, projectConfig.ports(project), {
         checkId: payload.check, installPlanId: detectedInstall ? payload.planId : undefined, confirmVolume: payload.confirmVolume,
         chooseDatabase: ['database-start', 'database-stop'].includes(action) && payload.bindingId !== undefined ?
           () => chooseDatabase(project, payload.bindingId) : undefined,
-        record: isDatabaseAction ? recordDatabase(project, action) : undefined,
+        record: isDatabaseAction ? recordDatabase(project, action) : recordActivity(project, activity),
         verifyDeletion: action === 'database-delete' ? target => verifyDeletion(project, target) : undefined
       });
       return operations.status(project, true);

@@ -11,6 +11,7 @@ const assets = new Map([
   ['/projects/preflight.js', 'projects/preflight.js'],
   ['/projects/dependencies.js', 'projects/dependencies.js'],
   ['/projects/tools.js', 'projects/tools.js'],
+  ['/projects/activity.js', 'projects/activity.js'],
   ['/projects/postgres-setup.js', 'projects/postgres-setup.js'],
   ['/projects/drizzle-preview.js', 'projects/drizzle-preview.js'],
   ['/projects/alembic-preview.js', 'projects/alembic-preview.js'],

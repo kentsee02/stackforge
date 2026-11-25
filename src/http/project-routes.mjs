@@ -17,7 +17,7 @@ export function createProjectRoutes({ projects, queries, databaseRoutes, removal
     if (url.pathname === '/api/projects') {
       return reply(200, { projects: await queries.list(url.searchParams.get('logs')) });
     }
-    const projectView = /^\/api\/projects\/([^/]+)\/(database|database-discovery|database-delete|database-development|checks|git|dependencies|startup-suggestions|startup-preflight)$/.exec(url.pathname);
+    const projectView = /^\/api\/projects\/([^/]+)\/(activity|database|database-discovery|database-delete|database-development|checks|git|dependencies|startup-suggestions|startup-preflight)$/.exec(url.pathname);
     if (projectView) {
       const [, id, view] = projectView;
       const project = projects.list().find(item => item.id === id);

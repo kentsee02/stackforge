@@ -12,6 +12,7 @@ import { Jobs } from '../generation/jobs.mjs';
 import { defaultProjectsDirectory } from '../platform/paths.mjs';
 import { Settings } from '../platform/settings.mjs';
 import { createDesktop } from '../platform/desktop.mjs';
+import { operationJournal } from '../platform/operation-journal.mjs';
 import { ProjectRuntime } from '../projects/project-runtime.mjs';
 import { ProjectConfig, projectPathKey } from '../projects/project-config.mjs';
 import { ProjectOperations } from '../projects/project-operations.mjs';
@@ -40,6 +41,8 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   const token = randomBytes(32).toString('hex');
   const settings = new Settings(settingsFile);
   const projectConfig = new ProjectConfig(stateDir ? join(dirname(stateDir), 'projects.json') : false);
+  const activity = operationJournal(stateDir ? join(dirname(stateDir), 'project-operations.jsonl') : false,
+    new Set(['install', 'check-build', 'check-test', 'check-lint', 'check-package']), 'Could not save a StackForge project operation record.');
   const jobs = new Jobs({ directory: stateDir, generate, check, publish, relocatedPath: id => projectConfig.value.locations[id] });
   const removals = new Map();
   const configWrites = new Map();
@@ -63,10 +66,11 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     guardDevelopmentRemoval: database.guardDevelopmentRemoval });
 
   const execute = createProjectWorkflows({ projectConfig, operations, runtime, removals, configWrites, removeProject,
-    databaseBusy: database.blocksProjectAction, chooseDatabase: database.selectedCompose, recordDatabase: database.record,
+    databaseBusy: database.blocksProjectAction, chooseDatabase: database.selectedCompose, recordDatabase: database.record, recordActivity: activity.begin,
     verifyDeletion: database.verifyDeletion, syncDatabaseBindings: database.scan,
     openProject: (...args) => desktop.openProject(...args) });
-  const queries = createProjectQueries({ projects, projectConfig, operations, runtime, removals, databaseOperation: database.operation });
+  const queries = createProjectQueries({ projects, projectConfig, operations, runtime, removals, databaseOperation: database.operation,
+    activity: activity.recent, databaseActivity: database.activity });
   const projectRoutes = createProjectRoutes({ projects, queries, databaseRoutes, removals,
     isCreatingProject: () => jobs.busy, clone, execute });
   const generationRoutes = createGenerationRoutes({ jobs, check, desktop });
@@ -134,6 +138,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
     const clone = projectRoutes.shutdown();
     await Promise.allSettled([jobs.shutdown(), settings.pending, projectConfig.pending, runtime.shutdown(), operations.shutdown(),
       clone, projects.pendingCleanup, ...Array.from(removals.values(), removal => removal.done), ...configWrites.values(), database.shutdown()]);
+    await activity.pending;
   };
   server.jobs = jobs;
   return server;

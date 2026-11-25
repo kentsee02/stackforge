@@ -134,7 +134,7 @@ try {
     assert.equal(args[args.indexOf('-d') + 1], 'browser_alembic');
     return JSON.stringify({ name: 'browser_alembic', table: 'readable', hasObjects: true, rows: ['start'] });
   } };
-  app = createApp({ stateDir: false, clone: cloneFixture, operations, desktop, localDatabase });
+  app = createApp({ stateDir: join(root, 'state', 'jobs'), clone: cloneFixture, operations, desktop, localDatabase });
   app.listen(0, '127.0.0.1');
   await once(app, 'listening');
   const origin = 'http://127.0.0.1:' + app.address().port;
@@ -347,7 +347,16 @@ try {
   await contains('#dependency-status', '依赖已安装。');
   assert.equal(await page.locator('#dependency-approval').isVisible(), false);
   assert.deepEqual(installCommands, Array(2).fill(['pnpm install --frozen-lockfile', [], frontend]));
+  await page.getByText('项目活动记录', { exact: true }).click();
+  await contains('#project-activity-list li:first-child', '安装依赖已完成');
+  await contains('#project-activity-list li:nth-child(2)', '安装依赖操作失败');
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.locator('#project-activity-list time').count(), 2);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
   await page.locator('#language').selectOption('en');
+  await contains('#project-activity-list li:first-child', 'Install dependenciesCompleted');
+  await page.locator('#project-activity summary').click();
+  await page.setViewportSize({ width: 1280, height: 820 });
   await writeFile(join(cloned.path, '.env'), 'ALEMBIC_DATABASE_URL=postgresql://browseruser:browser_test_only@127.0.0.1:5432/browser_alembic\n');
   const ownedTarget = { id: 'f'.repeat(64), host: '127.0.0.1', port: 55432, name: 'project_fixture', engine: 'postgres', projectPostgres: true };
   const ownedMysql = { id: 'b'.repeat(64), host: '127.0.0.1', port: 53306, name: 'mysql_fixture', engine: 'mysql', projectMysql: true };

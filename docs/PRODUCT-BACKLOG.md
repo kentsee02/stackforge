@@ -4,7 +4,7 @@ The [architecture specification](../ARCHITECTURE.md) defines the product boundar
 
 ## Current priority
 
-Project activity history is the next planned product task. The migration milestone shipped detection, history checks and reviewed writes for all five adapters on supported PostgreSQL layouts. Drizzle, Flyway and Liquibase also have a project MySQL write path. EF Core can apply and downgrade reviewed SQL exports on a project SQL Server target.
+Evaluate global task history and queue controls using the activity outcomes now available per project. The migration milestone shipped detection, history checks and reviewed writes for all five adapters on supported PostgreSQL layouts. Drizzle, Flyway and Liquibase also have a project MySQL write path. EF Core can apply and downgrade reviewed SQL exports on a project SQL Server target.
 
 ### Open migration work
 
@@ -18,12 +18,11 @@ Project activity history is the next planned product task. The migration milesto
 
 ## Next product work
 
-1. **Project activity history.** Record installation, check and database outcomes per project.
-2. **Global task history and queue.** Evaluate cross-project task controls once the workflows expose compatible state.
-3. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases and Tasks.
-4. **Standalone environment view.** Consolidate tool availability, versions, executable paths and prerequisites.
-5. **Standalone integrations view.** Consolidate Git, GitHub, Docker and desktop integration status.
-6. **App-wide settings.** Evaluate theme, notifications and other cross-project preferences.
+1. **Global task history and queue.** Evaluate cross-project task controls now that projects expose recent outcomes.
+2. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases and Tasks.
+3. **Standalone environment view.** Consolidate tool availability, versions, executable paths and prerequisites.
+4. **Standalone integrations view.** Consolidate Git, GitHub, Docker and desktop integration status.
+5. **App-wide settings.** Evaluate theme, notifications and other cross-project preferences.
 
 ## Product candidates
 

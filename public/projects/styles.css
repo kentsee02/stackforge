@@ -139,6 +139,13 @@
 .project-check-field { flex: 1 1 185px; min-width: 0; font-size: 13px; }
 .project-check-field select { display: block; width: 100%; min-height: 36px; margin-top: 4px; padding: 5px 8px; color: var(--text); background: var(--surface); border: 1px solid var(--control); border-radius: 6px; }
 .project-check-form .secondary { margin: 0; }
+#project-activity-status:empty { display: none; }
+.project-activity-list { list-style: none; padding: 0; margin: 8px 0 12px; }
+.project-activity-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 2px 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.project-activity-list strong { font-weight: 600; overflow-wrap: anywhere; }
+.project-activity-list time { grid-column: 1 / -1; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.project-activity-list .project-check-status { margin-inline-start: 0; }
+#project-activity-refresh { margin-block: 2px 4px; }
 #check-message:empty, #git-message:empty { display: none; }
 .project-git-summary { margin: 8px 0; }
 .project-git-summary div { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 3fr); gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); }
@@ -147,7 +154,7 @@
 #git-comparison { display: block; }
 @media (max-width: 600px) {
   .project-check-field { flex-basis: 100%; }
-  .project-check-field select, .project-check-form .secondary, #git-refresh { min-height: 44px; }
+  .project-check-field select, .project-check-form .secondary, #git-refresh, #project-activity-refresh { min-height: 44px; }
   .project-check-field select { font-size: 16px; }
 }
 #dependency-log { margin-top: 8px; }

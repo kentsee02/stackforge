@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.59.0 Project activity history
+
+- Show up to 50 recent dependency installation, build, test, lint and database operation outcomes for the selected project.
+- Retain new outcomes across restarts and include existing database audit entries when they fall within the recent activity window.
+- Display action, outcome and local completion time in English and Chinese. Reuse the operation panels for live logs.
+
 ## v0.58.0 Drizzle SQLite table rebuilds and Turso preview
 
 - Review a single pending SQLite file with Drizzle's generated table rebuild, compare copied row counts, and check foreign keys before committing the schema and history together.

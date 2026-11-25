@@ -414,19 +414,25 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       throw new Error(developmentWrite ? 'Stop the project before changing its dedicated PostgreSQL instance.' :
         'Stop the project before saving its database connection.');
     }
+    async function recordWrite(name, write, instanceId) {
+      const record = databaseLog.begin(project, name, instanceId);
+      try {
+        const result = await write();
+        await record('succeeded');
+        return result;
+      } catch (error) {
+        await record(controller.signal.aborted ? 'cancelled' : 'failed');
+        throw error;
+      }
+    }
     const done = (async () => {
       if (action === 'database-development') {
-        const record = developmentWrite ? databaseLog.begin(project, 'database-development-' + payload.mode) : undefined;
-        try {
-          const result = await development.action(project, payload, controller.signal);
-          await record?.('succeeded');
-          return result;
-        } catch (error) {
-          await record?.(controller.signal.aborted ? 'cancelled' : 'failed');
-          throw error;
-        }
+        const write = () => development.action(project, payload, controller.signal);
+        return developmentWrite ? recordWrite(action + '-' + payload.mode, write) : write();
       }
-      if (action === 'database-connection-config') return saveDatabaseEnvironment(project, payload, controller.signal);
+      if (action === 'database-connection-config') {
+        return recordWrite(action, () => saveDatabaseEnvironment(project, payload, controller.signal));
+      }
       if (action === 'database-postgres-setup') {
         const verifyTarget = async target => {
           const activeIds = await refreshDatabaseBindings(project.id, true);
@@ -434,7 +440,8 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
             throw new Error('Another project uses this PostgreSQL database. Choose a separate database for guided setup.');
           }
         };
-        const record = setupWrites ? databaseLog.begin(project, payload.mode === 'migrate' ? 'database-migrate' : 'database-initialize') : undefined;
+        const activity = { migrate: 'database-migrate', create: 'database-initialize', save: 'database-connection-config' }[payload.mode];
+        const record = setupWrites ? databaseLog.begin(project, activity) : undefined;
         try {
           const result = await postgresSetup({ project, payload, command: localDatabase.command, prismaCommand: databaseAdapters.prismaCommand,
             resolveClient: target => development.client(project, target, controller.signal),
@@ -449,18 +456,13 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       }
       if (action === 'database-local-status') return resources.testLocalConnection(project, await resourceBinding(project, payload.bindingId, 'local'), controller.signal);
       const binding = await resourceBinding(project, payload.bindingId, action === 'database-remote-profile' ? 'remote' : 'sqlite');
-      if (action === 'database-remote-profile') return resources.profile(project, binding, payload, controller.signal);
+      if (action === 'database-remote-profile') {
+        const write = () => resources.profile(project, binding, payload, controller.signal);
+        return ['save', 'remove'].includes(payload.mode) ? recordWrite(action + '-' + payload.mode, write, binding.instanceId) : write();
+      }
       if (action === 'database-sqlite-inspect') return resources.inspectSqlite(project, binding, controller.signal);
       if (payload.confirmPath !== binding.instance.path) throw new Error('Type the exact SQLite file path to confirm creation.');
-      const record = databaseLog.begin(project, 'database-initialize', binding.instanceId);
-      try {
-        const result = await resources.createSqlite(project, binding, undefined, controller.signal);
-        await record('succeeded');
-        return result;
-      } catch (error) {
-        await record(controller.signal.aborted ? 'cancelled' : 'failed');
-        throw error;
-      }
+      return recordWrite('database-initialize', () => resources.createSqlite(project, binding, undefined, controller.signal), binding.instanceId);
     })();
     return trackWrite(project, controller, done);
   }
@@ -573,6 +575,6 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
   return { inspect, resourceAction, localAction, startArchive, startLegacyBackup, transferBlocked, stagingRoot,
     redact: redactDatabase.text, shutdown, scan: scanDatabases, verifyDeletion: verifyDatabaseDeletion, selectedCompose,
     operation, blocksProjectAction, cleanupReplacedClone, removeProfiles: resources.removeProfiles,
-    removeRegistration: id => databaseRegistry.remove(id), record: databaseLog.begin,
+    removeRegistration: id => databaseRegistry.remove(id), record: databaseLog.begin, activity: databaseLog.recent,
     guardDevelopmentRemoval: development.guardRemoval };
 }

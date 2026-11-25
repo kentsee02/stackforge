@@ -6,6 +6,7 @@ import { inspectRecordedProject } from './project-folder.mjs';
 import { detectDependencyPlan } from './dependency-plan.mjs';
 import { detectStartupSuggestions } from './detection/startup-suggestions.mjs';
 import { startupPreflight } from './project-preflight.mjs';
+import { recentOperationLimit } from '../platform/operation-journal.mjs';
 
 function projectDetails(project) {
   const { cloneId, cloneIdentity, folderIdentity, startup, ...details } = project;
@@ -16,7 +17,7 @@ function projectDetails(project) {
       hasInstallCommands: Boolean(startup?.services.some(service => service.installCommand)) }) };
 }
 
-export function createProjectQueries({ projects, projectConfig, runtime, operations, removals, databaseOperation }) {
+export function createProjectQueries({ projects, projectConfig, runtime, operations, removals, databaseOperation, activity, databaseActivity }) {
   async function describe(project) {
     return { ...projectDetails(project), ...(project.unmanaged && { hasComposeDatabase: await hasImportedCompose(project) }) };
   }
@@ -46,6 +47,11 @@ export function createProjectQueries({ projects, projectConfig, runtime, operati
   }
 
   async function inspect(project, view) {
+    if (view === 'activity') {
+      const histories = await Promise.all([activity(project), databaseActivity(project)]);
+      const entries = histories.flatMap(({ entries }) => entries).sort((a, b) => b.finishedAt.localeCompare(a.finishedAt));
+      return { entries: entries.slice(0, recentOperationLimit), limited: histories.some(history => history.limited) };
+    }
     if (view === 'startup-preflight') {
       if (!project.imported) throw new Error('Startup preflight is available for imported and cloned projects.');
       return startupPreflight(project, { runtime, operations, ports: projectConfig.ports(project) });

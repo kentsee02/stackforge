@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -96,4 +96,71 @@ test('project checks run only supported commands, and Git compares the selected 
   assert.equal(detached.branch, null);
   assert.equal(detached.upstream, null);
   assert.equal(detached.ahead, null);
+});
+
+test('project activity persists across restarts and safely includes existing database records', { timeout: 30000 }, async t => {
+  const workspace = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-activity-')));
+  const stateDir = join(workspace, 'state', 'jobs');
+  let server;
+  async function openApp() {
+    server = createApp({ stateDir });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const get = async path => (await fetch(base + path)).json();
+    const { token } = await get('/api/state');
+    const post = (path, payload) => fetch(base + path, { method: 'POST', headers: {
+      'content-type': 'application/json', 'x-stackforge-token': token
+    }, body: JSON.stringify(payload) });
+    return { get, post };
+  }
+  async function closeApp() {
+    if (!server) return;
+    await server.shutdownTasks();
+    await new Promise(resolve => server.close(resolve));
+    server = undefined;
+  }
+  t.after(async () => { await closeApp(); await rm(workspace, { recursive: true, force: true }); });
+  const { get, post } = await openApp();
+  async function addProject(name) {
+    const path = join(workspace, name);
+    await mkdir(path);
+    await writeFile(join(path, 'package.json'), JSON.stringify({ name, scripts: { build: 'node --version' } }));
+    const response = await post('/api/projects/import', { path });
+    assert.equal(response.status, 201);
+    return (await response.json()).id;
+  }
+  const id = await addProject('recorded-project');
+  const otherId = await addProject('other-project');
+  const route = `/api/projects/${id}`;
+  const legacy = { id: '0979c843-7c8e-44ce-b9c3-fd282c43ecd9', projectId: id, action: 'database-backup', status: 'succeeded',
+    instanceId: 'a'.repeat(64), startedAt: '2000-01-01T00:00:00.000Z', finishedAt: '2000-01-01T00:00:01.000Z',
+    output: 'activity-test-canary' };
+  await appendFile(join(workspace, 'state', 'database-operations.jsonl'), [JSON.stringify(legacy),
+    JSON.stringify({ ...legacy, id: '4c4c5240-24ef-4d40-8e1e-a190e6c447a8', projectId: otherId, action: 'database-stop' }),
+    '{interrupted record}', ''].join('\n'));
+  await appendFile(join(workspace, 'state', 'project-operations.jsonl'), '{"interrupted":');
+  assert.equal((await post(route + '/startup', { services: [{ name: 'CLI', directory: '.', installCommand: 'node --version' }] })).status, 200);
+  async function waitFor(action) {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const { entries } = await get(route + '/activity');
+      if (entries.some(entry => entry.action === action && entry.status === 'succeeded')) return;
+      await sleep(50);
+    }
+    assert.fail(`Missing completed action ${action}`);
+  }
+  assert.equal((await post(route + '/install', {})).status, 202);
+  await waitFor('install');
+  const { checks } = await get(route + '/checks');
+  assert.equal((await post(route + '/run-check', { check: checks[0].id })).status, 202);
+  await waitFor('check-build');
+  await closeApp();
+  const { get: afterRestart } = await openApp();
+  const { entries, limited } = await afterRestart(route + '/activity');
+  assert.equal(limited, false);
+  assert.deepEqual(entries.map(item => [item.action, item.status]), [
+    ['check-build', 'succeeded'], ['install', 'succeeded'], ['database-backup', 'succeeded']
+  ]);
+  assert.doesNotMatch(JSON.stringify(entries), /activity-test-canary|instanceId|projectId|node --version/);
+  assert.deepEqual((await afterRestart(`/api/projects/${otherId}/activity`)).entries.map(item => item.action), ['database-stop']);
 });

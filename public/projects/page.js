@@ -5,6 +5,7 @@ import { createPreflightPanel } from '/projects/preflight.js';
 import { createDependenciesPanel } from '/projects/dependencies.js';
 import { createProjectToolsPanel } from '/projects/tools.js';
 import { createDevelopmentPostgres } from '/projects/development-postgres.js';
+import { createActivityPanel } from '/projects/activity.js';
 
 setupI18n();
 
@@ -171,6 +172,7 @@ function render() {
   $('project-empty').hidden = projects.length > 0;
   renderRows();
   const project = projects.find(item => item.id === selected);
+  activity.render(project);
   if (!project) { preflight.render(); developmentPostgres.render(); return; }
   $('project-detail').classList.toggle('project-offline', Boolean(project.offline));
   $('project-offline').hidden = !project.offline;
@@ -449,6 +451,7 @@ const selectedProject = () => projects.find(project => project.id === selected);
 const startup = createStartupPanel({ $, request, showMessage, state, selectedId, selectedProject, renderPage: render, act });
 const dependencies = createDependenciesPanel({ $, request, showMessage, renderOutput, diagnosticMessages, state, selectedId, selectedProject, renderPage: render, act });
 const tools = createProjectToolsPanel({ $, request, showMessage, renderOutput, state, selectedId, renderPage: render, act });
+const activity = createActivityPanel({ $, request, showMessage });
 const developmentPostgres = createDevelopmentPostgres({ $, request, post, state, renderPage: render,
   reloadDiscovery: () => database.reloadDiscovery(), openExisting: action => database.openExisting(action),
   archive: (mode, id) => database.developmentArchive(mode, id) });
