@@ -83,6 +83,7 @@ test('Flyway flags duplicate numeric versions, unsafe locations and unrecognized
     'schema/V0002__Initial.sql': 'SELECT 1;',
     'schema/nested/V2_0__Duplicate.sql': 'SELECT 2;',
     'schema/afterMigrate.sql': 'SELECT 3;',
+    'schema/unknown.sql': 'SELECT 5;',
     'separate/V12__Later.sql': 'SELECT 4;',
     'unsafe/flyway.conf': 'flyway.locations=filesystem:../schema',
     'custom/flyway.conf': 'flyway.locations=filesystem:./sql\nflyway.sqlMigrationPrefix=Migration'
@@ -92,6 +93,7 @@ test('Flyway flags duplicate numeric versions, unsafe locations and unrecognized
   const preview = await previewFlyway(project, source.id);
   assert.equal(preview.status, 'partial');
   assert.equal(preview.unrecognized, 1);
+  assert.deepEqual(preview.callbacks, ['schema/afterMigrate.sql']);
   assert.deepEqual(preview.migrations.map(item => [item.version, item.verified]), [['2_0', false], ['0002', false], ['12', true]]);
   for (const other of discovered.filter(item => item.id !== source.id)) {
     assert.equal((await previewFlyway(project, other.id)).status, 'unsupported-config');

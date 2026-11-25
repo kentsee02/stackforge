@@ -520,6 +520,8 @@ export const messages = [
   ['迁移后记录的版本', 'Recorded revisions after migration'],
   ['上下文过滤（可选）', 'Context filter (optional)'],
   ['标签过滤（可选）', 'Label filter (optional)'],
+  ['已编译的 Flyway 类目录（可选）', 'Compiled Flyway classes folder (optional)'],
+  ['请选择项目内使用 Java 21 或更早版本编译的 Flyway 类目录。', 'Choose a project-relative Flyway classes folder built for Java 21 or earlier.'],
   ['以 name=value 输入字面属性，用逗号分隔', 'Literal properties, comma separated as name=value'],
   ['请输入有效的 Liquibase 上下文过滤、标签过滤和字面属性值。', 'Enter valid Liquibase context and label filters and literal property values.'],
   ['Liquibase 无法对照此数据库验证过滤后的变更集。', 'Liquibase could not verify the filtered changesets against this database.'],

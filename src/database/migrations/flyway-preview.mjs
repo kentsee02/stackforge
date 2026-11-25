@@ -38,9 +38,11 @@ function compareVersion(a, b) {
   return 0;
 }
 
+export const compareFlywayVersions = (a, b) => compareVersion(versionKey(a).split('.'), versionKey(b).split('.'));
+
 async function migrationFiles(root, locations, signal) {
   const pending = locations.map(directory => ({ directory, depth: 0 }));
-  const seen = new Set(), files = [];
+  const seen = new Set(), files = [], callbacks = [];
   let inspected = 0, limited = false, unrecognized = 0;
   for (const { directory, depth } of pending) {
     throwIfCancelled(signal);
@@ -54,7 +56,7 @@ async function migrationFiles(root, locations, signal) {
     try {
       for await (const entry of listing) {
         throwIfCancelled(signal);
-        if (++inspected > 1536 || files.length >= 250) return { files, limited: true, unrecognized };
+        if (++inspected > 1536 || files.length + callbacks.length >= 250) return { files, callbacks, limited: true, unrecognized };
         if (entry.name.startsWith('.') || /[\x00-\x1f\x7f]/.test(entry.name)) continue;
         if (entry.isSymbolicLink()) { limited = true; continue; }
         const file = directory + '/' + entry.name;
@@ -64,6 +66,7 @@ async function migrationFiles(root, locations, signal) {
         } else if (entry.isFile() && /\.sql$/i.test(entry.name)) {
           const migration = migrationFile(entry.name, file);
           if (migration) files.push(migration);
+          else if (/^(?:beforeMigrate|afterMigrate|beforeEachMigrate|afterEachMigrate)(?:__[\w.-]+)?\.sql$/.test(entry.name)) callbacks.push(file);
           else unrecognized++;
         }
       }
@@ -74,7 +77,7 @@ async function migrationFiles(root, locations, signal) {
       limited = true;
     }
   }
-  return { files, limited, unrecognized };
+  return { files, callbacks, limited, unrecognized };
 }
 
 export async function previewFlyway(project, sourceId, signal, { history = false, scanned } = {}) {
@@ -90,7 +93,7 @@ export async function previewFlyway(project, sourceId, signal, { history = false
   if (disabled) return { ...base, status: 'disabled' };
   if (!locations?.length) return { ...base, status: 'unsupported-config' };
   const paths = locations.map(path => directory === '.' ? path : directory + '/' + path);
-  const { files, limited, unrecognized } = await migrationFiles(root, paths, signal);
+  const { files, callbacks, limited, unrecognized } = await migrationFiles(root, paths, signal);
   await resolveStartup(project, [], identity);
   const grouped = new Map();
   for (const migration of files) {
@@ -104,7 +107,7 @@ export async function previewFlyway(project, sourceId, signal, { history = false
     (a.segments && b.segments ? compareVersion(a.segments, b.segments) : a.description.localeCompare(b.description)) || a.file.localeCompare(b.file));
   const status = limited || unrecognized || duplicates.length ? 'partial' : files.length ? 'ready' : 'empty';
   const migrations = files.map(({ segments, ...file }) => file);
-  const result = { ...base, status, locations: paths, limited, unrecognized, migrations };
+  const result = { ...base, status, locations: paths, limited, unrecognized, migrations, ...(callbacks.length && { callbacks: callbacks.sort() }) };
   if (!history) return result;
   const checksums = new Map();
   let budget = 8 * 1024 * 1024;

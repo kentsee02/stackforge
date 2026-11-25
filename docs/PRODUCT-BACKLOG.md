@@ -8,8 +8,8 @@ Complete the remaining migration coverage before starting project activity histo
 
 ### Open migration work
 
-1. **Flyway runtime integration.** Cover project-managed Maven and Gradle behavior such as Java migrations and callbacks separately from the reviewed SQL locations already supported. Undo requires an eligible Flyway edition and an undo migration for live verification.
-2. **Additional Drizzle engines and layouts.** Evaluate hosted dialects and SQLite batches that require custom runtime controls. PostgreSQL, MySQL and local SQLite cover legacy journals and v1 folders.
+1. **Additional Drizzle engines and layouts.** Evaluate hosted dialects and SQLite batches that require custom runtime controls. PostgreSQL, MySQL and local SQLite cover legacy journals and v1 folders.
+2. **Flyway licensed Undo verification.** Reviewed Java migrations from compiled Maven and Gradle outputs and SQL/Java callbacks are supported. Live Undo coverage requires an authorized Flyway Teams or Enterprise license and a matching undo migration.
 
 ### Acceptance criteria
 

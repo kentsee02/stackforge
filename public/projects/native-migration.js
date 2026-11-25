@@ -85,6 +85,11 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   if (source.adapter === 'alembic') actions.append(labelledMigrationControl('Use the project Alembic environment', projectRuntime),
     labelledMigrationControl('Local Python files, comma separated', runtimeFiles),
     labelledMigrationControl('Dependency lock file inside the project (optional)', dependencyLock));
+  const runtimeClasses = document.createElement('input');
+  runtimeClasses.maxLength = 240;
+  runtimeClasses.autocomplete = 'off';
+  runtimeClasses.spellcheck = false;
+  if (source.adapter === 'flyway') actions.append(labelledMigrationControl('Compiled Flyway classes folder (optional)', runtimeClasses));
   const rollbackCount = document.createElement('input');
   rollbackCount.type = 'number';
   rollbackCount.min = '1';
@@ -127,6 +132,7 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   });
   runtimeFiles.addEventListener('input', () => reset(true));
   dependencyLock.addEventListener('input', () => reset(true));
+  runtimeClasses.addEventListener('input', () => reset(true));
   rollbackCount.addEventListener('input', () => reset(true));
   rollbackTag.addEventListener('input', () => {
     rollbackCount.disabled = Boolean(rollbackTag.value.trim());
@@ -194,6 +200,7 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
           projectEnvironment: true, runtimeFiles: runtimeFiles.value.split(',').map(file => file.trim()).filter(Boolean)
         }),
         ...(source.adapter === 'alembic' && lockFile && { dependencyLock: lockFile }),
+        ...(source.adapter === 'flyway' && runtimeClasses.value.trim() && { runtimeClasses: runtimeClasses.value.trim() }),
         ...(source.adapter === 'liquibase' && {
           ...(contextFilter.value.trim() && { contextFilter: contextFilter.value.trim() }),
           ...(labelFilter.value.trim() && { labelFilter: labelFilter.value.trim() }),

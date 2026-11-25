@@ -12,7 +12,8 @@ const liquibaseColumns = { id: 'text', author: 'text', filename: 'text', exectyp
 const bounded = name => `CASE WHEN length(${name}) <= 1024 THEN ${name} END`;
 
 function flywayState({ migrations }, rows, checksums) {
-  const byName = new Map(migrations.map(item => [posix.basename(item.file), item]));
+  const byName = new Map(migrations.filter(item => !item.javaClass).map(item => [posix.basename(item.file), item]));
+  const byClass = new Map(migrations.filter(item => item.javaClass).map(item => [item.javaClass, item]));
   const recorded = new Map(), ranks = new Set();
   let conflict = false, unsupported = false;
   for (const [rank, version, file, type, checksum, success] of rows) {
@@ -22,11 +23,11 @@ function flywayState({ migrations }, rows, checksums) {
     }
     ranks.add(rank);
     if (type === 'SCHEMA') continue;
-    if (type !== 'SQL') {
+    if (type !== 'SQL' && type !== 'JDBC') {
       unsupported = true;
       continue;
     }
-    const item = byName.get(file);
+    const item = (type === 'JDBC' ? byClass : byName).get(file);
     if (!item || !['versioned', 'repeatable'].includes(item.kind) ||
         (item.kind === 'versioned' ? versionKey(item.version) !== versionKey(version) : version !== null) ||
         (item.kind === 'versioned' && recorded.has(file))) {
@@ -36,7 +37,7 @@ function flywayState({ migrations }, rows, checksums) {
     if (!recorded.has(file) || rank > recorded.get(file).rank) recorded.set(file, { rank, checksum });
   }
   const items = migrations.map(item => {
-    const file = posix.basename(item.file);
+    const file = item.javaClass ?? posix.basename(item.file);
     const entry = recorded.get(file);
     if (!entry) return { state: unsupported || !['versioned', 'repeatable'].includes(item.kind) ? 'unverified' : 'pending' };
     const checksum = checksums.get(file);

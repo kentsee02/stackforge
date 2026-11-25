@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.57.0 Flyway compiled Java migrations and callbacks
+
+- Review versioned Flyway classes and Java callbacks from an explicitly selected Maven or Gradle classes directory.
+- Stage the approved classes for the pinned Flyway runtime and show SQL callback files in the plan.
+- Verify recorded JDBC history and the resulting database objects with the original `alist-tvbox` migration.
+
 ## v0.56.0 Liquibase execution filters
 
 - Preview context and label selections with the pinned tool and verify the exact recorded changesets, including non-prefix histories.

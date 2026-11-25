@@ -404,6 +404,7 @@ try {
     }
     assert.equal(payload.adapter, 'flyway');
     assert.equal(payload.operation, 'apply');
+    assert.equal(payload.runtimeClasses, 'target/classes');
     if (payload.mode === 'execute') {
       assert.equal(payload.confirmName, ownedTarget.name);
       assert.equal(payload.planId, reviewedPlan.planId);
@@ -487,13 +488,14 @@ try {
   await contains('.liquibase-preview .native-migration form', 'release-one');
   await flyway.locator(':scope > form select').selectOption(ownedTarget.id);
   const native = flyway.locator('.native-migration');
+  await native.getByLabel('已编译的 Flyway 类目录（可选）').fill('target/classes');
   await native.getByRole('button', { name: '预览迁移计划' }).click();
   await contains('.flyway-preview .native-migration form', 'Flyway 11.20.3');
   await contains('.flyway-preview .native-migration form', 'services/billing/storage/changes/V1__Create_invoice.sql');
   assert.equal(await native.getByRole('button', { name: '应用已审核的迁移' }).isDisabled(), true);
   await page.locator('#language').selectOption('en');
   await contains('.liquibase-preview .native-migration form', 'A failed or cancelled migration can leave schema changes committed.');
-  const confirm = native.locator('input');
+  const confirm = native.getByLabel('Type the target database name to confirm.');
   await confirm.fill('Project_fixture');
   assert.equal(await native.getByRole('button', { name: 'Apply reviewed migrations' }).isDisabled(), true);
   await confirm.fill(ownedTarget.name);

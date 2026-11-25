@@ -36,6 +36,7 @@ npm run test:public-migrations -- --postgres --case=PUB-02 --case=PUB-16
 npm run test:public-migrations -- --postgres --case=PUB-17
 npm run test:public-migrations -- --postgres --case=PUB-18
 npm run test:public-migrations -- --postgres --case=PUB-19
+npm run test:public-migrations -- --postgres --case=PUB-20
 ```
 
 ## Public repositories and expected results
@@ -61,6 +62,7 @@ npm run test:public-migrations -- --postgres --case=PUB-19
 | PUB-17 Alembic | [Invenio Records table migration](https://github.com/inveniosoftware/invenio-records/blob/ed89fd8997e5a398c88dd869da926a0fadb2e879/invenio_records/alembic/862037093962_create_records_tables.py) | Import the unchanged revision and upstream prerequisites with a test lock for SQLAlchemy-Utils 0.42.1. | Reject stale bytes, a bad hash, and a lock with missing transitive packages before database writes. Apply and downgrade the original tables and verify Docker resources are cleaned up. |
 | PUB-18 Alembic | [Concurrent PostgreSQL index example](https://github.com/ionsome/alembic-asyncpg-concurrently-poc/tree/09486481681447199fea0a60cb9ce7a3c505e5be) | Import the unchanged upstream revision with a test PostgreSQL project configuration. | Require backup confirmation, apply the original autocommit block, verify the valid index and row, and confirm the downgrade removes the table. |
 | PUB-19 Liquibase | [Official contexts and labels fixture](https://github.com/liquibase/liquibase/blob/75773ed9b45b0a5adf3c42872d2e5494da669427/liquibase-integration-tests/src/test/resources/changelogs/h2/complete/simple.changelog.labels.context.xml) | Import the original XML with a test-only PostgreSQL configuration. | Select the second context and label, verify the exact history with gaps, and review and apply its rollback. |
+| PUB-20 Flyway | [alist-tvbox Java migration](https://github.com/power721/alist-tvbox/blob/9485146ef42ca18a336e21416cd51a27f79133ae/src/main/java/db/migration/current/V19__LiveFollow.java) | Compile the original revision at Java 21 and test class output layouts for Maven and Gradle. | Reject a changed class after approval, then run the original JDBC migration and test-only SQL and Java callbacks. Verify PostgreSQL objects and SQL/JDBC history rows. |
 
 ## Adapter-specific cases
 
@@ -117,6 +119,6 @@ npm run test:public-migrations -- --postgres --case=PUB-19
 - Drizzle writes cover legacy and v1 PostgreSQL, MySQL, and local SQLite layouts. SQLite requires Node.js 24.10+ for writes. Hosted dialects and SQLite batches that change connection settings, attach databases, or require unsupported virtual table modules remain open. MySQL and SQLite support archive recovery. Legacy-to-v1 history upgrades run upstream.
 - Alembic writes cover literal `depends_on` revision IDs, listed local modules, hash-pinned PyPI wheels, and reviewed `autocommit_block` revisions on project PostgreSQL. Custom connection management and other dependency sources require the project runtime.
 - EF Core executes reviewed PostgreSQL and SQL Server exports on project-owned targets. Direct project-tool invocation and unsupported SQL constructs remain open.
-- Flyway writes cover supported standalone, Spring Boot, Maven SQL profiles and literal Gradle SQL locations on project PostgreSQL and MySQL. Java migrations, callbacks and licensed Undo remain open.
+- Flyway writes cover supported SQL locations, migration SQL callbacks and selected classpath packages containing compiled versioned Java migrations or Java callbacks. PUB-20 requires Java 21 for compiling the original test revision. Live licensed Undo remains open.
 - Liquibase writes cover supported formatted and declarative changelogs, local SQL/CSV resources, context and label filters, and rollback by count or tag. Reviewed XML supports catalog preconditions with HALT behavior and literal values in eligible attributes. Arbitrary preconditions and runtime property sources require the project tool.
 - A history match verifies recorded migrations. Schema drift and data correctness need separate checks.

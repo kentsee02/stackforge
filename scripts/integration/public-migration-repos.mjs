@@ -25,7 +25,7 @@ const cases = [
 ];
 const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12], [2], [8]];
 const selectedCases = new Set(process.argv.filter(arg => arg.startsWith('--case=')).map(arg => arg.slice('--case='.length)));
-assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-9])$/.test(value)), 'Select a case from PUB-01 through PUB-19.');
+assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-9]|20)$/.test(value)), 'Select a case from PUB-01 through PUB-20.');
 const selected = number => !selectedCases.size || selectedCases.has('PUB-' + String(number).padStart(2, '0'));
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-public-migrations-')));
 const repositories = new Map();
@@ -94,17 +94,26 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres', f
   if (adapter === 'ef-core') return assertEfCoreExport(api, project, discovery, name);
   if (['flyway', 'liquibase'].includes(adapter)) {
     const source = discovery.migrationSources.find(item => item.adapter === adapter &&
-      (flywayProfile ? item.scope === 'maven' && item.profile === flywayProfile && item.nativeLocations : ['standalone', 'spring'].includes(item.scope)));
+      (dependencyFixture?.flywayScope ? item.scope === dependencyFixture.flywayScope && item.nativeLocations :
+        flywayProfile ? item.scope === 'maven' && item.profile === flywayProfile && item.nativeLocations : ['standalone', 'spring'].includes(item.scope)));
     assert.ok(source, 'Expected a reviewed migration source');
     const { id: sourceId } = source;
     const { id: targetId } = discovery.sqlMigrationTargets.find(item => engine === 'mysql' ? item.projectMysql : item.projectPostgres);
     const endpoint = project.id + '/database-native-migration';
-    const selection = { adapter, sourceId, targetId, operation: 'apply', ...dependencyFixture?.liquibaseFilters };
+    const selection = { adapter, sourceId, targetId, operation: 'apply', ...dependencyFixture?.liquibaseFilters,
+      ...(dependencyFixture?.classes && { runtimeClasses: dependencyFixture.classes }) };
     const check = () => api(project.id + '/database-' + adapter + '-preview', { sourceId, targetId });
     const previewPlan = extras => api(endpoint, { ...selection, ...extras, mode: 'preview' });
     const execute = (planId, extras) => api(endpoint, { ...selection, ...extras, mode: 'execute', planId, confirmName: name });
     const plan = await previewPlan();
-    if (adapter === 'flyway' && engine === 'postgres' && !flywayProfile) {
+    if (dependencyFixture?.classes) {
+      const classPath = join(project.path, dependencyFixture.classes, 'db/migration/current/V19__LiveFollow.class');
+      const original = await readFile(classPath);
+      await writeFile(classPath, Buffer.concat([original, Buffer.from([0])]));
+      await api(endpoint, { ...selection, mode: 'execute', planId: plan.planId, confirmName: name }, 409);
+      await writeFile(classPath, original);
+    }
+    if (adapter === 'flyway' && engine === 'postgres' && !flywayProfile && !dependencyFixture?.classes) {
       // The upstream seed scripts insert integer literals into a Boolean column.
       // The native PostgreSQL attempt should fail as a group. V1 itself is portable.
       assert.equal((await execute(plan.planId)).status, 'execution-failed');
@@ -119,7 +128,22 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres', f
       return ['grouped-failure', 'apply-to-version-1', 'history'];
     }
     const applied = await execute(plan.planId);
-    assert.equal(applied.status, 'applied');
+    assert.equal(applied.status, 'applied', JSON.stringify(applied));
+    if (dependencyFixture?.classes) {
+      assert.deepEqual(plan.migrations.map(item => item.revision), ['1', '19']);
+      assert.ok(plan.resources.some(file => file.endsWith('V19__LiveFollow.class')));
+      assert.ok(plan.resources.some(file => file.endsWith('afterMigrate.sql')));
+      assert.ok(plan.resources.some(file => file.endsWith('RecordCallback.class')));
+      const { container } = JSON.parse(await readFile(join(root, 'state', 'databases.json'), 'utf8')).development[project.id];
+      assert.match(container, /^[a-f\d]{64}$/);
+      const query = sql => run('docker', ['exec', container, 'psql', '-XqAt', '-U', 'stackforge', '-d', name,
+        '-v', 'ON_ERROR_STOP=1', '-c', sql], { stdoutOnly: true, timeout: 15000 });
+      assert.equal((await query("SELECT to_regclass('live_follow') IS NOT NULL AND to_regclass('callback_ran') IS NOT NULL " +
+        "AND to_regclass('java_callback_ran') IS NOT NULL;")).trim(), 't');
+      const history = (await query("SELECT version || ':' || type FROM flyway_schema_history WHERE success ORDER BY installed_rank;")).trim();
+      assert.equal(history, '1:SQL\n19:JDBC');
+      return ['original-java', 'sql-and-java-callbacks', 'stale-artifact-rejected', 'recorded-jdbc-history'];
+    }
     const after = await check();
     if (dependencyFixture?.liquibaseFilters) {
       assert.deepEqual(plan.migrations.map(item => item.revision), ['nvoxland:2']);
@@ -526,6 +550,57 @@ try {
     const project = await api('import', { path }, 201);
     console.log(JSON.stringify({ repository: repo, commit, source, postgres: await assertLiveMigration(api, project, 'liquibase', 'postgres',
       undefined, { liquibaseFilters: { contextFilter: 'secondContext', labelFilter: 'second' } }) }));
+  }
+  if (live && selected(20)) {
+    const repo = 'power721/alist-tvbox', commit = '9485146ef42ca18a336e21416cd51a27f79133ae';
+    const checkout = join(root, 'flyway-java-upstream');
+    await mkdir(checkout);
+    const git = args => run('git', args, { cwd: checkout, timeout: 120000, stdoutOnly: true, stdoutLimit: 64 * 1024 });
+    await git(['init']);
+    await git(['fetch', '--depth=1', 'https://github.com/' + repo + '.git', commit]);
+    const original = 'src/main/java/db/migration/current/V19__LiveFollow.java';
+    const javaSource = await git(['show', commit + ':' + original]);
+    const image = 'flyway/flyway@sha256:01605f443e1a891b3762f66e66d92403c33b6e0c29099ad550af94b6c1cbc3c1';
+    const docker = args => run('docker', args, { timeout: 120000, stdoutOnly: true });
+    await docker(['pull', image]);
+    const staged = (await docker(['container', 'create', '--network', 'none', image])).trim();
+    assert.match(staged, /^[a-f\d]{64}$/);
+    const core = join(root, 'flyway-core.jar');
+    try { await docker(['cp', staged + ':/flyway/lib/flyway/flyway-core-11.20.3.jar', core]); }
+    finally { await docker(['container', 'rm', staged]); }
+    for (const [flywayScope, classes] of [['maven', 'target/classes'], ['gradle', 'build/classes/java/main']]) {
+      const path = join(root, 'flyway-' + flywayScope);
+      await mkdir(join(path, 'src/main/resources/db/migration'), { recursive: true });
+      await mkdir(join(path, 'src/main/java/db/migration/current'), { recursive: true });
+      await mkdir(join(path, 'prisma'));
+      await mkdir(join(path, classes), { recursive: true });
+      const build = flywayScope === 'maven' ? ['pom.xml', '<project><modelVersion>4.0.0</modelVersion><build><plugins>' +
+        '<plugin><groupId>org.flywaydb</groupId><artifactId>flyway-maven-plugin</artifactId>' +
+        '<configuration><locations><location>classpath:db/migration</location></locations></configuration></plugin></plugins></build></project>'] :
+        ['build.gradle', "plugins { id 'org.flywaydb.flyway' version '11.20.3' }\nflyway {\n locations = ['classpath:db/migration']\n}\n"];
+      await writeFile(join(path, build[0]), build[1]);
+      await writeFile(join(path, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
+      await writeFile(join(path, original), javaSource);
+      await writeFile(join(path, 'src/main/resources/db/migration/V1__fixture.sql'), 'CREATE TABLE setup_sample (id int);');
+      await writeFile(join(path, 'src/main/resources/db/migration/afterMigrate.sql'), 'CREATE TABLE IF NOT EXISTS callback_ran (id int);');
+      const callback = join(path, 'src/main/java/db/migration/current/RecordCallback.java');
+      await writeFile(callback, `package db.migration.current;
+import org.flywaydb.core.api.callback.*;
+public final class RecordCallback implements Callback {
+  public boolean supports(Event event, Context context) { return event == Event.AFTER_MIGRATE; }
+  public boolean canHandleInTransaction(Event event, Context context) { return true; }
+  public String getCallbackName() { return "record-callback"; }
+  public void handle(Event event, Context context) {
+    try (var statement = context.getConnection().createStatement()) {
+      statement.execute("CREATE TABLE IF NOT EXISTS java_callback_ran (id int)");
+    } catch (java.sql.SQLException error) { throw new RuntimeException(error); }
+  }
+}`);
+      await run('javac', ['--release', '21', '-proc:none', '-classpath', core, '-d', join(path, classes), join(path, original), callback], { timeout: 30000 });
+      const project = await api('import', { path }, 201);
+      console.log(JSON.stringify({ repository: repo, commit, flywayScope,
+        postgres: await assertLiveMigration(api, project, 'flyway', 'postgres', undefined, { flywayScope, classes }) }));
+    }
   }
 } finally {
   for (const id of databaseProjects) {

@@ -73,9 +73,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
       - run: npm run test:public-migrations
       - run: npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11 --case=PUB-12 --case=PUB-13
-      - run: npm run test:public-migrations -- --postgres --case=PUB-06 --case=PUB-16 --case=PUB-17 --case=PUB-18 --case=PUB-19
+      - run: npm run test:public-migrations -- --postgres --case=PUB-06 --case=PUB-16 --case=PUB-17 --case=PUB-18 --case=PUB-19 --case=PUB-20
   browser-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 12

@@ -6,7 +6,8 @@ import { resolveStartup } from '../../projects/project-startup.mjs';
 import { localSession } from '../adapters/local.mjs';
 import { migrationImage, runMigrationContainer } from '../docker/migration-container.mjs';
 import { databaseKey, discoverDatabases } from '../discovery.mjs';
-import { flywayChecksum, previewFlyway } from './flyway-preview.mjs';
+import { compareFlywayVersions, flywayChecksum, previewFlyway, versionKey } from './flyway-preview.mjs';
+import { compiledFlywayRuntime } from './flyway-java.mjs';
 import { implicitSpringFlywayProperties } from './flyway-config.mjs';
 import { previewLiquibase } from './liquibase-preview.mjs';
 import { validLiquibaseTag } from './liquibase-changelog.mjs';
@@ -72,7 +73,7 @@ function formattedChanges(text, changes) {
   });
 }
 
-async function readSource(project, adapter, sourceId, scanned, signal, filters) {
+async function readSource(project, adapter, sourceId, scanned, signal, filters, runtimeClasses) {
   const { root, migrationSources } = scanned;
   const source = migrationSources.find(item => item.adapter === adapter && item.id === sourceId);
   const flyway = adapter === 'flyway';
@@ -80,7 +81,8 @@ async function readSource(project, adapter, sourceId, scanned, signal, filters) 
   const buildLocations = flyway && ['maven', 'gradle'].includes(source?.scope) && source.nativeLocations;
   if (source?.scope !== 'standalone' && !spring && !buildLocations) throw new Error(badSource);
   const preview = await (flyway ? previewFlyway : previewLiquibase)(project, sourceId, signal, { scanned });
-  if (preview.status !== 'ready') throw new Error(badSource);
+  const compiled = flyway && runtimeClasses !== undefined ? await compiledFlywayRuntime(root, source, runtimeClasses, signal) : undefined;
+  if (preview.status !== 'ready' && !(compiled?.migrations.length && preview.status === 'empty')) throw new Error(badSource);
   const folder = [source.directory === '.' ? '' : source.directory, source.resourceRoot].filter(Boolean).map(dir => dir + '/').join('');
   const entrypoint = preview.changelog?.slice(folder.length);
   const files = new Map(), checksums = new Map();
@@ -93,7 +95,7 @@ async function readSource(project, adapter, sourceId, scanned, signal, filters) 
     config = await readMigrationFile(join(root, source.source), 64 * 1024);
     if (!buildLocations && !reviewedConfig(adapter, source, config)) throw new Error();
     if (source.nativeManifest) manifest = await readMigrationFile(join(root, folder, source.nativeManifest), 128 * 1024);
-    const paths = flyway ? preview.migrations.map(item => item.file) : preview.files;
+    const paths = flyway ? [...preview.migrations.map(item => item.file), ...preview.callbacks ?? []] : preview.files;
     if (!flyway && (!entrypoint || !preview.changelog.startsWith(folder))) throw new Error();
     if (flyway && preview.migrations.some(item => !['versioned', 'repeatable'].includes(item.kind))) throw new Error();
     for (const file of paths) {
@@ -130,13 +132,20 @@ async function readSource(project, adapter, sourceId, scanned, signal, filters) 
       remaining -= Buffer.byteLength(contents);
       files.set(path, contents);
     }
+    if (compiled) {
+      const versioned = [...preview.migrations.filter(item => item.kind === 'versioned'), ...compiled.migrations];
+      if (new Set(versioned.map(item => versionKey(item.version))).size !== versioned.length) throw new Error();
+      preview.migrations = [...versioned.sort((a, b) => compareFlywayVersions(a.version, b.version)),
+        ...preview.migrations.filter(item => item.kind !== 'versioned')];
+      files.set('java/reviewed.jar', compiled.jar);
+    }
   } catch (error) {
     if (error.name === 'AbortError') throw error;
     throw new Error(badSource);
   }
   const rollback = preview.changes?.map(item => undoByFile.get(item.file)?.shift());
   return { directory: source.directory, folder, preview, checksums, files, rollback, structured, entrypoint, requiresSelection,
-    resources: [...resources].map(path => folder + path),
+    compiled, resources: [...resources].map(path => folder + path).concat(preview.callbacks ?? [], compiled?.resources ?? []),
     schema: source.nativeSchema, fingerprint: databaseKey(source, config, manifest, [...files], [...substitutions]) };
 }
 
@@ -186,7 +195,7 @@ function reviewedHistory(state, migrations, adapter, allowGaps = false) {
       pending.push(migration);
       if (status === 'outdated') applied++;
       if (!repeatable) gap = true;
-    } else if (status === appliedState && (!gap || repeatable || allowGaps)) {
+    } else if ((status === appliedState || migration.javaClass && status === 'recorded') && (!gap || repeatable || allowGaps)) {
       applied++;
       recorded.push(migration);
     } else throw new Error(unsafeHistory);
@@ -255,7 +264,7 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
   const filters = adapter === 'liquibase' ? liquibaseFilters(payload) : undefined;
   const scanned = await discoverDatabases(project, { includeMigrations: true, includeConnections: true });
   const { identity } = scanned;
-  const source = await readSource(project, adapter, sourceId, scanned, signal, filters);
+  const source = await readSource(project, adapter, sourceId, scanned, signal, filters, payload.runtimeClasses);
   const history = mysql ? mysqlHistoryTable(target.name, payload.table ?? (adapter === 'liquibase' ? 'DATABASECHANGELOG' : tool.table)) :
     postgresHistoryTable(payload.schema, payload.table, tool.table);
   if (source.schema && source.schema !== history.schema) throw new Error('Choose the history schema declared by this Flyway configuration.');
@@ -365,11 +374,13 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
 
   await verifyShared(target);
   const latest = await discoverDatabases(project, { includeMigrations: true, includeConnections: true });
-  if ((await readSource(project, adapter, sourceId, latest, signal, filters)).fingerprint !== source.fingerprint) throw new Error(changed);
+  if ((await readSource(project, adapter, sourceId, latest, signal, filters, payload.runtimeClasses)).fingerprint !== source.fingerprint) throw new Error(changed);
   await resolveStartup(project, [], identity);
   const invocation = adapter === 'flyway' ? {
     env: { FLYWAY_URL: jdbc, FLYWAY_USER: credentials.user, FLYWAY_PASSWORD: credentials.password },
-    args: ['-locations=filesystem:/stackforge', '-defaultSchema=' + history.schema, '-table=' + history.table,
+    args: ['-locations=filesystem:/stackforge' + (source.compiled ? ',' + source.compiled.locations.map(path => 'classpath:' + path).join(',') : ''),
+      ...(source.compiled ? ['-jarDirs=/stackforge/java', ...(source.compiled.callbacks.length ? ['-callbacks=' + source.compiled.callbacks.join(',')] : [])] : []),
+      '-defaultSchema=' + history.schema, '-table=' + history.table,
       '-baselineOnMigrate=false', '-validateOnMigrate=true', '-group=' + !mysql, '-cleanDisabled=true', '-placeholderReplacement=false',
       ...(mysql ? ['-driver=org.mariadb.jdbc.Driver'] : []),
       ...(flywayTarget ? ['-target=' + payload.revision] : []), 'migrate']
@@ -378,7 +389,8 @@ export async function nativeSqlMigration({ project, payload, target, client, sig
     await runJob(invocation);
   } catch (error) {
     if (error.name === 'AbortError' || error.message === changed) throw error;
-    if (filtered && (mysql || (await compare().catch(() => undefined))?.fingerprint !== state.fingerprint)) {
+    if ((filtered || source.compiled || source.preview.callbacks?.length) &&
+        (mysql || (await compare().catch(() => undefined))?.fingerprint !== state.fingerprint)) {
       return { status: 'execution-partial' };
     }
     return { status: 'execution-failed' };
