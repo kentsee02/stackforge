@@ -33,6 +33,7 @@ npm run test:public-migrations -- --mysql --case=PUB-10 --case=PUB-11
 npm run test:public-migrations -- --mysql --case=PUB-12 --case=PUB-13
 npm run test:public-migrations -- --case=PUB-14 --case=PUB-15
 npm run test:public-migrations -- --postgres --case=PUB-02 --case=PUB-16
+npm run test:public-migrations -- --postgres --case=PUB-17
 ```
 
 ## Public repositories and expected results
@@ -55,6 +56,7 @@ npm run test:public-migrations -- --postgres --case=PUB-02 --case=PUB-16
 | PUB-14 Drizzle | [electron-db](https://github.com/arjunemirchandani/electron-db/tree/43be51f7a44f23e05f481b3745f44cfe6fdea38c) | Import and clone the same unmodified public project. Detect its SQLite config and eight journaled migrations without assuming an Electron profile path. | Apply the original SQL to a fresh project file. Verify the FTS5 table and all eight recorded migrations. |
 | PUB-15 Drizzle | [Official SQLite v1 fixture](https://github.com/drizzle-team/drizzle-orm/tree/5d71fc408add08bd207f4753f4554578ec9e0640/integration-tests/drizzle2/sqlite) | Import the upstream folder SQL with a local test configuration. | Apply using a literal SQLite file URL and verify the folder name and SQL hash in history. |
 | PUB-16 Alembic | [Invenio DB](https://github.com/inveniosoftware/invenio-db/tree/fac3e569a8cada66e924965578814484e77724f5/invenio_db/alembic) and [Invenio Records](https://github.com/inveniosoftware/invenio-records/tree/ed89fd8997e5a398c88dd869da926a0fadb2e879/invenio_records/alembic) | Import three unchanged revisions from the two packages with a test-only configuration. | Apply their dependency chain and verify that only the effective head is recorded. Check the transaction table and sequence, then downgrade and verify both objects are removed. |
+| PUB-17 Alembic | [Invenio Records table migration](https://github.com/inveniosoftware/invenio-records/blob/ed89fd8997e5a398c88dd869da926a0fadb2e879/invenio_records/alembic/862037093962_create_records_tables.py) | Import the unchanged revision and upstream prerequisites with a test lock for SQLAlchemy-Utils 0.42.1. | Reject stale bytes, a bad hash, and a lock with missing transitive packages before database writes. Apply and downgrade the original tables and verify Docker resources are cleaned up. |
 
 ## Adapter-specific cases
 
@@ -81,6 +83,7 @@ npm run test:public-migrations -- --postgres --case=PUB-02 --case=PUB-16
 | ALE-04 | Multiple branch heads and rollback | Apply all heads. Require an explicit branched rollback target and verify the empty head set after downgrading to `base`. | `test:native-migrations` |
 | ALE-05 | Connection-aware project environment with a local Python module | Bind the environment and helper bytes to approval. Refuse escaped paths and a premature SQLAlchemy commit. Apply and downgrade on the verified supplied connection. | `test:native-migrations` |
 | ALE-06 | Literal cross-branch `depends_on` and effective history | Preview without importing project Python. Reject stale files, verify prerequisite order and effective heads, and downgrade the dependency chain. | `test:native-migrations -- --alembic-only`, PUB-16, `test:browser` |
+| ALE-07 | Reviewed external Python wheels | Bind lock bytes to approval. Reject escaped paths, symbolic links, duplicate or unpinned packages, and pip directives. Confirm the package list in both languages. | `test`, PUB-17, `test:browser` |
 | EF-01 | Split partial classes, custom directories, BOM and multiple contexts | Keep each migration in its own project and `DbContext`. Flag duplicate or unresolved declarations. | `test`, `test:public-migrations` |
 | EF-02 | Default and custom history tables on PostgreSQL and SQL Server | Report missing, pending, applied or conflicting history. Keep credentials out of API results. | `test:development-postgres`, `test:migration-sql-server` |
 | EF-03 | Reviewed PostgreSQL apply and rollback SQL | Verify the selected context and migration range, then check the exact history in the same transaction before commit. | `test:native-migrations`, PUB-04 |
@@ -107,7 +110,7 @@ npm run test:public-migrations -- --postgres --case=PUB-02 --case=PUB-16
 ## Remaining coverage
 
 - Drizzle writes cover legacy and v1 PostgreSQL, MySQL, and local SQLite layouts. SQLite requires Node.js 24.10+ for writes. Hosted dialects and SQLite batches that change connection settings, attach databases, or require unsupported virtual table modules remain open. MySQL and SQLite support archive recovery. Legacy-to-v1 history upgrades run upstream.
-- Alembic writes cover literal `depends_on` revision IDs and supported connection-aware project environments with listed local modules. External packages, dynamic revision references and nontransactional migrations remain open.
+- Alembic writes cover literal `depends_on` revision IDs, listed local modules and compatible PyPI wheels pinned in a SHA-256 lock. Other dependency sources, dynamic revision references and nontransactional migrations remain open.
 - EF Core executes reviewed PostgreSQL and SQL Server exports on project-owned targets. Direct project-tool invocation and unsupported SQL constructs remain open.
 - Flyway writes cover supported standalone, Spring Boot, Maven SQL profiles and literal Gradle SQL locations on project PostgreSQL and MySQL. Java migrations, callbacks and licensed Undo remain open.
 - Liquibase writes cover supported formatted and declarative changelogs, including declared local SQL and CSV resources, with rollback by count or tag. Runtime configuration, context and label filters, and other external inputs remain open. PUB-08 covers source discovery.

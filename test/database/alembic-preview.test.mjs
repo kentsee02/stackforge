@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { discoverDatabases } from '../../src/database/discovery.mjs';
+import { readAlembicDependencyLock } from '../../src/database/migrations/alembic-dependency-lock.mjs';
 import { previewAlembic } from '../../src/database/migrations/alembic-preview.mjs';
 import { resolveStartup } from '../../src/projects/project-startup.mjs';
 
@@ -28,6 +29,40 @@ async function fixture(t) {
     `revision: str = '${id}'\ndown_revision: str | tuple[str, ...] | None = ${parent}\n${extra}`);
   return { workspace, project, backend, versions, config, source, preview, revision };
 }
+
+test('Alembic dependency locks bind exact hashes and paths without accepting pip directives', async t => {
+  const { project, backend, workspace } = await fixture(t);
+  const filename = 'services/api/python.lock';
+  const hash = '--hash=sha256:' + 'a'.repeat(64);
+  const rule = 'SQLAlchemy_Utils==0.42.1';
+  const file = join(backend, 'python.lock');
+  await writeFile(file, '# Reviewed wheel\r\n' + rule + ' \\\r\n    ' + hash + '\r\n');
+  const lock = await readAlembicDependencyLock(project.path, filename);
+  assert.deepEqual(lock.packages, [{ name: 'sqlalchemy-utils', version: '0.42.1' }]);
+  assert.equal(lock.requirements, 'sqlalchemy-utils==0.42.1 ' + hash + '\n');
+  await writeFile(file, rule + ' ' + hash + '\n');
+  assert.notEqual((await readAlembicDependencyLock(project.path, filename)).fingerprint, lock.fingerprint);
+  for (const candidate of ['../python.lock', '/etc/requirements.txt', 'C:\\temp\\python.lock', '.git/python.lock', 'services/api/./python.lock']) {
+    await assert.rejects(readAlembicDependencyLock(project.path, candidate), /exact package versions/);
+  }
+  for (const contents of [
+    rule, 'package>=1 ' + hash, 'package==1.* ' + hash, 'package==1 --hash=md5:' + '1'.repeat(32),
+    'package @ https://example.com/archive.whl', '-r other.txt', '--extra-index-url https://example.com',
+    '-e .', 'package[feature]==1 ' + hash, 'package==1; python_version>="3" ' + hash,
+    rule + ' ' + hash + '\nsqlalchemy-utils==0.42.1 ' + hash, 'SQLAlchemy==2.0.48 ' + hash, '  # no packages'
+  ]) {
+    await writeFile(file, contents);
+    await assert.rejects(readAlembicDependencyLock(project.path, filename), /exact package versions/);
+  }
+  await writeFile(join(workspace, 'outside.lock'), rule + ' ' + hash);
+  const linked = join(backend, 'linked.lock');
+  try { await symlink(join(workspace, 'outside.lock'), linked); }
+  catch (error) {
+    if (error.code === 'EPERM' && process.platform === 'win32') return;
+    throw error;
+  }
+  await assert.rejects(readAlembicDependencyLock(project.path, 'services/api/linked.lock'), /exact package versions/);
+});
 
 test('Alembic preview orders a branched and merged migration graph without loading Python', async t => {
   const { versions, preview, revision } = await fixture(t);

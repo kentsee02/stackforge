@@ -25,7 +25,7 @@ const cases = [
 ];
 const expectedCounts = [[1], [5], [3, 1, 4, 1], Array(10).fill(1), [3], [3, 3, 3, 3, 0], [4, 4], [12], [2], [8]];
 const selectedCases = new Set(process.argv.filter(arg => arg.startsWith('--case=')).map(arg => arg.slice('--case='.length)));
-assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-6])$/.test(value)), 'Select a case from PUB-01 through PUB-16.');
+assert.ok([...selectedCases].every(value => /^PUB-(?:0[1-9]|1[0-7])$/.test(value)), 'Select a case from PUB-01 through PUB-17.');
 const selected = number => !selectedCases.size || selectedCases.has('PUB-' + String(number).padStart(2, '0'));
 const root = await realpath(await mkdtemp(join(tmpdir(), 'stackforge-public-migrations-')));
 const repositories = new Map();
@@ -46,7 +46,7 @@ const app = createApp({
   }
 });
 
-async function assertLiveMigration(api, project, adapter, engine = 'postgres', flywayProfile, dependencyFixture = false) {
+async function assertLiveMigration(api, project, adapter, engine = 'postgres', flywayProfile, dependencyFixture) {
   const server = createServer().listen(0, '127.0.0.1');
   await once(server, 'listening');
   const { port } = server.address();
@@ -139,35 +139,74 @@ async function assertLiveMigration(api, project, adapter, engine = 'postgres', f
   const targetId = discovery.alembicTargets.find(item => item.projectPostgres).id;
   const history = () => api(project.id + '/database-alembic-preview', { sourceId, targetId });
   const first = (await history()).revisions[0].revision;
+  const dependencyLock = dependencyFixture?.lock;
+  const migrationRoute = project.id + '/database-native-migration';
+  const baseSelection = { adapter, sourceId, targetId };
+  const dependencyResources = () => Promise.all(['volume', 'network'].map(async type =>
+    (await run('docker', [type, 'ls', '--filter', 'label=io.stackforge.alembic-dependencies', '--format', '{{.Name}}'],
+      { stdoutOnly: true, timeout: 15000 })).trim().split(/\r?\n/).filter(Boolean).sort()));
+  const resourcesBefore = dependencyLock && await dependencyResources();
+  if (dependencyLock) {
+    const path = join(project.path, dependencyLock);
+    const lock = await readFile(path, 'utf8');
+    const selection = { ...baseSelection, operation: 'apply', dependencyLock };
+    const plan = async () => api(migrationRoute, { ...selection, mode: 'preview' });
+    const apply = (value, status) => api(migrationRoute, { ...selection, mode: 'execute', planId: value.planId, confirmName: name }, status);
+    const previous = await plan();
+    assert.deepEqual(await dependencyResources(), resourcesBefore);
+    assert.deepEqual(previous.packages, [{ name: 'sqlalchemy-utils', version: '0.42.1' }]);
+    await writeFile(path, lock + '# Changed after review\n');
+    await apply(previous, 409);
+    await writeFile(path, lock.replace(/[a-f\d]{64}/, '0'.repeat(64)));
+    const badHash = await plan();
+    assert.equal((await apply(badHash)).status, 'dependency-install-failed');
+    // PyPI publishes this SHA-256 for the Requests 2.32.5 wheel. It requires additional packages.
+    await writeFile(path, 'requests==2.32.5 --hash=sha256:2462f94637a34fd532264295e186976db0f5d453d1cdd31473c85a6a161affb6\n');
+    assert.equal((await apply(await plan())).status, 'dependency-lock-incomplete');
+    assert.deepEqual((await history()).database.heads, []);
+    assert.deepEqual(await dependencyResources(), resourcesBefore);
+    await writeFile(path, lock);
+  }
   const migrate = async (operation, revision, expected) => {
-    const selection = { adapter, operation, revision, sourceId, targetId };
-    const before = await api(project.id + '/database-native-migration', { ...selection, mode: 'preview' });
+    const selection = { ...baseSelection, operation, revision, ...(dependencyLock && { dependencyLock }) };
+    const before = await api(migrationRoute, { ...selection, mode: 'preview' });
     const { heads } = await history();
     assert.equal(before.toRevision, revision ?? (heads.length === 1 ? heads[0] : 'heads'));
-    const after = await api(project.id + '/database-native-migration', { ...selection, mode: 'execute', planId: before.planId, confirmName: name });
-    assert.equal(after.status, expected);
+    const after = await api(migrationRoute, { ...selection, mode: 'execute', planId: before.planId, confirmName: name });
+    assert.equal(after.status, expected, JSON.stringify(after));
     return before;
   };
-  await migrate('apply', first, 'applied');
-  assert.deepEqual((await history()).database.heads, [first]);
-  await migrate('rollback', 'base', 'rolled-back');
-  assert.deepEqual((await history()).database.heads, []);
+  if (!dependencyLock) {
+    await migrate('apply', first, 'applied');
+    assert.deepEqual((await history()).database.heads, [first]);
+    await migrate('rollback', 'base', 'rolled-back');
+    assert.deepEqual((await history()).database.heads, []);
+  }
   const applied = await migrate('apply', undefined, 'applied');
   assert.equal((await history()).database.status, 'current');
   if (dependencyFixture) {
-    assert.deepEqual(applied.migrations.map(row => row.revision), ['96e796392533', 'dbdbc1b19cf2', '1095cdf9f350']);
-    assert.deepEqual(applied.expectedHeads, ['1095cdf9f350']);
+    const revisions = ['96e796392533', 'dbdbc1b19cf2', '1095cdf9f350', ...(dependencyLock ? ['862037093962'] : [])];
+    assert.deepEqual(applied.migrations.map(row => row.revision), revisions);
+    assert.deepEqual(applied.expectedHeads, [revisions.at(-1)]);
     assert.deepEqual((await history()).database.heads, applied.expectedHeads);
     const { container } = JSON.parse(await readFile(join(root, 'state', 'databases.json'), 'utf8')).development[project.id];
     assert.match(container, /^[a-f\d]{64}$/);
     const query = sql => run('docker', ['exec', container, 'psql', '-XqAt', '-U', 'stackforge', '-d', name,
       '-v', 'ON_ERROR_STOP=1', '-c', sql], { stdoutOnly: true, timeout: 15000 });
     assert.equal((await query("SELECT to_regclass('transaction') IS NOT NULL AND to_regclass('transaction_id_seq') IS NOT NULL;")).trim(), 't');
+    if (dependencyLock) {
+      assert.equal((await query("SELECT to_regclass('records_metadata') IS NOT NULL AND to_regclass('records_metadata_version') IS NOT NULL;")).trim(), 't');
+    }
     const rolledBack = await migrate('rollback', 'base', 'rolled-back');
     assert.deepEqual(rolledBack.expectedHeads, []);
     assert.deepEqual((await history()).database.heads, []);
     assert.equal((await query("SELECT to_regclass('transaction') IS NULL AND to_regclass('transaction_id_seq') IS NULL;")).trim(), 't');
-    return ['apply-to-revision', 'depends-on', 'effective-history', 'rollback-to-base', 'physical-schema'];
+    if (dependencyLock) {
+      assert.equal((await query("SELECT to_regclass('records_metadata') IS NULL AND to_regclass('records_metadata_version') IS NULL;")).trim(), 't');
+      assert.deepEqual(await dependencyResources(), resourcesBefore);
+    }
+    return ['depends-on', 'effective-history', 'rollback-to-base', 'physical-schema',
+      ...(dependencyLock ? ['reviewed-wheel', 'wrong-hash-rejected', 'incomplete-lock-rejected', 'stale-lock-rejected', 'cleanup'] : ['apply-to-revision'])];
   }
   return ['apply-to-revision', 'rollback-to-base', 'apply-all', 'history'];
 }
@@ -389,30 +428,44 @@ try {
     const imported = await api('import', { path }, 201);
     console.log(JSON.stringify({ repository: 'drizzle-team/drizzle-orm', commit, sqlite: await assertLiveSqlite(api, imported, 'v1', 1) }));
   }
-  if (live && selected(16)) {
+  if (live && (selected(16) || selected(17))) {
     const upstream = [
       { repo: 'inveniosoftware/invenio-db', commit: 'fac3e569a8cada66e924965578814484e77724f5',
         directory: 'invenio_db/alembic', files: ['96e796392533_create_database_migrations.py', 'dbdbc1b19cf2_create_transaction_table.py'] },
       { repo: 'inveniosoftware/invenio-records', commit: 'ed89fd8997e5a398c88dd869da926a0fadb2e879',
-        directory: 'invenio_records/alembic', files: ['1095cdf9f350_create_records_branch.py'] }
+        directory: 'invenio_records/alembic', files: ['1095cdf9f350_create_records_branch.py',
+          ...(selected(17) ? ['862037093962_create_records_tables.py'] : [])] }
     ];
-    const path = join(root, 'invenio-alembic');
-    const migrations = join(path, 'alembic', 'versions');
-    await mkdir(migrations, { recursive: true });
-    await mkdir(join(path, 'prisma'));
-    await writeFile(join(path, 'alembic.ini'), '[alembic]\nscript_location = %(here)s/alembic\n');
-    await writeFile(join(path, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
+    const wheelRevision = '862037093962_create_records_tables.py';
+    const revisions = new Map();
     for (const { repo, commit, directory, files } of upstream) {
       const checkout = join(root, 'invenio-upstream-' + commit.slice(0, 8));
       await mkdir(checkout);
       const git = args => run('git', args, { cwd: checkout, timeout: 120000, stdoutOnly: true });
       await git(['init']);
       await git(['fetch', '--depth=1', 'https://github.com/' + repo + '.git', commit]);
-      for (const file of files) await writeFile(join(migrations, file), await git(['show', commit + ':' + directory + '/' + file]));
+      for (const file of files) revisions.set(file, await git(['show', commit + ':' + directory + '/' + file]));
     }
-    const imported = await api('import', { path }, 201);
-    console.log(JSON.stringify({ repositories: upstream.map(({ repo, commit }) => ({ repo, commit })),
-      postgres: await assertLiveMigration(api, imported, 'alembic', 'postgres', undefined, true) }));
+    const repositories = upstream.map(({ repo, commit }) => ({ repo, commit }));
+    for (const number of [16, 17].filter(selected)) {
+      const path = join(root, 'invenio-alembic-' + number);
+      const migrations = join(path, 'alembic', 'versions');
+      await mkdir(migrations, { recursive: true });
+      await mkdir(join(path, 'prisma'));
+      await writeFile(join(path, 'alembic.ini'), '[alembic]\nscript_location = %(here)s/alembic\n');
+      await writeFile(join(path, 'prisma/schema.prisma'), 'datasource db { provider = "postgresql" }');
+      for (const [file, contents] of revisions) {
+        if (number === 17 || file !== wheelRevision) await writeFile(join(migrations, file), contents);
+      }
+      const lock = number === 17 ? 'requirements-alembic.lock' : undefined;
+      if (lock) {
+        // PyPI publishes this SHA-256 for the universal SQLAlchemy-Utils 0.42.1 wheel.
+        await writeFile(join(path, lock), 'SQLAlchemy-Utils==0.42.1 --hash=sha256:243cfe1b3a1dae3c74118ae633f1d1e0ed8c787387bc33e556e37c990594ac80\n');
+      }
+      const imported = await api('import', { path }, 201);
+      console.log(JSON.stringify({ repositories,
+        postgres: await assertLiveMigration(api, imported, 'alembic', 'postgres', undefined, { lock }) }));
+    }
   }
 } finally {
   for (const id of databaseProjects) {

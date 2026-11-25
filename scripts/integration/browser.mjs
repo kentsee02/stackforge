@@ -377,8 +377,9 @@ try {
     if (payload.adapter === 'alembic') {
       assert.equal(payload.operation, 'apply');
       assert.equal(payload.revision, 'start');
+      assert.equal(payload.dependencyLock, 'requirements-alembic.lock');
       return route.fulfill({ json: { ...reviewedPlan, tool: 'Alembic', version: '1.20.1', fromRevision: 'base', toRevision: 'start',
-        expectedHeads: ['start'] } });
+        expectedHeads: ['start'], dependencyLock: payload.dependencyLock, packages: [{ name: 'sqlalchemy-utils', version: '0.42.1' }] } });
     }
     if (payload.adapter === 'ef-core') {
       assert.equal(payload.operation, 'rollback');
@@ -520,14 +521,19 @@ try {
   assert.equal(await alembic.locator('.alembic-revision-state').count(), 0);
   await alembic.getByLabel('Database for public.alembic_version').selectOption(ownedTarget.id);
   await alembic.getByLabel('Target revision').selectOption('start');
+  await alembic.getByLabel('Dependency lock file inside the project (optional)').fill('requirements-alembic.lock');
   await alembic.getByRole('button', { name: 'Preview migration plan' }).click();
   await contains('.alembic-preview .native-migration form', 'base → start');
   await contains('.alembic-preview .native-migration form', 'Recorded revisions after migration · start');
+  await contains('.alembic-preview .native-migration form', 'Locked Python package · sqlalchemy-utils==0.42.1');
   await ef.getByLabel('History schema').fill('public');
   await efTarget.selectOption(ownedTarget.id);
   await efTarget.selectOption(ownedSql.id);
   await page.locator('#language').selectOption('zh-CN');
   await contains('.alembic-preview .native-migration form', '迁移后记录的版本 · start');
+  await contains('.alembic-preview .native-migration form', '锁定的 Python 包 · sqlalchemy-utils==0.42.1');
+  await alembic.getByLabel('项目内的依赖锁文件（可选）').fill('different.lock');
+  assert.equal(await alembic.locator('.native-migration form').isVisible(), false);
   const efNative = ef.locator('.native-migration');
   await efNative.getByLabel('目标版本').selectOption('base');
   await efNative.getByLabel('EF Core SQL 文件的项目相对路径').fill('artifacts/rollback.sql');

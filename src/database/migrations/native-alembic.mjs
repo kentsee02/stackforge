@@ -4,8 +4,10 @@ import { throwIfCancelled } from '../../platform/process.mjs';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { localSession } from '../adapters/local.mjs';
 import { buildMigrationImage, runMigrationContainer } from '../docker/migration-container.mjs';
+import { alembicDependencyPath, withAlembicDependencyRuntime } from '../docker/alembic-dependency-runtime.mjs';
 import { databaseKey, discoverDatabases } from '../discovery.mjs';
 import { compareAlembicHistory } from './alembic-history.mjs';
+import { readAlembicDependencyLock } from './alembic-dependency-lock.mjs';
 import { planAlembicDependencies } from './alembic-dependency-plan.mjs';
 import { previewAlembic } from './alembic-preview.mjs';
 import { readMigrationFile } from './migration-files.mjs';
@@ -33,8 +35,10 @@ const runner = [
   'from alembic.config import Config',
   'from alembic.migration import MigrationContext',
   'from sqlalchemy import URL, create_engine, event',
+  'if os.environ.get("SF_LOCKED_DEPENDENCIES"):',
+  '    sys.path.append(' + JSON.stringify(alembicDependencyPath) + ')',
   'url = URL.create("postgresql+psycopg", username=os.environ["SF_USER"], password=os.environ["SF_PASSWORD"],',
-  '  host="127.0.0.1", port=int(os.environ["SF_PORT"]), database=os.environ["SF_DATABASE"],',
+  '  host=os.environ.get("SF_HOST", "127.0.0.1"), port=int(os.environ["SF_PORT"]), database=os.environ["SF_DATABASE"],',
   '  query={"application_name": os.environ["SF_APPLICATION"]})',
   'options = dict(version_table=os.environ["SF_TABLE"], version_table_schema=os.environ["SF_SCHEMA"])',
   'reviewed = None',
@@ -204,6 +208,7 @@ export async function nativeAlembicMigration({ project, payload, target, client,
   const runtime = payload.projectEnvironment === true ? { files: payload.runtimeFiles ?? [] } : undefined;
   const scanned = await discoverDatabases(project, { includeMigrations: true });
   const source = await readSource(project, sourceId, scanned, signal, runtime);
+  const lock = await readAlembicDependencyLock(scanned.root, payload.dependencyLock);
   const { revisions } = source;
   const history = postgresHistoryTable(payload.schema, payload.table, 'alembic_version');
   const scope = await client.migrationScope();
@@ -240,36 +245,55 @@ export async function nativeAlembicMigration({ project, payload, target, client,
   const expires = mode === 'preview' ? String(Date.now() + 300000) : /^(\d{13})\.[a-f\d]{64}$/.exec(payload.planId ?? '')?.[1];
   const signature = createHmac('sha256', signingKey).update(JSON.stringify([
     expires, project.id, scanned.identity, sourceId, source.fingerprint, operation, selected,
-    target, scope.container, image, history, before, state.fingerprint, expected, reviewedRange
+    target, scope.container, image, history, before, state.fingerprint, expected, reviewedRange, lock?.fingerprint
   ])).digest('hex');
   const planId = expires + '.' + signature;
   const plan = { target, history, tool: 'Alembic', version, directory: source.directory,
     ...(source.resources.length && { resources: source.resources }),
+    ...(lock && { dependencyLock: lock.path, packages: lock.packages }),
     fromRevision: state.heads.join(', ') || 'base', toRevision: selected, ...(crossBranch && { expectedHeads: expected }),
     migrations: range.map(({ file, revision }) => ({ file, revision })) };
   if (mode === 'preview') return { status: 'planned', planId, ...plan };
   if (!expires || Number(expires) <= Date.now() || payload.planId !== planId || payload.confirmName !== target.name) throw new Error(changed);
   await verifyShared(target);
-  const latest = await discoverDatabases(project, { includeMigrations: true });
-  if ((await readSource(project, sourceId, latest, signal, runtime)).fingerprint !== source.fingerprint) throw new Error(changed);
-  await resolveStartup(project, [], scanned.identity);
+  const verifyInputs = async () => {
+    const latest = await discoverDatabases(project, { includeMigrations: true });
+    if ((await readSource(project, sourceId, latest, signal, runtime)).fingerprint !== source.fingerprint ||
+        (await readAlembicDependencyLock(latest.root, payload.dependencyLock))?.fingerprint !== lock?.fingerprint ||
+        Number(expires) <= Date.now()) throw new Error(changed);
+    await resolveStartup(project, [], scanned.identity);
+  };
+  const verifyDatabase = async () => {
+    await scope.verify();
+    if (databaseKey(await readIdentity()) !== databaseKey(before) || (await compare()).fingerprint !== state.fingerprint) throw new Error(changed);
+  };
+  await verifyInputs();
   const application = 'stackforge_migration_' + randomBytes(12).toString('hex');
   const files = crossBranch ? new Map([...source.files, ['reviewed-graph.json', JSON.stringify(reviewedGraph)]]) : source.files;
+  const execute = dependencies => runMigrationContainer({ ...scope, image, args: [operation, selected], files, directory, signal,
+    network: dependencies?.network, mounts: dependencies?.mounts,
+    env: { SF_USER: credentials.user, SF_PASSWORD: credentials.password, SF_PORT: String(scope.port), SF_DATABASE: target.name,
+      SF_APPLICATION: application, SF_SCHEMA: history.schema, SF_TABLE: history.table,
+      SF_TARGET: JSON.stringify([target.name, before.startedAt, before.oid]), SF_CURRENT: JSON.stringify(state.heads), SF_EXPECTED: JSON.stringify(expected),
+      ...(crossBranch && { SF_CHECK_RANGE: '1', PYTHONHASHSEED: '0' }),
+      ...(dependencies && { SF_LOCKED_DEPENDENCIES: '1', SF_HOST: dependencies.host }) },
+    cancel: () => scope.cancel(application),
+    async verify() {
+      await dependencies?.verify();
+      await verifyDatabase();
+    }
+  });
   try {
-    await runMigrationContainer({ ...scope, image, args: [operation, selected], files, directory, signal,
-      env: { SF_USER: credentials.user, SF_PASSWORD: credentials.password, SF_PORT: String(scope.port), SF_DATABASE: target.name,
-        SF_APPLICATION: application, SF_SCHEMA: history.schema, SF_TABLE: history.table,
-        SF_TARGET: JSON.stringify([target.name, before.startedAt, before.oid]), SF_CURRENT: JSON.stringify(state.heads), SF_EXPECTED: JSON.stringify(expected),
-        ...(crossBranch && { SF_CHECK_RANGE: '1', PYTHONHASHSEED: '0' }) },
-      cancel: () => scope.cancel(application),
-      async verify() {
-        await scope.verify();
-        if (databaseKey(await readIdentity()) !== databaseKey(before) || (await compare()).fingerprint !== state.fingerprint) throw new Error(changed);
-      }
-    });
+    if (lock) {
+      await withAlembicDependencyRuntime({ scope, image, directory, signal, lock, async verify() {
+        await verifyInputs();
+        await verifyShared(target);
+        await verifyDatabase();
+      } }, execute);
+    } else await execute();
   } catch (error) {
     if (error.name === 'AbortError' || error.message === changed) throw error;
-    return { status: 'execution-failed' };
+    return { status: error.dependencyStatus ?? 'execution-failed' };
   }
   try {
     const currentState = await compare();

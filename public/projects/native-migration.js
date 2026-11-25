@@ -4,6 +4,10 @@ import { labelledMigrationControl } from '/projects/migration-history.js';
 const outcomes = {
   applied: 'Migration finished and the database history was verified.',
   'rolled-back': 'Rollback finished and the database history was verified.',
+  'dependency-install-failed': 'Could not install the approved Python wheels. Check PyPI access, wheel compatibility, and SHA-256 hashes.',
+  'dependency-base-conflict': 'The dependency lock lists a package already supplied by the Alembic runtime.',
+  'dependency-lock-incomplete': 'The dependency lock is missing a compatible transitive package.',
+  'dependency-network-failed': 'Could not isolate the Alembic runtime on the project database network.',
   'execution-failed': 'The migration tool could not finish. Check the current history before retrying.',
   'execution-unverified': 'The tool finished, but the expected history could not be verified. Check the database before retrying.'
 };
@@ -66,8 +70,14 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   runtimeFiles.maxLength = 4000;
   runtimeFiles.spellcheck = false;
   runtimeFiles.autocomplete = 'off';
+  const dependencyLock = document.createElement('input');
+  dependencyLock.maxLength = 240;
+  dependencyLock.autocomplete = 'off';
+  dependencyLock.spellcheck = false;
+  dependencyLock.placeholder = 'requirements-alembic.lock';
   if (source.adapter === 'alembic') actions.append(labelledMigrationControl('Use the project Alembic environment', projectRuntime),
-    labelledMigrationControl('Local Python files, comma separated', runtimeFiles));
+    labelledMigrationControl('Local Python files, comma separated', runtimeFiles),
+    labelledMigrationControl('Dependency lock file inside the project (optional)', dependencyLock));
   const rollbackCount = document.createElement('input');
   rollbackCount.type = 'number';
   rollbackCount.min = '1';
@@ -98,6 +108,7 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
     reset(true);
   });
   runtimeFiles.addEventListener('input', () => reset(true));
+  dependencyLock.addEventListener('input', () => reset(true));
   rollbackCount.addEventListener('input', () => reset(true));
   rollbackTag.addEventListener('input', () => {
     rollbackCount.disabled = Boolean(rollbackTag.value.trim());
@@ -116,7 +127,7 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
   async function send(mode, operation, targetSelection) {
     const { token } = await request('/api/state');
     const liquibaseRollback = source.adapter === 'liquibase' && operation === 'rollback';
-    const timeout = liquibaseRollback ? 360000 : mode === 'preview' ? 220000 : 240000;
+    const timeout = liquibaseRollback || mode === 'execute' && targetSelection.dependencyLock ? 360000 : mode === 'preview' ? 220000 : 240000;
     return post('/api/projects/' + projectId + '/database-native-migration', token, {
       sourceId: source.id, adapter: source.adapter, operation, mode, ...targetSelection,
       ...(mode === 'execute' && { planId: plan.planId, confirmName: confirm.value })
@@ -157,10 +168,12 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
       reset(true);
       setText(status, 'Preparing the migration tool and checking database history…');
       const tag = rollbackTag.value.trim();
+      const lockFile = dependencyLock.value.trim();
       const targetSelection = { ...selection(), ...(revision.value && { revision: revision.value }), ...(efCore && { scriptFile: script.value.trim() }),
         ...(source.adapter === 'alembic' && projectRuntime.checked && {
           projectEnvironment: true, runtimeFiles: runtimeFiles.value.split(',').map(file => file.trim()).filter(Boolean)
         }),
+        ...(source.adapter === 'alembic' && lockFile && { dependencyLock: lockFile }),
         ...(source.adapter === 'liquibase' && operation === 'rollback' && (tag ? { rollbackTag: tag } : { rollbackCount: Number(rollbackCount.value) })) };
       const result = await send('preview', operation, targetSelection);
       plan = { operation, targetSelection, ...result };
@@ -178,7 +191,11 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
         const line = document.createElement('li');
         setText(line, ['Migration resource', file]);
         return line;
-      }));
+      }), ...(result.dependencyLock ? [result.dependencyLock, ...result.packages.map(({ name, version }) => name + '==' + version)].map((entry, index) => {
+        const line = document.createElement('li');
+        setText(line, [index ? 'Locked Python package' : 'Dependency lock', entry]);
+        return line;
+      }) : []));
       reverse.hidden = !result.undo && !result.sql;
       reverse.textContent = result.sql ?? result.undo?.join('\n') ?? '';
       const message = source.adapter === 'alembic'
@@ -203,7 +220,8 @@ export function nativeMigrationControls(projectId, source, { request, post }, { 
     event.preventDefault();
     if (!plan || confirm.value !== plan.target.name) return;
     void work(async () => {
-      setText(status, 'Running the migration tool and verifying database history…');
+      setText(status, plan.dependencyLock ? 'Installing approved Python wheels and running the migration…' :
+        'Running the migration tool and verifying database history…');
       const result = await send('execute', plan.operation, plan.targetSelection);
       form.hidden = true;
       plan = undefined;

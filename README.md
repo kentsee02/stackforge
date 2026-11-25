@@ -84,6 +84,14 @@ SQLite apply requires Node.js 24.10 or later. It writes schema, data and history
 
 **Preview Alembic migrations** lists revisions and branch heads from a standard `alembic.ini` layout, including nested Python services. Check history on a project-owned PostgreSQL database or a saved direct loopback URL. For a project-owned database, review and confirm an upgrade or downgrade. Plans for literal cross-branch `depends_on` show the affected revisions and the heads that should be recorded after execution.
 
+If the migration imports additional Python packages, enter a project-relative **Dependency lock file**. Use one exact version and at least one SHA-256 wheel hash per package, including any transitive packages the runtime still needs. For example, this lock entry selects the public SQLAlchemy-Utils wheel used by the Invenio integration test.
+
+```text
+SQLAlchemy-Utils==0.42.1 --hash=sha256:243cfe1b3a1dae3c74118ae633f1d1e0ed8c787387bc33e556e37c990594ac80
+```
+
+StackForge shows the lock file and packages in the plan. It downloads approved wheels from PyPI after confirmation and runs the migration with those packages on an isolated connection to the project database.
+
 **Preview EF Core migrations** lists local migration IDs and source files by `.csproj` and `DbContext`. It supports standard generated partial classes, single-file declarations, and literal compile links within the repository. The preview reads files and reports database status as unverified. Use the project's EF Core tooling for custom build behavior, database history, or applying migrations.
 
 **Project development database** uses service-level evidence to guide verified imports and clones. Review an existing connection or Compose service, or preview one dedicated PostgreSQL 17 or MySQL 8.4 database in local Docker Engine 28 or newer in Linux container mode. The preview shows the engine, service, loopback port, volume, and detected connection settings. Type the database name to create the instance. After it is ready, save an eligible connection URL or supported SQLAlchemy MySQL environment settings. The Prisma guide can use the verified PostgreSQL container's `psql`. The MySQL panel offers verified backup and restore for its dedicated instance.

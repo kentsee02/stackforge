@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.54.0 Alembic locked Python dependencies
+
+- Show reviewed Python packages and exact versions in the migration plan. Bind approval to the lock file bytes.
+- Install hash-verified PyPI wheels in a temporary, credential-free worker and use an internal Docker network for execution.
+- Apply and roll back the original Invenio Records migration that imports SQLAlchemy-Utils.
+
 ## v0.53.0 Alembic cross-branch dependencies
 
 - Plan literal `depends_on` dependencies with the pinned Alembic runtime using an offline graph and show the effective history heads.
