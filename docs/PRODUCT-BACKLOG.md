@@ -4,19 +4,17 @@ The [architecture specification](../ARCHITECTURE.md) defines the product boundar
 
 ## Current priority
 
-Complete the remaining migration coverage before starting project activity history. All five adapters support detection, history checks and reviewed writes for their supported PostgreSQL layouts. Drizzle, Flyway and Liquibase also have a project MySQL write path. EF Core can apply and downgrade reviewed SQL exports on a project SQL Server target.
+Project activity history is the next planned product task. The migration milestone shipped detection, history checks and reviewed writes for all five adapters on supported PostgreSQL layouts. Drizzle, Flyway and Liquibase also have a project MySQL write path. EF Core can apply and downgrade reviewed SQL exports on a project SQL Server target.
 
 ### Open migration work
 
-- **Flyway licensed Undo.** StackForge can list `U` migration files. Native Undo still needs a licensed runtime and end-to-end verification. With an authorized Flyway Teams or Enterprise license and a matching versioned undo migration, verify native preview, exact rollback range, resulting schema and retained history on a disposable project database before enabling writes.
+- **Flyway licensed Undo (deferred).** StackForge can list `U` migration files. Flyway Community uses verified backup recovery. Resume native Undo work when an authorized Flyway Teams or Enterprise license and a matching versioned migration and undo pair are available.
 
-### Acceptance criteria
+### Acceptance criteria when Flyway Undo resumes
 
-- [x] Discover and preview files for all five adapters, with unresolved cases reported per service, configuration or DbContext.
-- [x] Read migration history and distinguish a recorded migration from a verified SQL checksum where the tool exposes one.
-- [ ] For each remaining write path, review the exact source, tool/runtime, target and range. Revalidate approval, reject shared or replaced targets and verify expected history. Report partial changes when the engine commits them separately.
-- [ ] For each eligible rollback path, review the exact reversal and verify the retained history. Exercise supported backup recovery where reversal is unavailable.
-- [ ] Document the tested engines and runtime layouts. Cover failure, cancellation, stale approval and recovery on real databases, and exercise import, clone and both interface languages.
+- [ ] Review the undo source, licensed runtime, exact rollback range and verified database before approval. Reject shared or replaced targets and stale plans.
+- [ ] Verify the resulting schema and retained history on a disposable project database. Cover failure, cancellation and backup recovery where the engine can commit partial changes.
+- [ ] Document the pinned fixture, supported engines and runtime limits. Verify the preview and confirmation in both interface languages.
 
 ## Next product work
 
