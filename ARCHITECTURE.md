@@ -143,7 +143,7 @@ Creation jobs own resumable checkpoints and history. Finite project operations s
 
 Project activity reads recent terminal outcomes by stable project ID from the project and database operation journals. A row contains an action, controlled outcome and timestamps. Commands, process output, credentials and target details stay out of the activity response. The database audit journal keeps its existing format and location. Reads examine a bounded recent window and show up to 50 outcomes for the selected project.
 
-Reuse process launch, cancellation, timeouts, and redaction where their behavior agrees. Keep each workflow's state transitions, completion semantics, and storage contract. A late cancellation must not undo a completed result. A global queue or task history across all workflows is a separate product candidate.
+Reuse process launch, cancellation, timeouts, and redaction where their behavior agrees. Keep each workflow's state transitions, completion semantics, and storage contract. The Tasks workspace reads the current queue and recent outcomes from the existing workflows. Cancellation checks the exact running attempt before delegating to its owner. A late cancellation must not undo a completed result. A scheduler for deferred tasks remains a product candidate.
 
 ### 3.7 Integrations
 

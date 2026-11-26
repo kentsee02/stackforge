@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.60.0 Cross-project Tasks workspace
+
+- Show active creation, publishing retries, dependency installation, project checks and applicable database operations in one view.
+- Filter up to 50 recent outcomes by project, action and status. Link to the selected project or creation task for details.
+- Cancel an eligible running attempt through its owning workflow. A stale attempt ID cannot cancel a replacement task.
+
 ## v0.59.0 Project activity history
 
 - Show up to 50 recent dependency installation, build, test, lint and database operation outcomes for the selected project.

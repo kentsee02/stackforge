@@ -1,4 +1,5 @@
 import { lstat, realpath } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { hasNodeBackend } from '../generation/catalog.mjs';
 import { installMavenDependencies, installNodeDependencies, maven, npm, run, throwIfCancelled } from '../platform/process.mjs';
@@ -44,7 +45,7 @@ export class ProjectOperations {
     if (task?.status === 'failed' && task.projectId === project.id && task.buildApproval) return task.installTarget;
   }
 
-  start(project, action, ports, { checkId, installPlanId, confirmVolume, chooseDatabase, record, verifyDeletion } = {}) {
+  start(project, action, ports, { checkId, installPlanId, confirmVolume, activity = action, chooseDatabase, record, verifyDeletion } = {}) {
     if (this.closing) throw new Error('StackForge is shutting down.');
     const key = projectPathKey(project.path);
     const entry = this.projects.get(key) ?? {};
@@ -54,7 +55,8 @@ export class ProjectOperations {
       throw new Error('Choose an available project check.');
     }
     const controller = new AbortController();
-    const task = { kind, phase: kind === 'checkTask' ? checkId : action, status: 'running', controller, log: '', projectId: project.id };
+    const task = { id: randomUUID(), action: activity, startedAt: new Date().toISOString(), kind,
+      phase: kind === 'checkTask' ? checkId : action, status: 'running', controller, log: '', projectId: project.id };
     entry.active = entry[kind] = task;
     this.projects.set(key, entry);
     const append = chunk => { task.log = (task.log + chunk).slice(-logLimit); };
@@ -92,6 +94,7 @@ export class ProjectOperations {
         }
       })
       .finally(async () => {
+        task.finishing = true;
         output.flush();
         try { if (record) await record(outcome); }
         finally {
@@ -106,6 +109,20 @@ export class ProjectOperations {
     if (task?.kind !== kind) return;
     task.status = 'cancelling';
     task.controller.abort();
+  }
+
+  task(project) {
+    const task = this.active(project);
+    if (!task || task.projectId !== project.id) return;
+    const { id, action, status, startedAt, finishing, kind } = task;
+    return { id, action, status, startedAt, canCancel: status === 'running' && !finishing && kind !== 'databaseTask' };
+  }
+
+  cancelTask(project, id) {
+    const current = this.task(project);
+    if (current?.id !== id || !current.canCancel) return false;
+    this.cancel(project, this.active(project).kind);
+    return true;
   }
 
   async checks(project) {

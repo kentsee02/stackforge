@@ -6,6 +6,8 @@ import { cancelled, throwIfCancelled } from '../platform/process.mjs';
 import { assertDirectoryIdentity, recordedIdentity } from '../platform/project-identity.mjs';
 
 const pathKey = path => process.platform === 'win32' ? path.toLowerCase() : path;
+const attemptId = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
+const taskTime = (value, fallback) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : fallback;
 
 export class Jobs {
   constructor({ directory, generate, check, publish, relocatedPath = () => undefined }) {
@@ -50,6 +52,32 @@ export class Jobs {
 
   list() {
     return [...this.records.values()].reverse().slice(0, 30).map(({ job, options }) => ({ id: job.id, name: options.name, status: job.status, step: job.step, createdAt: job.createdAt }));
+  }
+
+  taskRows() {
+    const active = [], recent = [];
+    for (const { job, options, finalizing } of this.records.values()) {
+      const publishing = job.retryKind === 'publish';
+      const running = this.controllers.has(job.id);
+      const status = job.status === 'complete' ? (job.result?.remote?.status === 'failed' ? 'partially-completed' : 'succeeded') : job.status;
+      const createdAt = taskTime(job.createdAt);
+      const row = { id: typeof job.attemptId === 'string' && attemptId.test(job.attemptId) ? job.attemptId : job.id,
+        jobId: job.id, name: options.name, status, action: publishing ? 'publish-project' : 'create-project',
+        startedAt: taskTime(job.startedAt, createdAt) };
+      if (running) active.push({ ...row, canCancel: status === 'running' && !finalizing });
+      else recent.push({ ...row, finishedAt: taskTime(job.updatedAt, createdAt) });
+    }
+    return { active, recent };
+  }
+
+  async cancelTask(id) {
+    for (const jobId of this.controllers.keys()) {
+      const record = this.records.get(jobId);
+      if (record?.job.attemptId !== id || record.finalizing || record.job.status !== 'running') continue;
+      await this.cancel(jobId);
+      return true;
+    }
+    return false;
   }
 
   projects() {
@@ -105,6 +133,8 @@ export class Jobs {
     const controller = new AbortController();
     this.controllers.set(job.id, controller);
     job.status = 'running'; job.error = undefined; job.environment = undefined;
+    job.attemptId = randomUUID();
+    job.startedAt = new Date().toISOString();
     job.retryKind = publicationOnly ? 'publish' : 'create';
     job.step = publicationOnly ? '重试 GitHub 发布' : record.checkpoint.staging ? '继续未完成的创建步骤' : '创建前检查';
     const saved = this.persist(record);

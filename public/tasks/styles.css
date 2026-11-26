@@ -1,0 +1,34 @@
+.tasks-page { padding-bottom: 0; }
+.task-title { align-items: center; gap: 12px; padding-bottom: 22px; }
+.task-title button { flex: 0 0 auto; }
+.task-section { margin-bottom: 24px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 8px; }
+.task-section h2 { font-size: 17px; }
+.task-section h2:focus-visible { outline-offset: 4px; }
+.task-history-heading { display: flex; justify-content: space-between; align-items: end; flex-wrap: wrap; gap: 12px 20px; }
+.task-filters { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.task-filters label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+.task-filters :is(input, select) { min-height: 36px; max-width: 100%; padding: 4px 8px; border: 1px solid var(--control); border-radius: 6px; background: var(--surface); color: var(--text); }
+.task-filters label:last-child { width: 210px; max-width: 100%; }
+.task-filters select { width: 100%; }
+.task-notice { margin-block: 8px; overflow-wrap: anywhere; }
+.task-notice:empty { display: none; }
+.task-empty { margin-top: 12px; }
+.task-list { list-style: none; margin: 12px 0 0; padding: 0; }
+.task-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(125px, 0.42fr) 96px; align-items: center; gap: 6px 16px; min-height: 63px; padding: 9px 0; border-top: 1px solid var(--border); }
+.task-main { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.task-row strong { font-weight: 600; }
+.task-row .task-status { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.task-status[data-status="succeeded"] { color: var(--positive); }
+.task-status[data-status="failed"] { color: var(--negative); }
+.task-status[data-status="partially-completed"] { color: var(--warning); }
+.task-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.task-cancel { justify-self: end; min-height: 36px; }
+@media (max-width: 650px) {
+  .task-section { padding: 14px; }
+  .task-filters { width: 100%; }
+  .task-filters label { min-width: 0; flex: 1 1 145px; }
+  .task-filters :is(input, select) { width: 100%; min-height: 44px; font-size: 16px; }
+  .task-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .task-row .task-status { grid-column: 1; }
+  .task-row .task-cancel { grid-column: 2; grid-row: 1 / 3; min-height: 44px; }
+}

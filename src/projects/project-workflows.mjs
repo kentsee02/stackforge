@@ -95,7 +95,7 @@ export function createProjectWorkflows({ projectConfig, operations, runtime, rem
       const target = action === 'run-check' ? { ...project, customChecks: projectConfig.checks(project) } : project;
       const activity = action === 'run-check' && typeof payload.check === 'string' ? 'check-' + payload.check.split(':').at(-1) : action;
       operations.start(target, action, projectConfig.ports(project), {
-        checkId: payload.check, installPlanId: detectedInstall ? payload.planId : undefined, confirmVolume: payload.confirmVolume,
+        checkId: payload.check, installPlanId: detectedInstall ? payload.planId : undefined, confirmVolume: payload.confirmVolume, activity,
         chooseDatabase: ['database-start', 'database-stop'].includes(action) && payload.bindingId !== undefined ?
           () => chooseDatabase(project, payload.bindingId) : undefined,
         record: isDatabaseAction ? recordDatabase(project, action) : recordActivity(project, activity),

@@ -53,6 +53,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .topbar { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 32px; color: var(--muted); font-size: 12px; }
 .slash { margin: 0 12px; color: #81969b; }
 .topbar-tools { display: flex; align-items: center; gap: 22px; }
+.mobile-task-link { display: none; }
+@media (max-width: 800px) { .mobile-task-link { display: inline-flex; align-items: center; min-height: 44px; } }
 .language-control { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .language-control select { color: var(--text); background: var(--surface); border: 1px solid var(--control); border-radius: 6px; min-height: 32px; padding: 4px 8px; font-size: 12px; }
 .local-indicator { display: flex; align-items: center; gap: 7px; white-space: nowrap; }

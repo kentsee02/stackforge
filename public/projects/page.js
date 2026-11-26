@@ -32,7 +32,7 @@ const diagnosticMessages = {
 const state = { pending: undefined, actionError: undefined };
 const rows = new Map();
 let projects = [];
-let selected;
+let selected = new URLSearchParams(window.location.search).get('project') || undefined;
 let confirming;
 let importing = false;
 let cloneRequest;

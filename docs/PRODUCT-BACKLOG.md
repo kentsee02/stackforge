@@ -4,7 +4,7 @@ The [architecture specification](../ARCHITECTURE.md) defines the product boundar
 
 ## Current priority
 
-Evaluate global task history and queue controls using the activity outcomes now available per project. The migration milestone shipped detection, history checks and reviewed writes for all five adapters on supported PostgreSQL layouts. Drizzle, Flyway and Liquibase also have a project MySQL write path. EF Core can apply and downgrade reviewed SQL exports on a project SQL Server target.
+Address the Windows subprocess cancellation race before starting the standalone dashboard. The Tasks workspace now gathers running operations and recent outcomes across projects and uses the existing cancellation controls.
 
 ### Open migration work
 
@@ -18,7 +18,7 @@ Evaluate global task history and queue controls using the activity outcomes now 
 
 ## Next product work
 
-1. **Global task history and queue.** Evaluate cross-project task controls now that projects expose recent outcomes.
+1. **Windows subprocess cancellation.** Harden the shared process runner against descendant processes still starting when Windows cancels an npm command.
 2. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases and Tasks.
 3. **Standalone environment view.** Consolidate tool availability, versions, executable paths and prerequisites.
 4. **Standalone integrations view.** Consolidate Git, GitHub, Docker and desktop integration status.
@@ -26,6 +26,7 @@ Evaluate global task history and queue controls using the activity outcomes now 
 
 ## Product candidates
 
+- **Deferred task scheduling.** Evaluate explicit scheduling, persistent waiting jobs, and revalidation of approvals and project identity at dispatch time.
 - **Additional local database operations.** Evaluate backup, restore and lifecycle coverage individually for MongoDB, Redis and SQL Server. Project SQL Server currently supports container lifecycle and reviewed EF Core migration.
 - **Native PostgreSQL and MySQL provisioning.** Evaluate setup on supported operating systems using their service and permissions model.
 - **Cloud database lifecycle.** Evaluate provider-specific creation, lifecycle and deletion with separate provider permissions.

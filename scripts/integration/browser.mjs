@@ -59,8 +59,9 @@ try {
   await writeFile(join(project, 'server.mjs'), fixtureServer('Imported portal'));
   await mkdir(fixtureRepo);
   await writeFile(join(fixtureRepo, 'server.mjs'), fixtureServer('Cloned portal'));
+  await writeFile(join(fixtureRepo, 'check-wait.mjs'), 'console.log("browser task started"); setTimeout(() => {}, 15000);');
   await writeFile(join(fixtureRepo, 'package.json'), JSON.stringify({ name: 'cloned-portal', dependencies: { express: '5.0.0' },
-    devDependencies: { 'drizzle-kit': '^0.31.1' } }));
+    devDependencies: { 'drizzle-kit': '^0.31.1' }, scripts: { test: 'node check-wait.mjs' } }));
   await mkdir(join(fixtureRepo, 'frontend'));
   await writeFile(join(fixtureRepo, 'frontend/package.json'), '{"name":"approval-fixture","packageManager":"pnpm@11.17.0"}');
   await writeFile(join(fixtureRepo, 'frontend/pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
@@ -93,7 +94,7 @@ try {
   await writeFile(join(fixtureRepo, 'drizzle/0000_create.sql'), 'CREATE TABLE sample (id integer);');
   const gitOptions = { cwd: fixtureRepo, timeout: 15000 };
   await run('git', ['init', '-b', 'main'], gitOptions);
-  await run('git', ['add', 'package.json', 'server.mjs', 'drizzle.config.ts', 'drizzle', 'frontend', 'services'], gitOptions);
+  await run('git', ['add', 'package.json', 'server.mjs', 'check-wait.mjs', 'drizzle.config.ts', 'drizzle', 'frontend', 'services'], gitOptions);
   await run('git', ['-c', 'user.name=StackForge Test', '-c', 'user.email=stackforge-test@example.invalid',
     '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=' + join(root, 'disabled-hooks'), 'commit', '-m', 'Create isolated browser fixture'], gitOptions);
   const terminals = [];
@@ -142,7 +143,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  const contains = (selector, text) => page.waitForFunction(({ selector, text }) =>
+  const contains = (selector, text, surface = page) => surface.waitForFunction(({ selector, text }) =>
     document.querySelector(selector)?.textContent.includes(text), { selector, text });
   const check = code => '#preflight-results [data-check="' + code + '"]';
   async function runPreflight(code) {
@@ -356,6 +357,36 @@ try {
   await page.locator('#language').selectOption('en');
   await contains('#project-activity-list li:first-child', 'Install dependenciesCompleted');
   await page.locator('#project-activity summary').click();
+  assert.equal(await page.evaluate(async id => {
+    const { token } = await (await fetch('/api/state')).json();
+    return (await fetch(`/api/projects/${id}/run-check`, { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-StackForge-Token': token
+    }, body: JSON.stringify({ check: 'root:test' }) })).status;
+  }, cloned.id), 202);
+  await page.waitForFunction(async id => {
+    const { projects } = await (await fetch('/api/projects?logs=' + id)).json();
+    return projects.find(project => project.id === id)?.checkTask?.log.includes('browser task started');
+  }, cloned.id, { polling: 100 });
+  const taskLink = page.locator('.mobile-task-link[href="/tasks"]');
+  assert.equal(await taskLink.isVisible(), true);
+  const tasksPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  try {
+    await tasksPage.goto(origin + await taskLink.getAttribute('href'));
+    await contains('#active-tasks', 'Run project tests', tasksPage);
+    assert.ok(await tasksPage.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+    await tasksPage.getByRole('button', { name: 'Cancel task', exact: true }).click();
+    await contains('#recent-tasks', 'Cancelled', tasksPage);
+    await tasksPage.locator('#task-status').selectOption('failed');
+    assert.equal(await tasksPage.locator('#recent-tasks li').count(), 1);
+    await tasksPage.locator('#language').selectOption('zh-CN');
+    await contains('#recent-tasks', '安装依赖', tasksPage);
+    await tasksPage.locator('#task-search').fill('不存在的项目');
+    await contains('#history-task-empty', '没有符合筛选条件', tasksPage);
+    await tasksPage.locator('#task-search').fill('cloned-portal');
+    await tasksPage.locator('#recent-tasks a').click();
+    await contains('#selected-project-name', 'cloned-portal', tasksPage);
+    await tasksPage.locator('#language').selectOption('en');
+  } finally { await tasksPage.close(); }
   await page.setViewportSize({ width: 1280, height: 820 });
   await writeFile(join(cloned.path, '.env'), 'ALEMBIC_DATABASE_URL=postgresql://browseruser:browser_test_only@127.0.0.1:5432/browser_alembic\n');
   const ownedTarget = { id: 'f'.repeat(64), host: '127.0.0.1', port: 55432, name: 'project_fixture', engine: 'postgres', projectPostgres: true };
@@ -703,7 +734,7 @@ try {
   await page.locator('#development-postgres-cancel').click();
   await page.unroute(developmentRoute);
   assert.deepEqual(errors, []);
-  console.log('Verified bilingual startup, database setup, and Drizzle, Alembic, EF Core, Flyway and Liquibase migration previews in imported and cloned projects.');
+  console.log('Verified the bilingual task center, startup, database setup, and Drizzle, Alembic, EF Core, Flyway and Liquibase migration previews in imported and cloned projects.');
 } finally {
   try {
     await browser?.close();

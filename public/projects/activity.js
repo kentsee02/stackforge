@@ -1,6 +1,6 @@
 import { setText } from '/i18n.js';
 
-const labels = {
+export const activityLabels = {
   install: 'Install dependencies',
   'check-build': 'Build project',
   'check-package': 'Build project',
@@ -24,7 +24,7 @@ const labels = {
   'database-remote-profile-save': 'Save remote database profile',
   'database-remote-profile-remove': 'Remove remote database profile'
 };
-const outcomes = { succeeded: 'Completed', failed: 'Operation failed', cancelled: 'Cancelled' };
+export const activityOutcomes = { succeeded: 'Completed', failed: 'Operation failed', cancelled: 'Cancelled' };
 
 export function createActivityPanel({ $, request, showMessage }) {
   const panel = $('project-activity');
@@ -59,10 +59,10 @@ export function createActivityPanel({ $, request, showMessage }) {
           const name = document.createElement('strong');
           const outcome = document.createElement('span');
           const time = document.createElement('time');
-          setText(name, labels[entry.action]);
+          setText(name, activityLabels[entry.action]);
           outcome.className = 'small project-check-status';
           outcome.dataset.status = entry.status;
-          setText(outcome, outcomes[entry.status]);
+          setText(outcome, activityOutcomes[entry.status]);
           time.dateTime = entry.finishedAt;
           row.append(name, outcome, time);
           return row;

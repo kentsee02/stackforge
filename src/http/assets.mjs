@@ -4,6 +4,9 @@ import metadata from '../../package.json' with { type: 'json' };
 const assets = new Map([
   ['/', 'create/index.html'],
   ['/projects', 'projects/index.html'],
+  ['/tasks', 'tasks/index.html'],
+  ['/tasks.js', 'tasks/page.js'],
+  ['/tasks/styles.css', 'tasks/styles.css'],
   ['/app.js', 'create/page.js'],
   ['/projects.js', 'projects/page.js'],
   ['/projects/database.js', 'projects/database.js'],

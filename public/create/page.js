@@ -432,14 +432,20 @@ $('#resume-job').addEventListener('click', async () => {
     clearTimeout(pollTimer); pollJob();
   } catch (error) { showError(error.message); $('#resume-job').hidden = false; }
 });
-$('#job-history').addEventListener('change', async () => {
-  if (running || !$('#job-history').value) return;
-  const response = await fetch('/api/jobs/' + $('#job-history').value);
-  if (!response.ok) return;
+async function openHistoryJob(id) {
+  const response = await fetch('/api/jobs/' + encodeURIComponent(id));
+  if (!response.ok) return false;
   const job = await response.json(); currentJob = job.id; currentOptions = job.options;
   setText($('#open-message'), '');
   restoreOptions(job.options); clearTimeout(pollTimer);
+  if (['running', 'cancelling'].includes(job.status)) lockForm(true);
   $('#logs-panel').hidden = false; revealTask(); pollJob();
+  return true;
+}
+$('#job-history').addEventListener('change', async () => {
+  if (running || !$('#job-history').value) return;
+  try { await openHistoryJob($('#job-history').value); }
+  catch { setText($('#job-message'), 'Could not load the selected creation task.'); }
 });
 $('#copy-path').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('#result-path').textContent); setText($('#copy-path'), '已复制'); setTimeout(() => { setText($('#copy-path'), '复制路径'); }, 1600); }
@@ -575,6 +581,11 @@ async function init() {
     syncGit();
     updatePreview();
     scheduleChecks();
+    const requestedJob = new URLSearchParams(window.location.search).get('job');
+    if (/^[a-f0-9-]{36}$/.test(requestedJob ?? '')) {
+      if (await openHistoryJob(requestedJob)) return;
+      setText($('#job-message'), 'Could not load the selected creation task.');
+    }
     let saved;
     try { saved = JSON.parse(sessionStorage.getItem('stackforge.job') || 'null'); } catch {}
     if (saved?.id && saved.options) {

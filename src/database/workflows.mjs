@@ -1,4 +1,5 @@
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { databaseRedactor } from './security/secrets.mjs';
@@ -216,10 +217,12 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     return isClosing() || transfer || databaseWrites.size || removals.has(project.path) || configWrites.has(project.path) || operations.active(project);
   }
 
-  function trackTransfer(project, controller, done) {
-    const active = { path: project.path, done, controller };
+  function trackTransfer(project, controller, done, action) {
+    const active = { path: project.path, projectId: project.id, controller, action,
+      id: randomUUID(), startedAt: new Date().toISOString() };
+    active.done = done.finally(() => { active.finished = true; });
     transfer = active;
-    return { done, release() { if (transfer === active) transfer = undefined; } };
+    return { done: active.done, release() { if (transfer === active) transfer = undefined; } };
   }
 
   function startArchive(project, action, controller, { bindingId, temporaryFile, receiveBackup, approval, confirmedTarget }) {
@@ -246,7 +249,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
         throw error;
       }
     })();
-    return trackTransfer(project, controller, done);
+    return trackTransfer(project, controller, done, action === 'preview' ? undefined : 'database-' + action);
   }
 
   function startLegacyBackup(project, controller) {
@@ -258,11 +261,12 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       await record(error.name === 'AbortError' || controller.signal.aborted ? 'cancelled' : 'failed');
       throw error;
     });
-    return trackTransfer(project, controller, done);
+    return trackTransfer(project, controller, done, 'database-backup');
   }
 
-  async function trackWrite(project, controller, done) {
-    databaseWrites.set(project.path, { done, controller });
+  async function trackWrite(project, controller, done, action, canCancel = false) {
+    databaseWrites.set(project.path, { done, controller, action, canCancel, projectId: project.id,
+      id: randomUUID(), startedAt: new Date().toISOString() });
     try { return await done; }
     finally { databaseWrites.delete(project.path); }
   }
@@ -273,12 +277,13 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     }
     if (action === 'database-native-migration') {
       const execute = payload.mode === 'execute';
+      const activity = payload.operation === 'rollback' ? 'database-rollback' : 'database-migrate';
       if (execute && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
         throw new Error('Stop the project before applying database migrations.');
       }
       const { signal } = controller;
       const run = async () => {
-        const record = execute ? databaseLog.begin(project, payload.operation === 'rollback' ? 'database-rollback' : 'database-migrate') : undefined;
+        const record = execute ? databaseLog.begin(project, activity) : undefined;
         try {
           const postgres = await development.historyTarget(project);
           const sqlAdapter = ['flyway', 'liquibase'].includes(payload.adapter);
@@ -305,7 +310,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
           throw error;
         }
       };
-      return execute ? trackWrite(project, controller, run()) : run();
+      return execute ? trackWrite(project, controller, run(), activity, true) : run();
     }
     if (action === 'database-flyway-preview' || action === 'database-liquibase-preview') {
       const flyway = action === 'database-flyway-preview';
@@ -369,7 +374,8 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       if (['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
         throw new Error('Stop the project before applying database migrations.');
       }
-      const record = databaseLog.begin(project, rollback ? 'database-rollback' : 'database-migrate');
+      const activity = rollback ? 'database-rollback' : 'database-migrate';
+      const record = databaseLog.begin(project, activity);
       const done = previewDrizzle({ ...options, approval: payload, async verifyTarget(target) {
         if (target.engine === 'sqlite') {
           const selected = projectPathKey(target.file);
@@ -401,13 +407,17 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
         await record(signal.aborted ? 'cancelled' : 'failed');
         throw error;
       });
-      return trackWrite(project, controller, done);
+      return trackWrite(project, controller, done, activity, true);
     }
     if (action === 'database-sqlite-create' && ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
       throw new Error('Stop the project before initializing its database.');
     }
     const setupWrites = action === 'database-postgres-setup' && ['create', 'save', 'migrate'].includes(payload.mode);
     const developmentWrite = action === 'database-development' && payload.mode !== 'preview';
+    const setupActivity = setupWrites ? { migrate: 'database-migrate', create: 'database-initialize', save: 'database-connection-config' }[payload.mode] : undefined;
+    const activity = setupActivity ?? (developmentWrite && ['create', 'start', 'stop', 'save', 'delete'].includes(payload.mode) ? action + '-' + payload.mode :
+      action === 'database-remote-profile' && ['save', 'remove'].includes(payload.mode) ? action + '-' + payload.mode :
+      action === 'database-sqlite-create' ? 'database-initialize' : action === 'database-connection-config' ? action : undefined);
     if (action === 'database-development' && !developmentWrite) return development.action(project, payload, controller.signal);
     if ((action === 'database-connection-config' || setupWrites || developmentWrite) &&
         ['starting', 'running', 'stopping'].includes(runtime.status(project).status)) {
@@ -440,8 +450,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
             throw new Error('Another project uses this PostgreSQL database. Choose a separate database for guided setup.');
           }
         };
-        const activity = { migrate: 'database-migrate', create: 'database-initialize', save: 'database-connection-config' }[payload.mode];
-        const record = setupWrites ? databaseLog.begin(project, activity) : undefined;
+        const record = setupActivity ? databaseLog.begin(project, setupActivity) : undefined;
         try {
           const result = await postgresSetup({ project, payload, command: localDatabase.command, prismaCommand: databaseAdapters.prismaCommand,
             resolveClient: target => development.client(project, target, controller.signal),
@@ -464,7 +473,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       if (payload.confirmPath !== binding.instance.path) throw new Error('Type the exact SQLite file path to confirm creation.');
       return recordWrite('database-initialize', () => resources.createSqlite(project, binding, undefined, controller.signal), binding.instanceId);
     })();
-    return trackWrite(project, controller, done);
+    return trackWrite(project, controller, done, activity);
   }
 
   async function historySelection(project, targetId, signal, scanned, invalid, options) {
@@ -537,7 +546,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
       if (databaseWrites.size || transfer || removals.size || operations.active(project) || configWrites.has(project.path)) {
         throw new Error('Wait for the current project operation to finish.');
       }
-      return trackWrite(project, controller, work());
+      return trackWrite(project, controller, work(), action);
     }
     return work();
   }
@@ -559,6 +568,21 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     return Boolean(operation(project)) || (action === 'database-delete' && databaseWrites.size > 0);
   }
 
+  function tasks() {
+    return [...databaseWrites.values(), transfer].filter(task => task?.action && !task.finished).map(task => {
+      const { id, projectId, action, startedAt, controller, canCancel } = task;
+      const stopping = controller.signal.aborted;
+      return { id, projectId, action, startedAt, status: stopping ? 'cancelling' : 'running', canCancel: Boolean(canCancel) && !stopping };
+    });
+  }
+
+  function cancelTask(id) {
+    const task = [...databaseWrites.values()].find(item => item.id === id && item.canCancel);
+    if (!task || task.controller.signal.aborted) return false;
+    task.controller.abort();
+    return true;
+  }
+
   async function cleanupReplacedClone(id) {
     const project = { id };
     const record = databaseLog.begin(project, 'database-profile-cleanup');
@@ -576,5 +600,6 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     redact: redactDatabase.text, shutdown, scan: scanDatabases, verifyDeletion: verifyDatabaseDeletion, selectedCompose,
     operation, blocksProjectAction, cleanupReplacedClone, removeProfiles: resources.removeProfiles,
     removeRegistration: id => databaseRegistry.remove(id), record: databaseLog.begin, activity: databaseLog.recent,
+    recentTasks: databaseLog.recentFor, tasks, cancelTask,
     guardDevelopmentRemoval: development.guardRemoval };
 }

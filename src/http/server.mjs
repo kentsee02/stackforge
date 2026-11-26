@@ -27,6 +27,7 @@ import { createDatabaseRoutes } from './database-routes.mjs';
 import { createProjectWorkflows } from '../projects/project-workflows.mjs';
 import { createProjectRoutes, matchProjectAction } from './project-routes.mjs';
 import { createGenerationRoutes } from './generation-routes.mjs';
+import { createTaskRoutes } from './task-routes.mjs';
 import { send } from './response.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -74,6 +75,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
   const projectRoutes = createProjectRoutes({ projects, queries, databaseRoutes, removals,
     isCreatingProject: () => jobs.busy, clone, execute });
   const generationRoutes = createGenerationRoutes({ jobs, check, desktop });
+  const taskRoutes = createTaskRoutes({ projects: managedProjects, jobs, operations, database, activity });
 
   function authorized(req, contentType) {
     const origin = req.headers.origin;
@@ -91,11 +93,12 @@ export function createApp({ generate = generateProject, check = checkEnvironment
       if (req.method === 'GET' && url.pathname === '/api/identity') return send(res, 200, identity);
       await Promise.all([jobs.ready, settings.ready, projectConfig.ready]);
       if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, { catalog, token, defaultDir, node: process.version, platform: process.platform, version: identity.version, jobs: jobs.list(), preferences: settings.value, desktop: await desktop.capabilities() });
+      if (req.method === 'GET' && url.pathname === '/api/tasks') return await taskRoutes.list(res);
       if (req.method === 'GET' && await projectRoutes.get(res, url)) return;
       if (req.method === 'POST' && await databaseRoutes.archive(req, res, url.pathname, authorized)) return;
       if (req.method === 'GET' && generationRoutes.get(res, url)) return;
       const projectAction = matchProjectAction(url.pathname);
-      if (req.method === 'POST' && (projectAction || ['/api/projects', '/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
+      if (req.method === 'POST' && (projectAction || ['/api/tasks/cancel', '/api/projects', '/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
         const chunks = []; let size = 0;
@@ -105,6 +108,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         let payload;
         try { payload = JSON.parse(body); if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error(); }
         catch { return send(res, 400, { error: 'Invalid JSON request.' }); }
+        if (url.pathname === '/api/tasks/cancel') return await taskRoutes.cancel(res, payload);
         if (projectRoutes.cloning && (['/api/projects', '/api/projects/import', '/api/projects/clone'].includes(url.pathname) || /\/api\/jobs\/[^/]+\/retry$/.test(url.pathname))) {
           return send(res, 409, { error: 'Wait for the GitHub clone to finish.' });
         }

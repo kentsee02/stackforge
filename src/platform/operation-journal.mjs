@@ -34,9 +34,9 @@ export function operationJournal(file, actions, writeWarning) {
     };
   }
 
-  async function recent(project) {
+  async function recentFor(projectIds) {
     const entries = [];
-    if (!file || !uuid.test(project.id)) return { entries, limited: false };
+    if (!file || !projectIds.size) return { entries, limited: false };
     await pending;
     const handle = await open(file, 'r').catch(error => {
       if (error.code !== 'ENOENT') throw error;
@@ -48,19 +48,25 @@ export function operationJournal(file, actions, writeWarning) {
       const bytes = Buffer.alloc(size - start);
       const { bytesRead } = await handle.read(bytes, 0, bytes.length, start);
       const lines = bytes.toString('utf8', 0, bytesRead).split('\n');
+      const selected = projectIds.size === 1 ? projectIds.values().next().value : undefined;
       // Skip a partial first line from the read window and any interrupted final write.
       for (let i = lines.length - 2; i >= Number(start > 0) && entries.length < recentOperationLimit; i--) {
-        if (!lines[i].includes(project.id) || lines[i].length > 1024) continue;
+        if (lines[i].length > 1024 || selected && !lines[i].includes(selected)) continue;
         let item;
         try { item = JSON.parse(lines[i]); } catch { continue; }
-        if (item?.projectId !== project.id || typeof item.id !== 'string' || !uuid.test(item.id) ||
+        if (!projectIds.has(item?.projectId) || typeof item.id !== 'string' || !uuid.test(item.id) ||
             !actions.has(item.action) || !outcomes.has(item.status) || !validTime(item.startedAt) || !validTime(item.finishedAt)) continue;
-        const { id, action, status, startedAt, finishedAt } = item;
-        entries.push({ id, action, status, startedAt, finishedAt });
+        const { id, projectId, action, status, startedAt, finishedAt } = item;
+        entries.push({ id, projectId, action, status, startedAt, finishedAt });
       }
       return { entries, limited: start > 0 && entries.length < recentOperationLimit };
     } finally { await handle.close(); }
   }
 
-  return { begin, recent, get pending() { return pending; } };
+  async function recent(project) {
+    const { entries, limited } = await recentFor(new Set([project.id]));
+    return { entries: entries.map(({ projectId, ...entry }) => entry), limited };
+  }
+
+  return { begin, recent, recentFor, get pending() { return pending; } };
 }
