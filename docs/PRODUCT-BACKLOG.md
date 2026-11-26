@@ -4,7 +4,7 @@ The [architecture specification](../ARCHITECTURE.md) defines the product boundar
 
 ## Current priority
 
-Address the Windows subprocess cancellation race before starting the standalone dashboard. The Tasks workspace now gathers running operations and recent outcomes across projects and uses the existing cancellation controls.
+The standalone dashboard is the next planned product task. Windows now assigns cancellable npm commands to an operating-system job before they start, so the Tasks workspace can stop the entire npm process tree.
 
 ### Open migration work
 
@@ -18,11 +18,10 @@ Address the Windows subprocess cancellation race before starting the standalone 
 
 ## Next product work
 
-1. **Windows subprocess cancellation.** Harden the shared process runner against descendant processes still starting when Windows cancels an npm command.
-2. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases and Tasks.
-3. **Standalone environment view.** Consolidate tool availability, versions, executable paths and prerequisites.
-4. **Standalone integrations view.** Consolidate Git, GitHub, Docker and desktop integration status.
-5. **App-wide settings.** Evaluate theme, notifications and other cross-project preferences.
+1. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases and Tasks.
+2. **Standalone environment view.** Consolidate tool availability, versions, executable paths and prerequisites.
+3. **Standalone integrations view.** Consolidate Git, GitHub, Docker and desktop integration status.
+4. **App-wide settings.** Evaluate theme, notifications and other cross-project preferences.
 
 ## Product candidates
 

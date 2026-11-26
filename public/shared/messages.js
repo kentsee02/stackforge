@@ -1,5 +1,8 @@
 // [Chinese source, English translation]. {name} slots preserve runtime values.
 export const messages = [
+  ['Windows 无法准备安全取消 npm 所需的程序。系统中的 .NET Framework 编译器不可用。', 'Windows could not prepare safe npm cancellation. The Windows .NET Framework compiler is unavailable.'],
+  ['Windows 无法准备安全取消 npm 所需的程序。进程监督程序编译失败。', 'Windows could not prepare safe npm cancellation. The process supervisor could not compile.'],
+  ['Windows 无法确认 npm 进程组已取消。', 'Windows could not verify cancellation of the npm process group.'],
   ['任务中心', 'Tasks'],
   ['StackForge · 任务中心', 'StackForge · Tasks'],
   ['刷新任务', 'Refresh tasks'],

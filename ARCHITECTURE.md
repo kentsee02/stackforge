@@ -145,6 +145,8 @@ Project activity reads recent terminal outcomes by stable project ID from the pr
 
 Reuse process launch, cancellation, timeouts, and redaction where their behavior agrees. Keep each workflow's state transitions, completion semantics, and storage contract. The Tasks workspace reads the current queue and recent outcomes from the existing workflows. Cancellation checks the exact running attempt before delegating to its owner. A late cancellation must not undo a completed result. A scheduler for deferred tasks remains a product candidate.
 
+On Windows, managed cancellable npm commands use a locally compiled helper to assign the command to a private job object as it starts. The kernel tracks descendants in the same job. The helper forwards the original streams and exit status. Cancellation targets the one invocation and remains available while inherited streams are still open.
+
 ### 3.7 Integrations
 
 Git, GitHub, Docker, and desktop tools provide capabilities to the workflows that own their decisions. Projects owns clone registration, Generation owns publication of generated projects, and Databases owns Docker database actions. GitHub publishing uses the authenticated GitHub CLI. Local Git initialization does not require a GitHub login.

@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.60.1 Windows npm process cancellation
+
+- Assign each cancellable npm invocation to a Windows job before the command starts, covering descendants created during cancellation.
+- Retain stdout, stderr, arguments and npm exit codes on completion. Cancel by job identity so parallel invocations continue independently.
+- Exercise actual Windows npm commands at startup and during nested process creation.
+
 ## v0.60.0 Cross-project Tasks workspace
 
 - Show active creation, publishing retries, dependency installation, project checks and applicable database operations in one view.

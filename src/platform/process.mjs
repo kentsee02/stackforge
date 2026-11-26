@@ -3,6 +3,7 @@ import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { windowsNpmSupervisor } from './windows-npm.mjs';
 
 export function cancelled() {
   const error = new Error('任务已取消，已完成的文件和步骤会保留。');
@@ -47,16 +48,17 @@ export function stopProcessTree(child) {
 }
 
 export function run(command, args, { cwd, env = process.env, log = () => {}, timeout = 600_000, signal, stdoutOnly = false, stdoutLimit = 4000,
-  input, inputFile, allowPartialInput = false, binaryLimit, binaryFile, shell = false, onSpawn } = {}) {
+  input, inputFile, allowPartialInput = false, binaryLimit, binaryFile, shell = false, onSpawn } = {}, supervisor) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(cancelled()); return; }
-    const child = spawn(command, args, { cwd, env, shell, windowsHide: true, detached: process.platform !== 'win32',
+    const child = (supervisor?.spawn ?? spawn)(command, args, { cwd, env, shell, windowsHide: true, detached: process.platform !== 'win32',
       stdio: [input || inputFile ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     if (onSpawn) child.once('spawn', onSpawn);
     let tail = '';
     let stdout = '';
     let stopped;
     let killing;
+    let stopFailure;
     const collect = (chunk, stream) => {
       const value = chunk.replace(/\x1b\[[0-9;]*m/g, '');
       tail = (tail + value).slice(-4000);
@@ -65,7 +67,12 @@ export function run(command, args, { cwd, env = process.env, log = () => {}, tim
     const stop = error => {
       if (stopped) return;
       stopped = error;
-      killing = terminateTree(child);
+      killing = (supervisor?.stop ?? terminateTree)(child).catch(error => {
+        stopFailure = error;
+        child.stdin?.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+      });
     };
     const binary = [];
     let size = 0;
@@ -112,7 +119,8 @@ export function run(command, args, { cwd, env = process.env, log = () => {}, tim
       clean();
       await Promise.all([inputTask, outputTask]);
       if (killing) await killing;
-      if (stopped) reject(stopped);
+      if (stopFailure) reject(stopFailure);
+      else if (stopped) reject(stopped);
       else if (spawnError) reject(spawnError);
       else if (code === 0 && inputError && !(allowPartialInput && ['EPIPE', 'ERR_STREAM_PREMATURE_CLOSE'].includes(inputError.code))) reject(inputError);
       else if (code === 0) resolve(binaryFile ? { path: binaryFile, offset: 0, bytes: size } :
@@ -131,9 +139,16 @@ export function npmCommand() {
   throw new Error('找不到 npm-cli.js。请使用官方 Node.js LTS 安装包（含 npm）。');
 }
 
-export function npm(args, options) {
+export async function npm(args, options) {
   const { command, prefix } = npmCommand();
-  return run(command, [...prefix, ...args], options);
+  const signal = options?.signal;
+  throwIfCancelled(signal);
+  let supervisor;
+  if (process.platform === 'win32' && signal && !options?.shell) {
+    try { supervisor = await windowsNpmSupervisor(); }
+    catch (error) { throwIfCancelled(signal); throw error; }
+  }
+  return run(command, [...prefix, ...args], options, supervisor);
 }
 
 export function installNodeDependencies(options, command = npm) {

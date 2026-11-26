@@ -44,8 +44,9 @@ test('Tasks combines concurrent projects and generation, protects cancellation, 
     assert.equal(response.status, 201);
     const { id } = await response.json();
     const { checks } = await get(`projects/${id}/checks`);
-    return { id, async run() {
+    return { id, async run({ waitForCommand = true } = {}) {
       assert.equal((await post(`projects/${id}/run-check`, { check: checks[0].id })).status, 202);
+      if (!waitForCommand) return;
       for (let i = 0; i < 100; i++) {
         const { projects } = await get(`projects?logs=${id}`);
         if (projects.find(project => project.id === id)?.checkTask?.log.includes('check fixture started')) return;
@@ -78,7 +79,7 @@ test('Tasks combines concurrent projects and generation, protects cancellation, 
   assert.equal((await post('tasks/cancel', { id: firstTask.id }, 'invalid')).status, 403);
   assert.equal((await post('tasks/cancel', { id: firstTask.id })).status, 202);
   await until(view => view.active.length === 2 && view.history.some(row => row.projectId === first.id && row.status === 'cancelled'));
-  await first.run();
+  await first.run({ waitForCommand: false });
   const replaced = await until(view => view.active.length === 3 && view.active.some(row => row.projectId === first.id && row.id !== firstTask.id));
   const replacement = replaced.active.find(row => row.projectId === first.id);
   assert.equal((await post('tasks/cancel', { id: firstTask.id })).status, 409);
