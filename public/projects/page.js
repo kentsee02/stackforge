@@ -32,7 +32,10 @@ const diagnosticMessages = {
 const state = { pending: undefined, actionError: undefined };
 const rows = new Map();
 let projects = [];
-let selected = new URLSearchParams(window.location.search).get('project') || undefined;
+const linkedProject = new URLSearchParams(window.location.search).get('project') || undefined;
+let selected = linkedProject;
+const linkedSections = new Set(['project-database', 'project-database-discovery', 'project-development-postgres']);
+let linkedSection = window.location.hash.slice(1);
 let confirming;
 let importing = false;
 let cloneRequest;
@@ -235,6 +238,13 @@ async function refresh() {
     if (!projects.some(item => item.id === selected)) selected = projects[0]?.id;
     $('project-connection').hidden = true;
     render();
+    if (linkedSection) {
+      if (selected && selected === linkedProject && linkedSections.has(linkedSection)) {
+        const section = $(linkedSection).hidden ? 'project-database-discovery' : linkedSection;
+        if (!$(section).hidden) openProjectSection(section);
+      }
+      linkedSection = undefined;
+    }
     if (selected && selected !== requested) { refresh(); return; }
     if (projects.find(item => item.id === selected)?.offline) return;
     database.refresh();

@@ -113,6 +113,43 @@ export class DatabaseRegistry {
     };
   }
 
+  async overview(projects) {
+    await this.ready;
+    const { requirements, development, instances, bindings } = this.value;
+    const projectIds = new Set(projects.map(project => project.id));
+    const verification = new Map();
+    for (const binding of Object.values(bindings)) {
+      const status = instances[binding?.instanceId]?.verification?.status;
+      if (projectIds.has(binding?.projectId) && ['connected', 'missing'].includes(status)) verification.set(binding.requirementId, status);
+    }
+    const precedence = { attention: 0, connected: 1, development: 2, configured: 3, declared: 4 };
+    return projects.flatMap(project => {
+      const rows = new Map();
+      const add = (engine, status, target, variant) => {
+        if (!Object.hasOwn(engineNames, engine)) return;
+        const key = variant ?? engine;
+        const previous = rows.get(key);
+        if (!previous || precedence[status] < precedence[previous.status]) {
+          rows.set(key, { projectId: project.id, engine: variant === 'turso' ? 'Turso' : variant === 'mariadb' ? 'MariaDB' : engineNames[engine], status, target });
+        }
+      };
+      const detected = Array.isArray(requirements[project.id]) ? requirements[project.id] : [];
+      for (const entry of detected) {
+        if (!entry) continue;
+        const verified = verification.get(entry.id);
+        const example = typeof entry.source === 'string' && /(?:^|\/)\.env\.example$/.test(entry.source);
+        const issue = verified === 'missing' || (!example && ['missing', 'placeholder', 'ambiguous'].includes(entry.status));
+        const status = issue ? 'attention' : verified === 'connected' ? 'connected' : entry.status === 'configured' ? 'configured' : 'declared';
+        add(entry.engine, status, entry.kind === 'compose' && entry.directory === '.' && ['postgres', 'mysql'].includes(entry.engine) ? 'controls' : 'discovery',
+          ['mariadb', 'turso'].includes(entry.variant) ? entry.variant : undefined);
+      }
+      add(project.database, 'declared', 'controls');
+      const dedicated = development?.[project.id];
+      if (dedicated) add(dedicated.engine ?? 'postgres', dedicated.created && !dedicated.deleting ? 'development' : 'attention', 'development');
+      return [...rows.values()];
+    }).sort((a, b) => precedence[a.status] - precedence[b.status]);
+  }
+
   profile(projectId, instanceId) {
     return this.value.profiles[databaseKey(projectId, instanceId)];
   }

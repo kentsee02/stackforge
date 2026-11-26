@@ -28,6 +28,7 @@ import { createProjectWorkflows } from '../projects/project-workflows.mjs';
 import { createProjectRoutes, matchProjectAction } from './project-routes.mjs';
 import { createGenerationRoutes } from './generation-routes.mjs';
 import { createTaskRoutes } from './task-routes.mjs';
+import { dashboardSnapshot } from './dashboard.mjs';
 import { send } from './response.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -94,6 +95,9 @@ export function createApp({ generate = generateProject, check = checkEnvironment
       await Promise.all([jobs.ready, settings.ready, projectConfig.ready]);
       if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, { catalog, token, defaultDir, node: process.version, platform: process.platform, version: identity.version, jobs: jobs.list(), preferences: settings.value, desktop: await desktop.capabilities() });
       if (req.method === 'GET' && url.pathname === '/api/tasks') return await taskRoutes.list(res);
+      if (req.method === 'GET' && url.pathname === '/api/dashboard') {
+        return send(res, 200, await dashboardSnapshot({ projects: queries.overview, databases: database.overview, tasks: taskRoutes.snapshot }));
+      }
       if (req.method === 'GET' && await projectRoutes.get(res, url)) return;
       if (req.method === 'POST' && await databaseRoutes.archive(req, res, url.pathname, authorized)) return;
       if (req.method === 'GET' && generationRoutes.get(res, url)) return;

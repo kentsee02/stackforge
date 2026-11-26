@@ -1,6 +1,8 @@
 import { setText } from '/i18n.js';
 
 export const activityLabels = {
+  'create-project': 'Create project',
+  'publish-project': 'Publish project to GitHub',
   install: 'Install dependencies',
   'check-build': 'Build project',
   'check-package': 'Build project',
@@ -24,7 +26,8 @@ export const activityLabels = {
   'database-remote-profile-save': 'Save remote database profile',
   'database-remote-profile-remove': 'Remove remote database profile'
 };
-export const activityOutcomes = { succeeded: 'Completed', failed: 'Operation failed', cancelled: 'Cancelled' };
+export const activityOutcomes = { succeeded: 'Completed', failed: 'Operation failed', cancelled: 'Cancelled',
+  running: 'Running', cancelling: 'Cancelling…', 'partially-completed': 'Local project created, publishing incomplete' };
 
 export function createActivityPanel({ $, request, showMessage }) {
   const panel = $('project-activity');

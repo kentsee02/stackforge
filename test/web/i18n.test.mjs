@@ -14,12 +14,12 @@ test('English is the default; unsupported or missing language preferences fall b
   assert.equal(translate('检查并创建项目', 'zh-CN'), '检查并创建项目');
 });
 
-test('both web entry points show the server version and load their allowlisted assets', async t => {
+test('workspace entry points show the server version and load their allowlisted assets', async t => {
   const server = createApp({ stateDir: false });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
-  for (const route of ['/', '/projects']) {
+  for (const route of ['/', '/dashboard', '/projects', '/tasks']) {
     const response = await fetch(base + route);
     assert.equal(response.status, 200);
     const html = await response.text();
@@ -50,7 +50,7 @@ test('message catalog covers static copy and stack choices with matching runtime
     assert.deepEqual([...zh.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort(), [...en.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort());
     if (!zh.includes('{')) assert.equal(translate(zh), en);
   }
-  for (const page of ['create', 'projects']) {
+  for (const page of ['create', 'dashboard', 'projects', 'tasks']) {
     const html = await readFile(new URL(`../../public/${page}/index.html`, import.meta.url), 'utf8');
     assert.match(html, /<html lang="en">/);
     assert.match(html, /id="language"/);

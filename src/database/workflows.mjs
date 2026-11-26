@@ -600,6 +600,6 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
     redact: redactDatabase.text, shutdown, scan: scanDatabases, verifyDeletion: verifyDatabaseDeletion, selectedCompose,
     operation, blocksProjectAction, cleanupReplacedClone, removeProfiles: resources.removeProfiles,
     removeRegistration: id => databaseRegistry.remove(id), record: databaseLog.begin, activity: databaseLog.recent,
-    recentTasks: databaseLog.recentFor, tasks, cancelTask,
+    recentTasks: databaseLog.recentFor, tasks, cancelTask, overview: projects => databaseRegistry.overview(projects),
     guardDevelopmentRemoval: development.guardRemoval };
 }

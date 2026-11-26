@@ -6,7 +6,7 @@ Use this map to locate the current implementation and its checks. The [architect
 
 - `npm start` starts the loopback HTTP server in `src/http/server.mjs`.
 - `npm run launch` and `Start StackForge.cmd` use `scripts/launcher.mjs` to open or reuse the local server.
-- `package.json` provides the application version for both pages, `/api/identity`, and generated project manifests. Generated projects have their own package version.
+- `package.json` provides the application version for the workspace pages, `/api/identity`, and generated project manifests. Generated projects have their own package version.
 
 ## Find a feature
 
@@ -26,7 +26,8 @@ Use this map to locate the current implementation and its checks. The [architect
 - **Execute Alembic revisions or EF Core SQL exports.** `src/database/migrations/native-alembic.mjs` plans upgrade and downgrade against the declared revision graph and stages the selected runtime. `src/database/migrations/native-ef-core.mjs` checks the selected context and commits SQL only when the same transaction verifies the expected migration history.
 - **Execute and inspect commands.** `src/platform/process.mjs` provides process execution, cancellation, and termination. `src/database/security/secrets.mjs` handles fragmented stdout and stderr redaction for project services and finite project operations. `src/generation/jobs.mjs`, `src/projects/project-runtime.mjs`, and `src/projects/project-operations.mjs` manage resumable creation, long-lived processes, and finite operations respectively.
 - **Probe and diagnose.** `src/platform/ports.mjs` is the loopback port check shared by preflight and runtime. `src/projects/project-diagnostics.mjs` classifies command failures using the diagnostic keys consumed by both runtime and database responses.
-- **Edit the web interface.** `public/projects/page.js` coordinates project selection, polling, and request state. Startup, dependencies, checks and Git, and databases have their own panel modules in `public/projects/`. `public/shared/` holds common CSS and localization. `src/http/assets.mjs` maps public URLs to files and inserts the current version into both pages.
+- **Edit the web interface.** `public/projects/page.js` coordinates project selection, polling, and request state. Startup, dependencies, checks and Git, and databases have their own panel modules in `public/projects/`. `public/shared/` holds common CSS and localization. `src/http/assets.mjs` maps public URLs to files and inserts the current version into each workspace.
+- **Show the dashboard.** `src/http/dashboard.mjs` gathers project and service state, saved database records and recent task outcomes. `public/dashboard/` renders the read-only overview and links to the owning workspace.
 
 ## Run checks
 

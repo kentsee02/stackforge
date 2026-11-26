@@ -54,7 +54,7 @@ The responsibilities below describe internal boundaries. The current browser nav
 
 ### 3.1 Dashboard and aggregate views
 
-An independent dashboard is a product candidate. Any aggregate view derives its data from Projects, Services, Databases, and Tasks. Those modules continue to own their records and activity.
+The dashboard derives a read-only overview from Projects, Services, Databases and Tasks. Their owners continue to manage registration, runtime checks, connection verification and task execution. The dashboard reads saved database records, reports incomplete data separately and links to the relevant workspace for details and actions.
 
 ### 3.2 Projects and generation
 
@@ -195,11 +195,11 @@ Separate persisted settings and records, live state, discovery observations, and
 
 ## 8. Frontend architecture
 
-The web app has two main entry points. `/` is **Create project**, including templates and creation task history. `/projects` is **Projects**, including import, clone, and project details. Dependencies, startup, Git status, checks, and database controls are presented in the selected project. File previews describe generated output on the creation page.
+The web app has four main entry points. `/` is **Create project**, including templates and creation task history. `/dashboard` is the workspace overview. `/projects` is **Projects**, including import, clone, and project details. `/tasks` shows active work and recent task outcomes across projects. Dependencies, startup, Git status, checks, and database controls are presented in the selected project. File previews describe generated output on the creation page.
 
 Render server capabilities and operation states with accurate labels. Keep runtime status, server reachability, database existence, connection status, and migration status distinct. Use structured results where available and localize their presentation. Preserve runtime English and Chinese switching, trusted custom commands, and exact-target confirmations.
 
-Dashboard, global tasks, standalone environment and integration views, and broader settings are candidates. Adding internal modules does not require adding top-level navigation.
+Standalone environment and integration views and broader settings are candidates. Adding internal modules does not require adding top-level navigation.
 
 ## 9. Source layout
 
@@ -222,7 +222,7 @@ The baseline uses server-side state under `.stackforge/` and browser-managed set
 
 - Run the existing unit and HTTP integration suites. Test ownership, destination substitution, concurrency, cancellation, and reload of existing settings at the behavior boundaries.
 - Validate all three entry workflows. Creation remains resumable, import and clone reach the same registration and discovery rules, and external projects can use their saved manual commands.
-- Verify launch and stop, log redaction, ready links, port overrides, and built-in and custom checks. Preserve older launchers and the two web entry points.
+- Verify launch and stop, log redaction, ready links, port overrides, and built-in and custom checks. Exercise older launchers and each workspace entry point.
 - Verify database setup, PostgreSQL/MySQL Compose selection, shared-target protection, verified restore, and the three removal paths. Confirm that SQLite files move with recycled directories while Docker data volumes remain independent.
 - Keep real database and representative full-stack integration checks and live localization in CI. See the [v0.32.0 verified results](docs/PRODUCT-BASELINE-v0.32.0.md#compatibility-and-regression-checks). Use test projects and fixtures for write verification.
 

@@ -150,6 +150,9 @@ try {
     await page.locator('#preflight-check').click();
     await page.locator(check(code)).first().waitFor();
   }
+  await page.goto(origin + '/dashboard');
+  await contains('#dashboard-projects-message', 'Create or import a project');
+  await contains('#dashboard-running', '0');
   await page.goto(origin);
   assert.equal(await page.locator('html').getAttribute('lang'), 'en');
   await page.locator('#language').selectOption('zh-CN');
@@ -246,6 +249,24 @@ try {
     assert.equal(tab.url(), expected);
     assert.equal(await tab.locator('body').innerText(), name + ' is ready');
     await tab.close();
+    if (!viaPreflight) {
+      const overview = await browser.newPage({ viewport: { width: 390, height: 844 } });
+      try {
+        await overview.goto(origin + '/dashboard');
+        await contains('#dashboard-running', '1', overview);
+        await contains('#dashboard-ready', '1', overview);
+        await contains('#overview-projects', 'portal', overview);
+        await contains('#overview-databases', 'Review configuration', overview);
+        const readyLink = overview.locator('#overview-services').getByRole('link', { name: 'Open app' });
+        assert.equal(await readyLink.getAttribute('href'), expected);
+        await overview.locator('#language').selectOption('zh-CN');
+        await contains('#dashboard-services-title', '已就绪服务', overview);
+        assert.ok(await overview.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+        await overview.locator('#overview-databases').getByRole('link', { name: 'PostgreSQL' }).click();
+        await contains('#selected-project-name', 'portal', overview);
+        await overview.locator('#project-database-discovery[open]').waitFor();
+      } finally { await overview.close(); }
+    }
     await action.click();
     await page.locator('#selected-project-state[data-state="stopped"]').waitFor();
     await link.waitFor({ state: 'hidden' });
@@ -734,7 +755,7 @@ try {
   await page.locator('#development-postgres-cancel').click();
   await page.unroute(developmentRoute);
   assert.deepEqual(errors, []);
-  console.log('Verified the bilingual task center, startup, database setup, and Drizzle, Alembic, EF Core, Flyway and Liquibase migration previews in imported and cloned projects.');
+  console.log('Verified the bilingual dashboard, task center, startup, database setup, and Drizzle, Alembic, EF Core, Flyway and Liquibase migration previews in imported and cloned projects.');
 } finally {
   try {
     await browser?.close();

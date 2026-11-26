@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eef3f3">
+  <title data-i18n="StackForge · 仪表盘">StackForge · Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M16 7H7v26h9m8-26h9v26h-9M16 27l8-14' fill='none' stroke='%231b6c80' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/dashboard/styles.css">
+  <script type="module" src="/dashboard.js"></script>
+</head>
+<body class="dashboard-page">
+  <a class="skip-link" href="#main" data-i18n="跳到主要内容">Skip to content</a>
+  <aside class="sidebar">
+    <a class="brand" href="/dashboard" aria-label="StackForge home" data-i18n-aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
+    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v{{version}}</span></div>
+    <a class="side-active" href="/dashboard" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg><span data-i18n="仪表盘">Dashboard</span></a>
+    <a class="side-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a>
+    <a class="side-link" href="/tasks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg><span data-i18n="任务中心">Tasks</span></a>
+    <a class="side-link" href="/projects"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2h7v2"/></svg><span data-i18n="项目管理">Projects</span></a>
+    <div class="side-footer"><span data-i18n="MIT 开源">MIT licensed</span><a href="https://github.com/kentsee02/stackforge" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a></div>
+  </aside>
+  <div class="body-shell">
+    <header class="topbar">
+      <span><span data-i18n="工作空间">Workspace</span> <span class="slash">/</span> <span data-i18n="仪表盘">Dashboard</span></span>
+      <div class="topbar-tools"><a class="mobile-task-link" href="/projects" data-i18n="项目管理">Projects</a><a class="mobile-task-link" href="/tasks" data-i18n="任务中心">Tasks</a><label class="language-control" for="language">Language / 语言<select id="language" aria-label="Language / 语言"><option value="en" lang="en">English</option><option value="zh-CN" lang="zh-CN">华文</option></select></label></div>
+    </header>
+    <main id="main" class="sheet dashboard-sheet">
+      <div class="title-row dashboard-title">
+        <h1 data-i18n="仪表盘">Dashboard</h1>
+        <div class="dashboard-actions"><button id="dashboard-refresh" class="secondary" type="button" data-i18n="刷新概览">Refresh overview</button><a class="primary" href="/#project-form" data-i18n="创建项目">Create project</a></div>
+      </div>
+      <p id="dashboard-feedback" class="hint dashboard-feedback" role="status" data-i18n="正在加载工作空间概览…">Loading workspace overview…</p>
+      <dl class="dashboard-totals">
+        <div><dt><a href="#dashboard-projects" data-i18n="正在运行的项目">Running projects</a></dt><dd id="dashboard-running">—</dd></div>
+        <div><dt><a href="#dashboard-services" data-i18n="已就绪服务">Ready services</a></dt><dd id="dashboard-ready">—</dd></div>
+        <div><dt><a href="#dashboard-databases" data-i18n="需要检查的数据库配置">Database setups to review</a></dt><dd id="dashboard-database-attention">—</dd></div>
+        <div><dt><a href="#dashboard-tasks" data-i18n="正在处理的任务">Active tasks</a></dt><dd id="dashboard-active">—</dd></div>
+      </dl>
+      <div class="dashboard-grid">
+        <section id="dashboard-projects" class="dashboard-panel" aria-labelledby="dashboard-projects-title">
+          <div class="dashboard-panel-head"><h2 id="dashboard-projects-title" data-i18n="项目管理">Projects</h2><a href="/projects" data-i18n="查看所有项目">All projects</a></div>
+          <p id="dashboard-projects-message" class="hint dashboard-panel-message"></p>
+          <ul id="overview-projects" class="dashboard-list" role="list" hidden></ul>
+        </section>
+        <section id="dashboard-services" class="dashboard-panel" aria-labelledby="dashboard-services-title">
+          <div class="dashboard-panel-head"><h2 id="dashboard-services-title" data-i18n="已就绪服务">Ready services</h2></div>
+          <p id="dashboard-services-message" class="hint dashboard-panel-message"></p>
+          <ul id="overview-services" class="dashboard-list" role="list" hidden></ul>
+        </section>
+        <section id="dashboard-databases" class="dashboard-panel" aria-labelledby="dashboard-databases-title">
+          <div class="dashboard-panel-head"><h2 id="dashboard-databases-title" data-i18n="数据库概览">Databases</h2></div>
+          <p class="hint dashboard-panel-note" data-i18n="根据已保存的检测和连接记录显示。">Based on saved discovery and connection checks.</p>
+          <p id="dashboard-databases-message" class="hint dashboard-panel-message"></p>
+          <ul id="overview-databases" class="dashboard-list" role="list" hidden></ul>
+        </section>
+        <section id="dashboard-tasks" class="dashboard-panel" aria-labelledby="dashboard-tasks-title">
+          <div class="dashboard-panel-head"><h2 id="dashboard-tasks-title" data-i18n="近期任务">Recent tasks</h2><a href="/tasks" data-i18n="查看所有任务">All tasks</a></div>
+          <p id="dashboard-tasks-message" class="hint dashboard-panel-message"></p>
+          <ul id="overview-tasks" class="dashboard-list" role="list" hidden></ul>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

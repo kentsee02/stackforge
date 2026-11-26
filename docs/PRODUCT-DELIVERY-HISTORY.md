@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.61.0 Workspace dashboard
+
+- Show running projects, ready services, database configurations to review and active tasks in a single read-only view.
+- Open a verified local service or follow a record to its existing project, database or task view.
+- Reuse saved database discovery and connection records. Reads perform no Docker or database probes and show unavailable data separately from zero counts.
+
 ## v0.60.1 Windows npm process cancellation
 
 - Assign each cancellable npm invocation to a Windows job before the command starts, covering descendants created during cancellation.

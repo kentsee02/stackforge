@@ -22,13 +22,19 @@ export function createProjectQueries({ projects, projectConfig, runtime, operati
     return { ...projectDetails(project), ...(project.unmanaged && { hasComposeDatabase: await hasImportedCompose(project) }) };
   }
 
-  async function list(selected) {
-    const details = await Promise.all(projects.list().map(async project => {
+  async function visibleProjects(selected) {
+    const visible = await Promise.all(projects.list().map(async project => {
       const removal = removals.get(project.path);
       const deleting = removal?.moving ?? false;
       const session = runtime.status(project, project.id === selected);
       const offline = !deleting && !['starting', 'running', 'stopping'].includes(session.status) && !await locationExists(project.path);
-      if (offline && projectConfig.value.hiddenWhenMissing[project.id]) return;
+      if (!offline || !projectConfig.value.hiddenWhenMissing[project.id]) return { project, removal, deleting, session, offline };
+    }));
+    return visible.filter(Boolean);
+  }
+
+  async function list(selected) {
+    return Promise.all((await visibleProjects(selected)).map(async ({ project, removal, deleting, session, offline }) => {
       const detail = { ...projectDetails(project), ...session, ...operations.status(project, project.id === selected), deleting,
         ...(offline && { offline: true, removeOnly: true }) };
       if (project.unmanaged && !offline) detail.hasComposeDatabase = await hasImportedCompose(project);
@@ -43,7 +49,26 @@ export function createProjectQueries({ projects, projectConfig, runtime, operati
       }
       return detail;
     }));
-    return details.filter(Boolean);
+  }
+
+  async function overview() {
+    return (await visibleProjects()).map(({ project, deleting, offline, session }) => {
+      const { id, name, database } = project;
+      const status = deleting ? 'deleting' : offline ? 'offline' : session.ready && session.status === 'running' ? 'ready' : session.status;
+      const services = status === 'ready' || status === 'running' ? Object.entries(session.services ?? {}).flatMap(([key, service]) => {
+        if (!service.ready) return [];
+        const kind = service.kind || (key === 'frontend' ? 'web' : key === 'backend' ? 'api' : 'service');
+        const address = service.name && kind === 'api' ? service.openUrl : service.openUrl ?? service.url;
+        let url;
+        try {
+          const candidate = new URL(address);
+          if (['http:', 'https:'].includes(candidate.protocol) && ['127.0.0.1', 'localhost', '[::1]'].includes(candidate.hostname) &&
+              !candidate.username && !candidate.password && !candidate.search && !candidate.hash) url = candidate.href;
+        } catch { /* The existing project action can guide missing or invalid access paths. */ }
+        return [{ ...(service.name && { name: service.name }), kind, ...(url && { url }) }];
+      }) : [];
+      return { id, name, database, status, services };
+    });
   }
 
   async function inspect(project, view) {
@@ -72,5 +97,5 @@ export function createProjectQueries({ projects, projectConfig, runtime, operati
     }
   }
 
-  return { describe, list, inspect };
+  return { describe, list, inspect, overview };
 }

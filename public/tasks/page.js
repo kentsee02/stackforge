@@ -1,11 +1,8 @@
 import { setText, setupI18n, translate } from '/i18n.js';
-import { activityLabels, activityOutcomes } from '/projects/activity.js';
+import { activityLabels as labels, activityOutcomes as outcomes } from '/projects/activity.js';
 
 setupI18n();
 const $ = id => document.getElementById(id);
-const labels = { ...activityLabels, 'create-project': 'Create project', 'publish-project': 'Publish project to GitHub' };
-const outcomes = { ...activityOutcomes, running: 'Running', cancelling: 'Cancelling…',
-  'partially-completed': 'Local project created, publishing incomplete' };
 const pending = new Set();
 let snapshot, timer, loading, feedback;
 

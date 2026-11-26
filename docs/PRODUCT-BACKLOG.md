@@ -4,7 +4,7 @@ The [architecture specification](../ARCHITECTURE.md) defines the product boundar
 
 ## Current priority
 
-The standalone dashboard is the next planned product task. Windows now assigns cancellable npm commands to an operating-system job before they start, so the Tasks workspace can stop the entire npm process tree.
+The standalone environment view is the next planned product task. The dashboard now brings together project status, ready services, recorded database configuration and task outcomes.
 
 ### Open migration work
 
@@ -18,10 +18,9 @@ The standalone dashboard is the next planned product task. Windows now assigns c
 
 ## Next product work
 
-1. **Independent dashboard.** Derive an aggregate view from Projects, Services, Databases and Tasks.
-2. **Standalone environment view.** Consolidate tool availability, versions, executable paths and prerequisites.
-3. **Standalone integrations view.** Consolidate Git, GitHub, Docker and desktop integration status.
-4. **App-wide settings.** Evaluate theme, notifications and other cross-project preferences.
+1. **Standalone environment view.** Consolidate tool availability, versions, executable paths and prerequisites.
+2. **Standalone integrations view.** Consolidate Git, GitHub, Docker and desktop integration status.
+3. **App-wide settings.** Evaluate theme, notifications and other cross-project preferences.
 
 ## Product candidates
 

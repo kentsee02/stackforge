@@ -8,6 +8,8 @@ A local, open-source full-stack project generator. Choose a frontend, backend, a
 
 The Projects workspace lets you run local development sessions, manage databases, run build and test commands, and check Git status.
 
+Open **Dashboard** in the workspace navigation for running projects, ready service links, saved database configuration and recent task outcomes. Database cards reflect saved discovery and connection checks. Select a database to open its project controls and check the current connection.
+
 English is the default, with Chinese (华文) available from the top bar. Your choice is remembered in this browser; switching does not reload the page or interrupt a task. Generated project documentation and starter messages are in English.
 
 ## Quick start
