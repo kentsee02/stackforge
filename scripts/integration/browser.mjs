@@ -150,11 +150,22 @@ try {
     await page.locator('#preflight-check').click();
     await page.locator(check(code)).first().waitFor();
   }
-  await page.goto(origin + '/dashboard');
+  for (const route of ['/', '/projects', '/tasks', '/environment', '/dashboard']) {
+    await page.goto(origin + route);
+    const footer = page.locator('.side-footer');
+    const bounds = await footer.boundingBox();
+    assert.ok(bounds && Math.abs(bounds.y + bounds.height - (page.viewportSize().height - 20)) <= 1, `Sidebar footer on ${route}`);
+    assert.equal(await footer.getByRole('link', { name: 'GitHub' }).count(), 1);
+  }
   await contains('#dashboard-projects-message', 'Create or import a project');
   await contains('#dashboard-running', '0');
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator('.dashboard-actions').getByRole('link', { name: 'Environment' }).click();
+  assert.equal(await page.locator('.dashboard-actions').getByRole('link', { name: 'Environment' }).isVisible(), true);
+  await page.goto(origin);
+  await page.locator('#language').selectOption('zh-CN');
+  await page.getByRole('link', { name: '环境', exact: true }).click();
+  await contains('#environment-workspace', '工作空间工具');
+  await page.locator('#language').selectOption('en');
   const nodeTool = page.locator('tr[data-tool="node"]');
   await nodeTool.waitFor();
   assert.equal(await nodeTool.locator('code').innerText(), process.execPath);

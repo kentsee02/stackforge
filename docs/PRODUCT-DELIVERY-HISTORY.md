@@ -2,6 +2,11 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.62.1 Workspace navigation fixes
+
+- Keep the MIT licensing label and GitHub link at the bottom of the desktop sidebar on all workspace pages. At short heights, scroll the sidebar content above the footer.
+- Keep Environment with the other sidebar links and expose it in the Create page header on narrow screens.
+
 ## v0.62.0 Local environment workspace
 
 - List versions and resolved paths for the local executables StackForge can use, grouped by workspace tools, development toolchains, and database clients.
