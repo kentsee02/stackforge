@@ -177,8 +177,8 @@
 .project-trash-field strong { display: block; margin-top: 4px; overflow-wrap: anywhere; }
 .project-trash-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
 .project-trash-actions .secondary { margin: 0; }
-.project-trash-confirm { min-height: 36px; padding: 7px 12px; border-radius: 6px; background: var(--negative); color: white; font-size: 12px; }
-.project-trash-confirm:enabled:hover { background: #91212a; }
+.project-trash-confirm { min-height: 36px; padding: 7px 12px; border-radius: 6px; background: var(--danger-fill); color: #fff; font-size: 12px; }
+.project-trash-confirm:enabled:hover { background: var(--danger-hover); }
 @media(max-width:900px) { .project-manager { gap: 16px; } }
 @media(max-width:800px) {
   body.projects-page { padding-bottom: 0; }

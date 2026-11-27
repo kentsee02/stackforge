@@ -155,7 +155,9 @@ The Integrations page reports local tool versions, the presence of a default Git
 
 ### 3.8 Settings
 
-Keep project-specific configuration separate from app-wide preferences. StackForge currently persists recent project locations on the server and keeps language, templates, and creation preferences in the browser. Theme, notification, and broader integration settings remain product candidates.
+The Settings page manages workspace language, theme, task notifications, and the remembered save location for new projects. The default theme is Light. Light, Dark, and Use system setting apply across the workspace. Language, theme, notification preferences, templates, and creation selections use browser storage. The server retains the remembered and recent project locations. Settings reuses the same directory validation and update flow as Create.
+
+Notifications are optional and read the existing task history while a workspace page is visible. They link to Tasks and keep only a bounded cursor in the tab session to prevent repeated notices during navigation. Project-specific configuration continues to belong to Projects.
 
 ## 4. Reusable capabilities
 
@@ -197,11 +199,9 @@ Separate persisted settings and records, live state, discovery observations, and
 
 ## 8. Frontend architecture
 
-The web app has six main entry points. The launcher opens `/dashboard`, the workspace overview. `/` is **Create project**, including templates and creation task history. `/projects` is **Projects**, including import, clone, and project details. `/tasks` shows active work and recent task outcomes across projects. `/environment` checks local tools, versions and executable paths. `/integrations` shows Git, GitHub, Docker, and desktop integration status. Dependencies, startup, Git status, checks, and database controls are presented in the selected project. File previews describe generated output on the creation page.
+The web app has seven main entry points. The launcher opens `/dashboard`, the workspace overview. `/` is **Create project**, including templates and creation task history. `/projects` is **Projects**, including import, clone, and project details. `/tasks` shows active work and recent task outcomes across projects. `/environment` checks local tools, versions and executable paths. `/integrations` shows Git, GitHub, Docker, and desktop integration status. `/settings` manages workspace preferences. Dependencies, startup, Git status, checks, and database controls are presented in the selected project. File previews describe generated output on the creation page.
 
 Render server capabilities and operation states with accurate labels. Keep runtime status, server reachability, database existence, connection status, and migration status distinct. Use structured results where available and localize their presentation. Preserve runtime English and Chinese switching, trusted custom commands, and exact-target confirmations.
-
-Broader app settings remain a product candidate.
 
 ## 9. Source layout
 

@@ -4,7 +4,7 @@ The [architecture specification](../ARCHITECTURE.md) defines the product boundar
 
 ## Current priority
 
-App-wide settings is the next planned product task. The Integrations page now shows Git, GitHub, local Docker and desktop status.
+Backup and restore for project-owned SQL Server is the next planned product task. SQL Server already supports managed Docker instances and reviewed EF Core migrations.
 
 ### Open migration work
 
@@ -18,12 +18,12 @@ App-wide settings is the next planned product task. The Integrations page now sh
 
 ## Next product work
 
-- **App-wide settings.** Evaluate theme, notifications and other cross-project preferences.
+- **SQL Server backup and restore.** Start with project-owned Docker instances. Verify the target catalog and ownership, define compatibility and restore confirmation, and run recovery against a disposable SQL Server database.
 
 ## Product candidates
 
 - **Deferred task scheduling.** Evaluate explicit scheduling, persistent waiting jobs, and revalidation of approvals and project identity at dispatch time.
-- **Additional local database operations.** Evaluate backup, restore and lifecycle coverage individually for MongoDB, Redis and SQL Server. Project SQL Server currently supports container lifecycle and reviewed EF Core migration.
+- **Additional local database operations.** Evaluate backup, restore, and lifecycle for MongoDB and Redis, and evaluate native and remote SQL Server recovery separately from project-owned Docker recovery.
 - **Native PostgreSQL and MySQL provisioning.** Evaluate setup on supported operating systems using their service and permissions model.
 - **Cloud database lifecycle.** Evaluate provider-specific creation, lifecycle and deletion with separate provider permissions.
 - **Additional hosted Drizzle dialects.** Turso has source preview. Evaluate provider authentication, target identity, history verification and recovery separately before enabling writes. Validate CockroachDB, SingleStore and SQL Server against their own dialects.

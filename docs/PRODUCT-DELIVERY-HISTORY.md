@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.64.0 Workspace settings
+
+- Switch the workspace between English and Chinese or between Light, Dark, and the operating system theme. Keep the existing default appearance and language.
+- View the effective default creation folder and manage the remembered folder from Settings. Reuse the same stored locations as Create.
+- Opt in to in-app notices for new task outcomes. Show issues only or include successes, link to Tasks, and avoid replaying notices during page navigation.
+
 ## v0.63.2 Java CI Maven distribution mirror
 
 - Use the Google Cloud Maven Central mirror for Wrapper bootstrap in the Java integration job after Maven Central returned HTTP 429 on GitHub runners. Generated projects keep their upstream Wrapper configuration.

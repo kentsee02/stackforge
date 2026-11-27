@@ -30,6 +30,7 @@ Use this map to locate the current implementation and its checks. The [architect
 - **Show the dashboard.** `src/http/dashboard.mjs` gathers project and service state, saved database records and recent task outcomes. `public/dashboard/` renders the read-only overview and links to the owning workspace.
 - **Inspect the local environment.** `src/platform/environment-inventory.mjs` resolves tool paths and probes their versions. `src/platform/tool-versions.mjs` holds the minimum versions shared with creation preflight. `public/environment/` renders the searchable inventory.
 - **Check integrations.** `src/platform/integration-checks.mjs` reads local Git, Docker and desktop status and verifies the GitHub account on request. `src/platform/docker-context.mjs` shares local endpoint checks with database provisioning. `public/integrations/` renders the results.
+- **Manage workspace settings.** `public/settings/` manages browser preferences and the saved project location. `public/shared/appearance.js` applies the theme before the page renders, and `public/shared/task-notices.js` observes recent outcomes when enabled. `src/platform/settings.mjs` remains the shared store for project locations.
 
 ## Run checks
 

@@ -1,0 +1,30 @@
+.settings-page { padding-bottom: 0; }
+.settings-sheet { padding-bottom: 28px; }
+.settings-sheet .title-row { padding-bottom: 20px; }
+.settings-section { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 12px 32px; max-width: 960px; border-top: 1px solid var(--border); padding: 18px 0; }
+.settings-section h2 { font-size: 16px; }
+.settings-section .hint { max-width: 52ch; }
+.settings-controls { min-width: 0; }
+.settings-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); align-items: center; gap: 6px 12px; }
+.settings-row + .settings-row { margin-top: 8px; }
+.settings-controls :is(select, input[type="text"]) { display: block; width: 100%; min-width: 0; min-height: 40px; padding: 6px 9px; border: 1px solid var(--control); border-radius: 6px; color: var(--text); background: var(--surface); font-size: 13px; }
+.settings-controls input:disabled { color: var(--muted); background: var(--raised); }
+.settings-default { margin: 0 0 10px; }
+.settings-default dt { color: var(--muted); font-size: 12px; }
+.settings-default dd { overflow-wrap: anywhere; margin: 3px 0 0; }
+.settings-checkbox { display: flex; align-items: center; gap: 8px; width: fit-content; min-height: 34px; cursor: pointer; }
+.settings-checkbox input { margin: 0; }
+#settings-remember-help { margin: 0 0 10px; }
+.settings-directory { display: flex; align-items: stretch; gap: 8px; margin-top: 4px; }
+.settings-directory .secondary { margin: 0; flex-shrink: 0; }
+.settings-actions { display: flex; gap: 8px 10px; flex-wrap: wrap; justify-content: flex-end; margin-top: 10px; }
+.settings-actions .secondary { margin: 0; }
+.settings-actions .text-button { min-height: 34px; }
+.settings-feedback:empty { display: none; }
+.settings-feedback[data-error="true"] { color: var(--negative); }
+@media (max-width: 680px) {
+  .settings-section { grid-template-columns: 1fr; }
+  .settings-controls :is(input[type="text"],select) { min-height: 44px; font-size: 16px; }
+  .settings-actions .text-button, .settings-directory .secondary, .settings-actions .secondary { min-height: 44px; }
+  .settings-checkbox { min-height: 44px; }
+}

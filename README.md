@@ -14,6 +14,8 @@ Open **Environment** to see local tools, versions, and executable paths. Search 
 
 Open **Integrations** for Git and default commit identity detection, GitHub CLI and account verification, the local Docker Engine and Compose, and available desktop applications. GitHub verification contacts GitHub when requested. Docker uses the selected local connection.
 
+Open **Settings** to select a light, dark, or system theme, switch languages, manage the remembered project save location, or opt in to task notifications. Notifications appear in the workspace while it is open.
+
 English is the default, with Chinese (华文) available from the top bar. Your choice is remembered in this browser; switching does not reload the page or interrupt a task. Generated project documentation and starter messages are in English.
 
 ## Quick start

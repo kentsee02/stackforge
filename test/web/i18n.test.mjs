@@ -19,7 +19,7 @@ test('workspace entry points show the server version and load their allowlisted 
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
-  for (const route of ['/', '/dashboard', '/environment', '/integrations', '/projects', '/tasks']) {
+  for (const route of ['/', '/dashboard', '/environment', '/integrations', '/projects', '/settings', '/tasks']) {
     const response = await fetch(base + route);
     assert.equal(response.status, 200);
     const html = await response.text();
@@ -32,7 +32,7 @@ test('workspace entry points show the server version and load their allowlisted 
     }
   }
   for (const route of ['/projects/database.js', '/projects/startup.js', '/projects/dependencies.js', '/projects/tools.js', '/projects/preflight.js', '/projects/development-postgres.js', '/projects/drizzle-preview.js',
-    '/i18n.js', '/messages.js', '/template-store.js', '/plex-regular.ttf']) {
+    '/i18n.js', '/messages.js', '/task-notices.js', '/template-store.js', '/plex-regular.ttf']) {
     const asset = await fetch(base + route);
     assert.equal(asset.status, 200, route);
     await asset.arrayBuffer();
@@ -50,7 +50,7 @@ test('message catalog covers static copy and stack choices with matching runtime
     assert.deepEqual([...zh.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort(), [...en.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort());
     if (!zh.includes('{')) assert.equal(translate(zh), en);
   }
-  for (const page of ['create', 'dashboard', 'environment', 'integrations', 'projects', 'tasks']) {
+  for (const page of ['create', 'dashboard', 'environment', 'integrations', 'projects', 'settings', 'tasks']) {
     const html = await readFile(new URL(`../../public/${page}/index.html`, import.meta.url), 'utf8');
     assert.match(html, /<html lang="en">/);
     assert.match(html, /id="language"/);

@@ -163,7 +163,7 @@ try {
     await page.locator('#preflight-check').click();
     await page.locator(check(code)).first().waitFor();
   }
-  for (const route of ['/', '/projects', '/tasks', '/environment', '/integrations', '/dashboard']) {
+  for (const route of ['/', '/projects', '/tasks', '/environment', '/integrations', '/settings', '/dashboard']) {
     await page.goto(origin + route);
     const footer = page.locator('.side-footer');
     const bounds = await footer.boundingBox();
@@ -172,6 +172,68 @@ try {
   }
   await contains('#dashboard-projects-message', 'Create or import a project');
   await contains('#dashboard-running', '0');
+  const settingsPage = await browser.newPage({ viewport: { width: 320, height: 780 } });
+  let noticeRequests = 0;
+  const history = [{ id: 'older', status: 'failed', finishedAt: new Date(Date.now() - 60000).toISOString() }];
+  await settingsPage.route('**/api/tasks', route => {
+    noticeRequests++;
+    return route.fulfill({ json: { active: [], history } });
+  });
+  await settingsPage.goto(origin + '/dashboard');
+  await settingsPage.getByRole('link', { name: 'Settings', exact: true }).click();
+  const settingsDirectory = settingsPage.locator('#settings-directory');
+  await settingsPage.locator('#settings-save-directory').waitFor();
+  await settingsPage.waitForFunction(() => !document.querySelector('#settings-save-directory').matches(':disabled'));
+  const systemDirectory = await settingsDirectory.inputValue();
+  assert.equal(noticeRequests, 0);
+  assert.ok(await settingsPage.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+  await settingsPage.locator('#theme').selectOption('dark');
+  await settingsPage.waitForFunction(() => getComputedStyle(document.documentElement).colorScheme === 'dark');
+  await settingsPage.locator('#language').selectOption('zh-CN');
+  await contains('h1', '设置', settingsPage);
+  await settingsPage.reload();
+  assert.equal(await settingsPage.locator('#theme').inputValue(), 'dark');
+  await settingsPage.waitForFunction(() => document.documentElement.lang === 'zh-CN');
+  const saveDirectory = path => settingsDirectory.fill(path).then(() => settingsPage.locator('#settings-save-directory').click());
+  await saveDirectory('relative/path');
+  await contains('#settings-location-feedback', '绝对目录路径', settingsPage);
+  await saveDirectory(root);
+  await contains('#settings-location-feedback', '此位置已保存在本机', settingsPage);
+  await settingsPage.goto(origin);
+  await settingsPage.waitForFunction(path => document.querySelector('#parent-dir').value === path, root);
+  await settingsPage.goto(origin + '/settings');
+  await settingsPage.waitForFunction(() => !document.querySelector('#settings-location-fields').disabled);
+  await settingsPage.locator('#settings-remember-directory').uncheck();
+  await settingsPage.locator('#settings-save-directory').click();
+  await contains('#settings-location-feedback', '位置记录已清除', settingsPage);
+  assert.equal(await settingsDirectory.inputValue(), systemDirectory);
+  await settingsPage.locator('#settings-remember-directory').check();
+  await settingsPage.locator('#settings-save-directory').click();
+  await contains('#settings-location-feedback', '此位置已保存在本机', settingsPage);
+  await settingsPage.emulateMedia({ colorScheme: 'dark' });
+  await settingsPage.locator('#theme').selectOption('system');
+  await settingsPage.waitForFunction(() => getComputedStyle(document.documentElement).colorScheme === 'dark');
+  await settingsPage.emulateMedia({ colorScheme: 'light' });
+  await settingsPage.waitForFunction(() => getComputedStyle(document.documentElement).colorScheme === 'light');
+  const initialNoticePoll = settingsPage.waitForResponse(response => response.url() === origin + '/api/tasks');
+  await settingsPage.locator('#task-notice-mode').selectOption('attention');
+  await initialNoticePoll;
+  await settingsPage.goto(origin + '/dashboard');
+  const finishedAt = await settingsPage.evaluate(() => new Date().toISOString());
+  history.unshift({ id: 'completed', status: 'succeeded', finishedAt }, { id: 'new-failure', status: 'failed', finishedAt });
+  await contains('.workspace-notice', '需要处理的任务数：1', settingsPage);
+  assert.doesNotMatch(await settingsPage.locator('.workspace-notice').innerText(), /成功的任务数/);
+  await settingsPage.getByRole('button', { name: '关闭此通知' }).click();
+  const reloadNoticePoll = settingsPage.waitForResponse(response => response.url() === origin + '/api/tasks');
+  await settingsPage.reload();
+  await reloadNoticePoll;
+  await assert.rejects(settingsPage.locator('.workspace-notice').waitFor({ state: 'visible', timeout: 500 }), { name: 'TimeoutError' });
+  await settingsPage.goto(origin + '/settings');
+  await settingsPage.locator('#task-notice-mode').selectOption('all');
+  await settingsPage.goto(origin + '/dashboard');
+  history.unshift({ id: 'next-success', status: 'succeeded', finishedAt: await settingsPage.evaluate(() => new Date().toISOString()) });
+  await contains('.workspace-notice', '成功的任务数：1', settingsPage);
+  await settingsPage.close();
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.locator('.dashboard-actions').getByRole('link', { name: 'Environment' }).isVisible(), true);
   await page.locator('.dashboard-actions').getByRole('link', { name: 'Integrations' }).click();
@@ -818,7 +880,7 @@ try {
   await page.locator('#development-postgres-cancel').click();
   await page.unroute(developmentRoute);
   assert.deepEqual(errors, []);
-  console.log('Verified the bilingual environment, integrations, dashboard, task center, startup, database setup, and Drizzle, Alembic, EF Core, Flyway and Liquibase migration previews in imported and cloned projects.');
+  console.log('Verified bilingual workspace settings, environment, integrations, dashboard, task center, startup, database setup, and migration previews in imported and cloned projects.');
 } finally {
   try {
     await browser?.close();

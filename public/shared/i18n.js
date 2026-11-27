@@ -1,4 +1,5 @@
 import { messages } from './messages.js';
+import { startTaskNotices } from './task-notices.js';
 
 export const normalizeLocale = value => value === 'zh-CN' ? 'zh-CN' : 'en';
 let locale = 'en';
@@ -72,5 +73,11 @@ export function setupI18n() {
     try { localStorage.setItem('stackforge.language', locale); } catch { /* switching still works without storage */ }
     render();
   });
+  window.addEventListener('storage', event => {
+    if (event.key !== 'stackforge.language') return;
+    select.value = normalizeLocale(event.newValue);
+    select.dispatchEvent(new Event('change'));
+  });
   render();
+  startTaskNotices(setText);
 }
