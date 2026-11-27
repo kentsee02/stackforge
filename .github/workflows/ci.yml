@@ -111,4 +111,19 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - run: npm run test:integration -- --only=${{ matrix.stack }}
+      - if: matrix.stack != 'java'
+        run: npm run test:integration -- --only=${{ matrix.stack }}
+      - name: Verify Spring Boot with Maven Wrapper
+        if: matrix.stack == 'java'
+        env:
+          MVNW_VERBOSE: 'true'
+        run: |
+          export WGETRC="$RUNNER_TEMP/stackforge-wgetrc"
+          cat > "$WGETRC" <<'EOF'
+          tries = 4
+          retry_connrefused = on
+          retry_on_http_error = 429,500,502,503,504
+          timeout = 25
+          waitretry = 5
+          EOF
+          npm run test:integration -- --only=java

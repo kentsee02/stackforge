@@ -65,7 +65,9 @@ try {
     const name = `sfg-${runId}-${variant.id}`;
     const options = { name, parentDir: directory, ...variant, install: true, git: true, commit: true, authorName: 'StackForge integration', authorEmail: 'stackforge-integration@example.invalid', publish: github && variant.id === 'node', repoName: repoName || name, visibility: 'private' };
     console.log(`\n验证 ${variant.frontend} + ${variant.backend} + ${variant.database}`);
-    const result = await generateProject(options, event => { if (event.type === 'step') console.log(event.message); });
+    const result = await generateProject(options, event => {
+      if (event.type === 'step' || (event.type === 'log' && event.message.startsWith('Maven Wrapper distribution download failed.'))) console.log(event.message.trim());
+    });
     const record = { stack: variant, path: result.path, versions: result.versions, checks: [], remote: result.remote };
     report.results.push(record);
     let child;

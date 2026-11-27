@@ -2,6 +2,11 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.63.1 Maven Wrapper download diagnostics
+
+- Retry the Wrapper's wget and curl distribution download failures with a longer cancellable wait.
+- Show download errors and retry events in the Java CI job. Retry transient HTTP responses in the downloader while keeping the generated project's Maven Wrapper, distribution, and Spring Boot tests.
+
 ## v0.63.0 Integrations and launcher landing page
 
 - Open the dashboard on fresh launches and when reusing a running service.

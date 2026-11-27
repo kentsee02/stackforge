@@ -168,11 +168,11 @@ export async function installMavenDependencies(options, command = run) {
     try { return await maven(['-B', '-DskipTests', 'dependency:go-offline'], options, command); }
     catch (error) {
       throwIfCancelled(options?.signal);
-      // The Wrapper can collapse a failed distribution download into a single wget error.
-      const downloadFailure = /wget: Failed to fetch https?:\/\/[^\s]+\/apache-maven-[^\s]+-bin\.zip/i.test(error.message);
+      // The Wrapper may report only the downloader and distribution URL.
+      const downloadFailure = /(?:wget|curl): Failed to fetch https?:\/\/[^\s]+\/apache-maven-[^\s]+-bin\.(?:zip|tar\.gz)/i.test(error.message);
       if (attempt >= 3 || error.name === 'AbortError' || !downloadFailure) throw error;
       options?.log?.('Maven Wrapper distribution download failed. Retrying…\n');
-      await delay(800 * attempt, undefined, { signal: options?.signal });
+      await delay(2000 * attempt, undefined, { signal: options?.signal });
     }
   }
 }
