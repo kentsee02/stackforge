@@ -65,7 +65,7 @@ The dashboard derives a read-only overview from Projects, Services, Databases an
 
 ### 3.3 Environments
 
-Resolve tool availability, versions, executable locations where available, and prerequisites for the requested operation. Tool detection and project structure discovery serve different purposes. For native PostgreSQL and MySQL, the current product detects installations and offers guidance. Provisioning a native server or a Docker instance from that guidance would be a separate product decision.
+The Environment page lists local tools visible to the StackForge process, the version and executable location it can resolve, and supported minimums. It runs bounded version probes from the app directory. Project and creation workflows verify their own wrappers, accounts, connections and prerequisites. For native PostgreSQL and MySQL, the product detects installations and offers guidance. Native server provisioning remains a product candidate.
 
 ### 3.4 Databases
 
@@ -195,11 +195,11 @@ Separate persisted settings and records, live state, discovery observations, and
 
 ## 8. Frontend architecture
 
-The web app has four main entry points. `/` is **Create project**, including templates and creation task history. `/dashboard` is the workspace overview. `/projects` is **Projects**, including import, clone, and project details. `/tasks` shows active work and recent task outcomes across projects. Dependencies, startup, Git status, checks, and database controls are presented in the selected project. File previews describe generated output on the creation page.
+The web app has five main entry points. `/` is **Create project**, including templates and creation task history. `/dashboard` is the workspace overview. `/projects` is **Projects**, including import, clone, and project details. `/tasks` shows active work and recent task outcomes across projects. `/environment` checks local tools, versions and executable paths. Dependencies, startup, Git status, checks, and database controls are presented in the selected project. File previews describe generated output on the creation page.
 
 Render server capabilities and operation states with accurate labels. Keep runtime status, server reachability, database existence, connection status, and migration status distinct. Use structured results where available and localize their presentation. Preserve runtime English and Chinese switching, trusted custom commands, and exact-target confirmations.
 
-Standalone environment and integration views and broader settings are candidates. Adding internal modules does not require adding top-level navigation.
+A standalone integrations view and broader app settings are product candidates.
 
 ## 9. Source layout
 

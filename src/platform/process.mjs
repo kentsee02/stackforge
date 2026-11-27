@@ -48,10 +48,10 @@ export function stopProcessTree(child) {
 }
 
 export function run(command, args, { cwd, env = process.env, log = () => {}, timeout = 600_000, signal, stdoutOnly = false, stdoutLimit = 4000,
-  input, inputFile, allowPartialInput = false, binaryLimit, binaryFile, shell = false, onSpawn } = {}, supervisor) {
+  input, inputFile, allowPartialInput = false, binaryLimit, binaryFile, shell = false, windowsVerbatimArguments = false, onSpawn } = {}, supervisor) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(cancelled()); return; }
-    const child = (supervisor?.spawn ?? spawn)(command, args, { cwd, env, shell, windowsHide: true, detached: process.platform !== 'win32',
+    const child = (supervisor?.spawn ?? spawn)(command, args, { cwd, env, shell, windowsVerbatimArguments, windowsHide: true, detached: process.platform !== 'win32',
       stdio: [input || inputFile ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     if (onSpawn) child.once('spawn', onSpawn);
     let tail = '';

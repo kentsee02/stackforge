@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.62.0 Local environment workspace
+
+- List versions and resolved paths for the local executables StackForge can use, grouped by workspace tools, development toolchains, and database clients.
+- Show missing tools, unmet minimum versions, failed probes and unreadable versions as distinct results. Search, filter, copy paths, and recheck in either interface language.
+- Share minimum versions with creation preflight. Docker Engine readiness, account access, and project-specific wrappers stay with the workflows that use them.
+
 ## v0.61.0 Workspace dashboard
 
 - Show running projects, ready services, database configurations to review and active tasks in a single read-only view.

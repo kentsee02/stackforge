@@ -153,6 +153,29 @@ try {
   await page.goto(origin + '/dashboard');
   await contains('#dashboard-projects-message', 'Create or import a project');
   await contains('#dashboard-running', '0');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('.dashboard-actions').getByRole('link', { name: 'Environment' }).click();
+  const nodeTool = page.locator('tr[data-tool="node"]');
+  await nodeTool.waitFor();
+  assert.equal(await nodeTool.locator('code').innerText(), process.execPath);
+  assert.equal(await nodeTool.locator('.tool-version').innerText(), process.versions.node);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  await nodeTool.getByRole('button', { name: 'Copy path' }).click();
+  await contains('#environment-message', 'Node.js path copied.');
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), process.execPath);
+  await page.locator('#language').selectOption('zh-CN');
+  await contains('#environment-workspace', '工作空间工具');
+  await page.locator('#environment-search').fill('does-not-exist');
+  await contains('#environment-empty', '没有符合条件的工具');
+  await page.locator('#environment-search').fill('Node.js');
+  await nodeTool.waitFor();
+  await page.locator('#environment-search').fill(process.execPath);
+  await nodeTool.waitFor();
+  await page.locator('#environment-filter').selectOption('review');
+  await nodeTool.waitFor({ state: 'hidden' });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+  await page.locator('#language').selectOption('en');
+  await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto(origin);
   assert.equal(await page.locator('html').getAttribute('lang'), 'en');
   await page.locator('#language').selectOption('zh-CN');
@@ -755,7 +778,7 @@ try {
   await page.locator('#development-postgres-cancel').click();
   await page.unroute(developmentRoute);
   assert.deepEqual(errors, []);
-  console.log('Verified the bilingual dashboard, task center, startup, database setup, and Drizzle, Alembic, EF Core, Flyway and Liquibase migration previews in imported and cloned projects.');
+  console.log('Verified the bilingual environment, dashboard, task center, startup, database setup, and Drizzle, Alembic, EF Core, Flyway and Liquibase migration previews in imported and cloned projects.');
 } finally {
   try {
     await browser?.close();

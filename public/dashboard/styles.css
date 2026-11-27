@@ -5,6 +5,7 @@
 .dashboard-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .dashboard-actions a.primary { width: auto; min-height: 36px; padding-inline: 12px; }
 .dashboard-actions a.primary:hover { text-decoration: none; }
+.dashboard-actions a.secondary { display: inline-flex; align-items: center; }
 .dashboard-feedback { margin-bottom: 12px; }
 .dashboard-feedback:empty, .dashboard-panel-message:empty { display: none; }
 .dashboard-totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 22px; padding: 0; border-block: 1px solid var(--border); }
@@ -32,7 +33,7 @@
 .dashboard-item-state a { display: inline-block; }
 @media(max-width: 820px) {
   .dashboard-grid { grid-template-columns: 1fr; }
-  .dashboard-actions a.primary, .dashboard-actions button { min-height: 44px; }
+  .dashboard-actions :is(a.primary, a.secondary), .dashboard-actions button { min-height: 44px; }
 }
 @media(max-width: 480px) {
   .dashboard-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -4,7 +4,7 @@ The [architecture specification](../ARCHITECTURE.md) defines the product boundar
 
 ## Current priority
 
-The standalone environment view is the next planned product task. The dashboard now brings together project status, ready services, recorded database configuration and task outcomes.
+The standalone integrations view is the next planned product task. The environment view now lists local tools, their versions and executable paths, and known minimum versions.
 
 ### Open migration work
 
@@ -18,9 +18,8 @@ The standalone environment view is the next planned product task. The dashboard 
 
 ## Next product work
 
-1. **Standalone environment view.** Consolidate tool availability, versions, executable paths and prerequisites.
-2. **Standalone integrations view.** Consolidate Git, GitHub, Docker and desktop integration status.
-3. **App-wide settings.** Evaluate theme, notifications and other cross-project preferences.
+1. **Standalone integrations view.** Consolidate Git, GitHub, Docker and desktop integration status.
+2. **App-wide settings.** Evaluate theme, notifications and other cross-project preferences.
 
 ## Product candidates
 

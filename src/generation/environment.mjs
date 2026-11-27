@@ -5,6 +5,7 @@ import { portAvailable } from '../platform/ports.mjs';
 import { hasNodeBackend, validateOptions } from './catalog.mjs';
 import { run, npm as runNpm, throwIfCancelled } from '../platform/process.mjs';
 import { gitIdentity, githubAccount } from '../platform/git.mjs';
+import { meetsToolMinimum } from '../platform/tool-versions.mjs';
 
 const help = {
   node: 'https://nodejs.org/en/download', git: 'https://git-scm.com/downloads',
@@ -22,29 +23,27 @@ export async function checkEnvironment(input, services = {}) {
   const probePort = services.portAvailable ?? portAvailable;
   const checks = [];
   const add = (id, label, status, detail, fix = '', url) => checks.push({ id, label, status, detail, fix, ...(url && { url }) });
-  async function executable(id, label, task, required, fix, minimum) {
+  async function executable(id, label, task, required, fix, minimum = id) {
     try {
       const output = (await task()).trim();
-      const version = output.match(/(?:version\s+)?["']?(\d+)(?:\.(\d+))?/i);
-      if (minimum && (!version || !minimum(Number(version[1]), Number(version[2] || 0)))) throw new Error('版本不满足要求');
+      if (!meetsToolMinimum(minimum, output)) throw new Error('版本不满足要求');
       add(id, label, 'ok', output.split(/\r?\n/).find(Boolean)?.slice(0, 180) || '可用');
     } catch {
       add(id, label, required ? 'error' : 'warning', '未安装、版本不满足要求或当前不可用', fix, help[id]);
     }
   }
   const tasks = [];
-  const [major, minor] = (services.nodeVersion ?? process.versions.node).split('.').map(Number);
-  add('node', 'Node.js', major > 22 || major === 22 && minor >= 12 ? 'ok' : 'error', services.nodeVersion ?? process.version, '安装 Node.js 22.12+，推荐 24 LTS。', help.node);
+  add('node', 'Node.js', meetsToolMinimum('node', services.nodeVersion ?? process.versions.node) ? 'ok' : 'error', services.nodeVersion ?? process.version, '安装 Node.js 22.12+，推荐 24 LTS。', help.node);
   const usesNpm = options.frontend !== 'none' || hasNodeBackend(options.backend);
   if (usesNpm) tasks.push(executable('npm', 'npm', () => npm(['--version'], { timeout: 8000 }), options.install, '重新安装含 npm 的官方 Node.js。'));
-  if (options.backend === 'spring') tasks.push(executable('java', 'Java JDK 21+', () => command('javac', ['-version'], { timeout: 8000 }), options.install, '安装 JDK 21+，并将 JAVA_HOME 和 JDK bin 加入环境变量。', version => version >= 21));
-  if (options.git) tasks.push(executable('git', 'Git 2.28+', () => command('git', ['--version'], { timeout: 8000 }), true, '安装 Git 2.28+，然后重启工具；初始化本地仓库不需要登录。', (major, minor) => major > 2 || major === 2 && minor >= 28));
+  if (options.backend === 'spring') tasks.push(executable('java', 'Java JDK 21+', () => command('javac', ['-version'], { timeout: 8000 }), options.install, '安装 JDK 21+，并将 JAVA_HOME 和 JDK bin 加入环境变量。'));
+  if (options.git) tasks.push(executable('git', 'Git 2.28+', () => command('git', ['--version'], { timeout: 8000 }), true, '安装 Git 2.28+，然后重启工具；初始化本地仓库不需要登录。'));
   if (options.commit) tasks.push((async () => {
     const identity = await gitIdentity(options, command);
     add('identity', 'Git 提交身份', identity.name && identity.email ? 'ok' : 'error', identity.name && identity.email ? `${identity.name} <${identity.email}>` : '缺少提交者姓名或邮箱', '在 Git 选项中填写姓名和邮箱；只应用到新项目，或取消首次提交。');
   })());
   if (options.database !== 'none') {
-    tasks.push(executable('docker', 'Docker Compose v2', () => command('docker', ['compose', 'version', '--short'], { timeout: 8000 }), false, '安装 Docker Desktop 或 Compose v2；仍可先生成数据库配置。', version => version >= 2));
+    tasks.push(executable('docker', 'Docker Compose v2', () => command('docker', ['compose', 'version', '--short'], { timeout: 8000 }), false, '安装 Docker Desktop 或 Compose v2；仍可先生成数据库配置。', 'docker-compose'));
     tasks.push((async () => {
       try { const version = await command('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 8000 }); add('docker-engine', 'Docker 引擎', 'ok', version.trim()); }
       catch { add('docker-engine', 'Docker 引擎', 'warning', '尚未启动或不可访问', '启动 Docker Desktop 后再运行生成项目的 npm run dev。', help.docker); }

@@ -28,6 +28,7 @@ Use this map to locate the current implementation and its checks. The [architect
 - **Probe and diagnose.** `src/platform/ports.mjs` is the loopback port check shared by preflight and runtime. `src/projects/project-diagnostics.mjs` classifies command failures using the diagnostic keys consumed by both runtime and database responses.
 - **Edit the web interface.** `public/projects/page.js` coordinates project selection, polling, and request state. Startup, dependencies, checks and Git, and databases have their own panel modules in `public/projects/`. `public/shared/` holds common CSS and localization. `src/http/assets.mjs` maps public URLs to files and inserts the current version into each workspace.
 - **Show the dashboard.** `src/http/dashboard.mjs` gathers project and service state, saved database records and recent task outcomes. `public/dashboard/` renders the read-only overview and links to the owning workspace.
+- **Inspect the local environment.** `src/platform/environment-inventory.mjs` resolves tool paths and probes their versions. `src/platform/tool-versions.mjs` holds the minimum versions shared with creation preflight. `public/environment/` renders the searchable inventory.
 
 ## Run checks
 

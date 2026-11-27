@@ -13,6 +13,7 @@ import { defaultProjectsDirectory } from '../platform/paths.mjs';
 import { Settings } from '../platform/settings.mjs';
 import { createDesktop } from '../platform/desktop.mjs';
 import { operationJournal } from '../platform/operation-journal.mjs';
+import { localEnvironmentInventory } from '../platform/environment-inventory.mjs';
 import { ProjectRuntime } from '../projects/project-runtime.mjs';
 import { ProjectConfig, projectPathKey } from '../projects/project-config.mjs';
 import { ProjectOperations } from '../projects/project-operations.mjs';
@@ -39,7 +40,7 @@ function retryPublication(path, options, report, { signal, verifyProject }) {
   return publishProject(path, options, report, command, verifyProject);
 }
 
-export function createApp({ generate = generateProject, check = checkEnvironment, publish = retryPublication, clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations(), localDatabase = {}, databaseAdapters = {} } = {}) {
+export function createApp({ generate = generateProject, check = checkEnvironment, inspectEnvironment = localEnvironmentInventory(), publish = retryPublication, clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations(), localDatabase = {}, databaseAdapters = {} } = {}) {
   const token = randomBytes(32).toString('hex');
   const settings = new Settings(settingsFile);
   const projectConfig = new ProjectConfig(stateDir ? join(dirname(stateDir), 'projects.json') : false);
@@ -95,6 +96,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
       await Promise.all([jobs.ready, settings.ready, projectConfig.ready]);
       if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, { catalog, token, defaultDir, node: process.version, platform: process.platform, version: identity.version, jobs: jobs.list(), preferences: settings.value, desktop: await desktop.capabilities() });
       if (req.method === 'GET' && url.pathname === '/api/tasks') return await taskRoutes.list(res);
+      if (req.method === 'GET' && url.pathname === '/api/environment') return send(res, 200, await inspectEnvironment());
       if (req.method === 'GET' && url.pathname === '/api/dashboard') {
         return send(res, 200, await dashboardSnapshot({ projects: queries.overview, databases: database.overview, tasks: taskRoutes.snapshot }));
       }

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eef3f3">
+  <title data-i18n="StackForge · 环境">StackForge · Environment</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M16 7H7v26h9m8-26h9v26h-9M16 27l8-14' fill='none' stroke='%231b6c80' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/environment/styles.css">
+  <script type="module" src="/environment.js"></script>
+</head>
+<body class="environment-page">
+  <a class="skip-link" href="#main" data-i18n="跳到主要内容">Skip to content</a>
+  <aside class="sidebar">
+    <a class="brand" href="/dashboard" aria-label="StackForge home" data-i18n-aria-label="StackForge 首页"><svg viewBox="0 0 40 40" width="30" height="30" aria-hidden="true"><path d="M16 7H7v26h9m8-26h9v26h-9M16 27l8-14"/></svg><span>StackForge</span></a>
+    <div class="workspace"><span data-i18n="本地工作空间">Local workspace</span> <span>v{{version}}</span></div>
+    <a class="side-link" href="/dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg><span data-i18n="仪表盘">Dashboard</span></a>
+    <a class="side-link" href="/#project-form"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="创建项目">Create project</span></a>
+    <a class="side-link" href="/tasks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg><span data-i18n="任务中心">Tasks</span></a>
+    <a class="side-link" href="/projects"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3zM3 7V5h7l2 2h7v2"/></svg><span data-i18n="项目管理">Projects</span></a>
+    <a class="side-active" href="/environment" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v14H3zM7 9l3 3-3 3m6 0h4"/></svg><span data-i18n="环境">Environment</span></a>
+    <div class="side-footer"><span data-i18n="MIT 开源">MIT licensed</span><a href="https://github.com/kentsee02/stackforge" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a></div>
+  </aside>
+  <div class="body-shell">
+    <header class="topbar">
+      <span><span data-i18n="工作空间">Workspace</span> <span class="slash">/</span> <span data-i18n="环境">Environment</span></span>
+      <div class="topbar-tools"><a class="mobile-task-link" href="/dashboard" data-i18n="仪表盘">Dashboard</a><label class="language-control" for="language">Language / 语言<select id="language" aria-label="Language / 语言"><option value="en" lang="en">English</option><option value="zh-CN" lang="zh-CN">华文</option></select></label></div>
+    </header>
+    <main id="main" class="sheet environment-sheet">
+      <div class="title-row environment-title">
+        <div><h1 data-i18n="环境">Environment</h1><p id="environment-host" class="hint"></p></div>
+        <button id="environment-refresh" class="secondary" type="button" data-i18n="重新检查工具">Check tools again</button>
+      </div>
+      <p id="environment-message" class="hint environment-message" role="status" data-i18n="正在检查本机工具…">Checking local tools…</p>
+      <div id="environment-results" hidden>
+        <div class="environment-toolbar">
+          <label for="environment-search"><span data-i18n="搜索工具">Search tools</span><input id="environment-search" type="search" maxlength="120" autocomplete="off"></label>
+          <label for="environment-filter"><span data-i18n="工具状态">Tool status</span><select id="environment-filter">
+            <option value="all" data-i18n="全部工具">All tools</option>
+            <option value="available" data-i18n="可用工具">Available tools</option>
+            <option value="review" data-i18n="需要检查的工具">Tools to review</option>
+          </select></label>
+          <p class="environment-check-time hint"><span data-i18n="上次检查">Last checked</span> <time id="environment-checked"></time></p>
+        </div>
+        <p class="hint environment-scope" data-i18n="这里显示 StackForge 进程可访问的工具。项目专用版本和 Wrapper 可在项目内检查。">These tools are visible to the StackForge process. Check project-specific versions and wrappers in Projects.</p>
+        <p id="environment-empty" class="hint" data-i18n="没有符合条件的工具。" hidden>No tools match the filters.</p>
+        <div id="environment-groups"></div>
+        <p class="hint environment-docker-note" data-i18n="专属数据库需要 Docker Engine 28 或以上版本，以及 Linux 容器模式。此页显示 Docker CLI 和 Compose 的版本。">Project databases require Docker Engine 28+ in Linux container mode. This page checks the Docker CLI and Compose versions.</p>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
