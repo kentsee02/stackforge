@@ -116,6 +116,8 @@ jobs:
       - name: Verify Spring Boot with Maven Wrapper
         if: matrix.stack == 'java'
         env:
+          # Keep Wrapper bootstrap off Maven Central's rate-limited runner egress.
+          MVNW_REPOURL: https://maven-central.storage-download.googleapis.com/maven2
           MVNW_VERBOSE: 'true'
         run: |
           export WGETRC="$RUNNER_TEMP/stackforge-wgetrc"

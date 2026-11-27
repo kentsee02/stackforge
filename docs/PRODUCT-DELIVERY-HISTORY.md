@@ -2,6 +2,10 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.63.2 Java CI Maven distribution mirror
+
+- Use the Google Cloud Maven Central mirror for Wrapper bootstrap in the Java integration job after Maven Central returned HTTP 429 on GitHub runners. Generated projects keep their upstream Wrapper configuration.
+
 ## v0.63.1 Maven Wrapper download diagnostics
 
 - Retry the Wrapper's wget and curl distribution download failures with a longer cancellable wait.
