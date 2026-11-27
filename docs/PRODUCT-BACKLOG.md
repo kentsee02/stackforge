@@ -4,7 +4,7 @@ The [architecture specification](../ARCHITECTURE.md) defines the product boundar
 
 ## Current priority
 
-The standalone integrations view is the next planned product task. The environment view now lists local tools, their versions and executable paths, and known minimum versions.
+App-wide settings is the next planned product task. The Integrations page now shows Git, GitHub, local Docker and desktop status.
 
 ### Open migration work
 
@@ -18,8 +18,7 @@ The standalone integrations view is the next planned product task. The environme
 
 ## Next product work
 
-1. **Standalone integrations view.** Consolidate Git, GitHub, Docker and desktop integration status.
-2. **App-wide settings.** Evaluate theme, notifications and other cross-project preferences.
+- **App-wide settings.** Evaluate theme, notifications and other cross-project preferences.
 
 ## Product candidates
 

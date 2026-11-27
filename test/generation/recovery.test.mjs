@@ -320,12 +320,17 @@ test('double-click launcher avoids an occupied port and reuses the same project 
   await new Promise(resolve => occupied.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => occupied.close(resolve)));
   const port = occupied.address().port;
-  const launched = await launch({ port, directory, open: false, appOptions: { stateDir: false } });
+  const opened = [];
+  const options = { port, directory, open: url => opened.push(url), appOptions: { stateDir: false } };
+  const launched = await launch(options);
   if (launched.server) t.after(async () => { await launched.server.shutdownTasks(); await new Promise(resolve => launched.server.close(resolve)); });
   assert.notEqual(Number(new URL(launched.url).port), port);
-  const second = await launch({ port, directory, open: false, appOptions: { stateDir: false } });
+  const second = await launch(options);
   assert.equal(second.reused, true);
   assert.equal(second.url, launched.url);
+  assert.deepEqual(opened, [launched.url + '/dashboard', launched.url + '/dashboard']);
+  assert.match(await (await fetch(opened[0])).text(), /id="dashboard-running"/);
+  assert.equal(JSON.parse(await readFile(join(directory, 'launcher.json'), 'utf8')).url, launched.url);
 });
 
 test('launcher refuses a second server from the same checkout while an older version is running', async t => {

@@ -3,6 +3,7 @@ import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { windowsNpmSupervisor } from './windows-npm.mjs';
 
 export function cancelled() {
@@ -161,6 +162,17 @@ export function maven(args, options, command = run, wrapper = process.platform =
     : command(wrapper, args, options);
 }
 
-export function installMavenDependencies(options, command = run) {
-  return maven(['-B', '-DskipTests', 'dependency:go-offline'], options, command);
+export async function installMavenDependencies(options, command = run) {
+  for (let attempt = 1; ; attempt++) {
+    throwIfCancelled(options?.signal);
+    try { return await maven(['-B', '-DskipTests', 'dependency:go-offline'], options, command); }
+    catch (error) {
+      throwIfCancelled(options?.signal);
+      // The Wrapper can collapse a failed distribution download into a single wget error.
+      const downloadFailure = /wget: Failed to fetch https?:\/\/[^\s]+\/apache-maven-[^\s]+-bin\.zip/i.test(error.message);
+      if (attempt >= 3 || error.name === 'AbortError' || !downloadFailure) throw error;
+      options?.log?.('Maven Wrapper distribution download failed. Retrying…\n');
+      await delay(800 * attempt, undefined, { signal: options?.signal });
+    }
+  }
 }

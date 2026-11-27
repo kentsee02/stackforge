@@ -1,0 +1,20 @@
+.integrations-page { padding-bottom: 0; }
+.integrations-sheet { padding-bottom: 28px; }
+.integrations-title { justify-content: space-between; flex-wrap: wrap; gap: 12px 20px; padding-bottom: 18px; }
+.integrations-message:empty { display: none; }
+.integrations-checked { margin: 0 0 14px; }
+.integrations-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; align-items: start; }
+.integration-panel { border: 1px solid var(--border); border-radius: var(--radius); padding: 13px 16px; }
+.integration-panel h2 { font-size: 16px; margin-bottom: 8px; }
+.integration-results { margin: 0; }
+.integration-results > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); align-items: baseline; gap: 4px 10px; padding: 7px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.integration-results dt { font-weight: 600; }
+.integration-results dd { margin: 0; overflow-wrap: anywhere; text-align: end; color: var(--muted); font-variant-numeric: tabular-nums; }
+.integration-results dd[data-tone="positive"] { color: var(--positive); }
+.integration-results dd[data-tone="warning"] { color: var(--warning); }
+.integration-panel p:first-of-type { margin-top: 9px; }
+.integration-panel .secondary { margin-top: 10px; }
+@media (max-width: 720px) {
+  .integrations-grid { grid-template-columns: 1fr; }
+  .integrations-title .secondary, .integration-panel .secondary { min-height: 44px; }
+}

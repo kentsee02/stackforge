@@ -10,7 +10,9 @@ The Projects workspace lets you run local development sessions, manage databases
 
 Open **Dashboard** in the workspace navigation for running projects, ready service links, saved database configuration and recent task outcomes. Database cards reflect saved discovery and connection checks. Select a database to open its project controls and check the current connection.
 
-Open **Environment** to see the local tools StackForge can access, their versions, and their executable paths. Search by tool or path, filter tools that need attention, or recheck after changing your setup. Use project checks for project-specific toolchains and Docker Engine readiness.
+Open **Environment** to see local tools, versions, and executable paths. Search by tool or path, filter tools that need attention, or recheck after changing your setup. Use project checks for project-specific toolchains and wrappers.
+
+Open **Integrations** for Git and default commit identity detection, GitHub CLI and account verification, the local Docker Engine and Compose, and available desktop applications. GitHub verification contacts GitHub when requested. Docker uses the selected local connection.
 
 English is the default, with Chinese (华文) available from the top bar. Your choice is remembered in this browser; switching does not reload the page or interrupt a task. Generated project documentation and starter messages are in English.
 
@@ -20,7 +22,7 @@ English is the default, with Chinese (华文) available from the top bar. Your c
 2. Open the [latest release](https://github.com/kentsee02/stackforge/releases/latest), download **Source code (zip)** under **Assets**, and extract it.
 3. On Windows, double-click **Start StackForge.cmd** in the extracted folder. On macOS or Linux, open a terminal in that folder and run `npm run launch`.
 
-The launcher opens your browser and uses port 4310 by default. Keep the terminal open while using StackForge. After updating, close the old StackForge service before launching the new version from the same checkout. StackForge itself requires no `npm install`. Install Git if you want to clone the repository or use Git features.
+The launcher opens the dashboard in your browser and uses port 4310 by default. Keep the terminal open while using StackForge. After updating, close the old StackForge service before launching the new version from the same checkout. StackForge itself requires no `npm install`. Install Git if you want to clone the repository or use Git features.
 
 To try the latest development changes, clone the repository and launch it.
 

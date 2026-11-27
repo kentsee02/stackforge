@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const dashboardPath = '/dashboard';
 
 export function openBrowser(url) {
   const [command, args] = process.platform === 'win32' ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
@@ -31,7 +32,8 @@ export async function launch({ port = 4310, directory = join(root, '.stackforge'
   };
   const openPage = async url => {
     if (open) {
-      try { await open(url); } catch { console.log(`Open ${url} in your browser.`); }
+      const page = url + dashboardPath;
+      try { await open(page); } catch { console.log(`Open ${page} in your browser.`); }
     }
   };
   let previous;
@@ -73,7 +75,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     try {
       const { url, server, reused } = await launch({ port: Number(process.env.PORT || 4310), open: process.env.STACKFORGE_NO_BROWSER === '1' ? false : openBrowser });
       const { identity } = await import('../src/http/server.mjs');
-      console.log(`\nStackForge ${identity.version}\n${url}\n${reused ? 'Opened the existing service.' : 'Keep this window open. Press Ctrl+C to stop; unfinished tasks can be resumed.'}\n`);
+      console.log(`\nStackForge ${identity.version}\n${url + dashboardPath}\n${reused ? 'Opened the existing service.' : 'Keep this window open. Press Ctrl+C to stop; unfinished tasks can be resumed.'}\n`);
       if (server) for (const event of ['SIGINT', 'SIGTERM']) process.on(event, async () => { await server.shutdownTasks(); server.close(() => process.exit(0)); });
     } catch (error) { console.error(error.message); process.exitCode = 1; }
   }

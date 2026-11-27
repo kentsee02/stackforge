@@ -16,7 +16,9 @@
 2. 打开 [最新发布](https://github.com/kentsee02/stackforge/releases/latest)，在 **Assets** 下载 **Source code (zip)** 并解压。
 3. Windows 用户双击解压文件夹内的 **Start StackForge.cmd**。macOS 或 Linux 用户在该文件夹打开终端，运行 `npm run launch`。
 
-启动器会打开浏览器，默认使用 4310 端口。使用时请保持终端打开。StackForge 本身无需运行 `npm install`。如需克隆仓库或使用 Git 功能，请安装 Git。
+启动器会在浏览器打开仪表盘，默认使用 4310 端口。使用时请保持终端打开。StackForge 本身无需运行 `npm install`。如需克隆仓库或使用 Git 功能，请安装 Git。
+
+从仪表盘打开「集成」，可检查 Git 提交身份、GitHub CLI、本机 Docker Engine 和 Compose，以及文件夹选择器、终端和 VS Code 等桌面功能。点击验证账号后才会连接 GitHub。
 
 如需试用最新开发版，可通过 Git 克隆仓库后启动。
 

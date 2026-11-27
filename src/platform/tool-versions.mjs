@@ -1,4 +1,4 @@
-export const toolMinimums = { node: [22, 12], java: [21], git: [2, 28], 'docker-compose': [2] };
+export const toolMinimums = { node: [22, 12], java: [21], git: [2, 28], 'docker-compose': [2], 'docker-engine': [28] };
 
 export function meetsToolMinimum(id, output) {
   const minimum = toolMinimums[id];

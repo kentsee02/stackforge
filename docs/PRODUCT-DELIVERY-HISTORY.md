@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.63.0 Integrations and launcher landing page
+
+- Open the dashboard on fresh launches and when reusing a running service.
+- Show Git, GitHub CLI, Docker CLI, Compose, the local Docker Engine, and desktop capability status in one bilingual workspace. Verify the active GitHub account on request.
+- Retry Maven Wrapper distribution download failures during dependency prefetch with bounded, cancellable attempts.
+
 ## v0.62.1 Workspace navigation fixes
 
 - Keep the MIT licensing label and GitHub link at the bottom of the desktop sidebar on all workspace pages. At short heights, scroll the sidebar content above the footer.

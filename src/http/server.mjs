@@ -14,6 +14,7 @@ import { Settings } from '../platform/settings.mjs';
 import { createDesktop } from '../platform/desktop.mjs';
 import { operationJournal } from '../platform/operation-journal.mjs';
 import { localEnvironmentInventory } from '../platform/environment-inventory.mjs';
+import { createIntegrationChecks } from '../platform/integration-checks.mjs';
 import { ProjectRuntime } from '../projects/project-runtime.mjs';
 import { ProjectConfig, projectPathKey } from '../projects/project-config.mjs';
 import { ProjectOperations } from '../projects/project-operations.mjs';
@@ -40,7 +41,7 @@ function retryPublication(path, options, report, { signal, verifyProject }) {
   return publishProject(path, options, report, command, verifyProject);
 }
 
-export function createApp({ generate = generateProject, check = checkEnvironment, inspectEnvironment = localEnvironmentInventory(), publish = retryPublication, clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), runtime = new ProjectRuntime(), operations = new ProjectOperations(), localDatabase = {}, databaseAdapters = {} } = {}) {
+export function createApp({ generate = generateProject, check = checkEnvironment, inspectEnvironment = localEnvironmentInventory(), publish = retryPublication, clone = cloneGithub, defaultDir = defaultProjectsDirectory(), stateDir = resolve(root, '.stackforge/jobs'), settingsFile = stateDir ? join(dirname(stateDir), 'settings.json') : false, desktop = createDesktop(), integrations = createIntegrationChecks({ desktop }), runtime = new ProjectRuntime(), operations = new ProjectOperations(), localDatabase = {}, databaseAdapters = {} } = {}) {
   const token = randomBytes(32).toString('hex');
   const settings = new Settings(settingsFile);
   const projectConfig = new ProjectConfig(stateDir ? join(dirname(stateDir), 'projects.json') : false);
@@ -97,6 +98,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
       if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, { catalog, token, defaultDir, node: process.version, platform: process.platform, version: identity.version, jobs: jobs.list(), preferences: settings.value, desktop: await desktop.capabilities() });
       if (req.method === 'GET' && url.pathname === '/api/tasks') return await taskRoutes.list(res);
       if (req.method === 'GET' && url.pathname === '/api/environment') return send(res, 200, await inspectEnvironment());
+      if (req.method === 'GET' && url.pathname === '/api/integrations') return send(res, 200, await integrations.inspect());
       if (req.method === 'GET' && url.pathname === '/api/dashboard') {
         return send(res, 200, await dashboardSnapshot({ projects: queries.overview, databases: database.overview, tasks: taskRoutes.snapshot }));
       }
@@ -104,7 +106,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
       if (req.method === 'POST' && await databaseRoutes.archive(req, res, url.pathname, authorized)) return;
       if (req.method === 'GET' && generationRoutes.get(res, url)) return;
       const projectAction = matchProjectAction(url.pathname);
-      if (req.method === 'POST' && (projectAction || ['/api/tasks/cancel', '/api/projects', '/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel', '/api/checks', '/api/preferences', '/api/desktop/pick-directory'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
+      if (req.method === 'POST' && (projectAction || ['/api/tasks/cancel', '/api/projects', '/api/projects/import', '/api/projects/clone', '/api/projects/clone-cancel', '/api/checks', '/api/preferences', '/api/desktop/pick-directory', '/api/integrations/github'].includes(url.pathname) || /^\/api\/jobs\/[^/]+\/(publish|retry|cancel|open)$/.test(url.pathname))) {
         if (!authorized(req, 'application/json')) return send(res, 403, { error: '请求来源无效，请刷新本机页面后重试。' });
         if (jobs.busy && (['/api/projects', '/api/desktop/pick-directory'].includes(url.pathname) || /\/(publish|retry)$/.test(url.pathname))) return send(res, 409, { error: '已有任务正在执行，请等待或取消。' });
         const chunks = []; let size = 0;
@@ -115,6 +117,7 @@ export function createApp({ generate = generateProject, check = checkEnvironment
         try { payload = JSON.parse(body); if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error(); }
         catch { return send(res, 400, { error: 'Invalid JSON request.' }); }
         if (url.pathname === '/api/tasks/cancel') return await taskRoutes.cancel(res, payload);
+        if (url.pathname === '/api/integrations/github') return send(res, 200, await integrations.verifyGithub());
         if (projectRoutes.cloning && (['/api/projects', '/api/projects/import', '/api/projects/clone'].includes(url.pathname) || /\/api\/jobs\/[^/]+\/retry$/.test(url.pathname))) {
           return send(res, 409, { error: 'Wait for the GitHub clone to finish.' });
         }

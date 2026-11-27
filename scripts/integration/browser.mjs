@@ -135,7 +135,20 @@ try {
     assert.equal(args[args.indexOf('-d') + 1], 'browser_alembic');
     return JSON.stringify({ name: 'browser_alembic', table: 'readable', hasObjects: true, rows: ['start'] });
   } };
-  app = createApp({ stateDir: join(root, 'state', 'jobs'), clone: cloneFixture, operations, desktop, localDatabase });
+  let githubVerifications = 0, engineReady = false;
+  const integrationTool = { status: 'available', version: '2.54.0' };
+  const integrations = {
+    async inspect() {
+      return { checkedAt: new Date().toISOString(), git: { tool: integrationTool, identity: 'configured' },
+        github: { tool: integrationTool }, docker: { cli: integrationTool, compose: integrationTool,
+          engine: engineReady ? { status: 'ready', version: '29.0.0', mode: 'linux' } : { status: 'unreachable' } },
+        desktop: { picker: true, folder: true, terminal: true, vscode: false } };
+    },
+    async verifyGithub() {
+      return ++githubVerifications === 1 ? { status: 'sign-in-required' } : { status: 'verified', account: 'octocat' };
+    }
+  };
+  app = createApp({ stateDir: join(root, 'state', 'jobs'), clone: cloneFixture, operations, desktop, localDatabase, integrations });
   app.listen(0, '127.0.0.1');
   await once(app, 'listening');
   const origin = 'http://127.0.0.1:' + app.address().port;
@@ -150,7 +163,7 @@ try {
     await page.locator('#preflight-check').click();
     await page.locator(check(code)).first().waitFor();
   }
-  for (const route of ['/', '/projects', '/tasks', '/environment', '/dashboard']) {
+  for (const route of ['/', '/projects', '/tasks', '/environment', '/integrations', '/dashboard']) {
     await page.goto(origin + route);
     const footer = page.locator('.side-footer');
     const bounds = await footer.boundingBox();
@@ -161,6 +174,22 @@ try {
   await contains('#dashboard-running', '0');
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.locator('.dashboard-actions').getByRole('link', { name: 'Environment' }).isVisible(), true);
+  await page.locator('.dashboard-actions').getByRole('link', { name: 'Integrations' }).click();
+  await contains('#github-account', 'Not yet verified');
+  await contains('#docker-engine', 'Local Docker Engine unreachable');
+  assert.equal(githubVerifications, 0);
+  await page.locator('#github-verify').click();
+  await contains('#github-account', 'GitHub sign-in required');
+  assert.equal(await page.locator('#github-sign-in').isVisible(), true);
+  await page.locator('#language').selectOption('zh-CN');
+  await contains('#docker-engine', '无法连接本机 Docker 引擎');
+  await page.locator('#github-verify').click();
+  await contains('#github-account', 'GitHub 账号已验证 · octocat');
+  assert.equal(await page.locator('#github-sign-in').isVisible(), false);
+  engineReady = true;
+  await page.locator('#integrations-refresh').click();
+  await contains('#docker-engine', '29.0.0');
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
   await page.goto(origin);
   await page.locator('#language').selectOption('zh-CN');
   await page.getByRole('link', { name: '环境', exact: true }).click();
@@ -789,7 +818,7 @@ try {
   await page.locator('#development-postgres-cancel').click();
   await page.unroute(developmentRoute);
   assert.deepEqual(errors, []);
-  console.log('Verified the bilingual environment, dashboard, task center, startup, database setup, and Drizzle, Alembic, EF Core, Flyway and Liquibase migration previews in imported and cloned projects.');
+  console.log('Verified the bilingual environment, integrations, dashboard, task center, startup, database setup, and Drizzle, Alembic, EF Core, Flyway and Liquibase migration previews in imported and cloned projects.');
 } finally {
   try {
     await browser?.close();

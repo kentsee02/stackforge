@@ -40,12 +40,13 @@ function readVersion(id, output, prefix = '') {
   }
 }
 
-export async function inspectLocalTools({ platform = process.platform, env = process.env, architecture = process.arch,
+export async function inspectLocalTools({ ids, platform = process.platform, env = process.env, architecture = process.arch,
   nodeVersion = process.versions.node, nodePath = process.execPath, find = findPathExecutable, command = run, npm = npmCommand } = {}) {
   const offline = { ...env, COREPACK_ENABLE_NETWORK: '0', COREPACK_DEFAULT_TO_LATEST: '0', COREPACK_ENABLE_AUTO_PIN: '0',
     COREPACK_ENABLE_PROJECT_SPEC: '0', COREPACK_ENV_FILE: '0', GOTOOLCHAIN: 'local', RUSTUP_AUTO_INSTALL: '0',
     DOTNET_CLI_TELEMETRY_OPTOUT: '1', DOTNET_NOLOGO: '1', DOTNET_GENERATE_ASPNET_CERTIFICATE: 'false',
-    YARN_ENABLE_TELEMETRY: '0', YARN_IGNORE_PATH: '1', npm_config_offline: 'true' };
+    YARN_ENABLE_TELEMETRY: '0', YARN_IGNORE_PATH: '1', npm_config_offline: 'true',
+    GH_NO_UPDATE_NOTIFIER: '1', GH_TELEMETRY: 'false' };
   const lookups = new Map();
   const resolve = name => {
     if (!lookups.has(name)) lookups.set(name, find(name, { platform, env }));
@@ -94,7 +95,8 @@ export async function inspectLocalTools({ platform = process.platform, env = pro
       return found(readVersion(id, await probe(path, args), prefix), path);
     } catch { return { ...row, ...(path && { path }), status: 'unavailable' }; }
   }
-  const entries = Object.entries(groups).flatMap(([group, list]) => list.map(tool => [group, tool]));
+  const entries = Object.entries(groups).flatMap(([group, list]) =>
+    list.filter(([id]) => !ids || ids.includes(id)).map(tool => [group, tool]));
   const tools = new Array(entries.length);
   let index = 0;
   await Promise.all(Array.from({ length: 5 }, async () => {

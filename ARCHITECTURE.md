@@ -151,6 +151,8 @@ On Windows, managed cancellable npm commands use a locally compiled helper to as
 
 Git, GitHub, Docker, and desktop tools provide capabilities to the workflows that own their decisions. Projects owns clone registration, Generation owns publication of generated projects, and Databases owns Docker database actions. GitHub publishing uses the authenticated GitHub CLI. Local Git initialization does not require a GitHub login.
 
+The Integrations page reports local tool versions, the presence of a default Git commit identity, Docker Engine reachability and container mode on supported local connections, and desktop capabilities. GitHub account verification is an explicit read-only action. The page returns status and the verified account handle without raw diagnostics, credentials, or Git identity values.
+
 ### 3.8 Settings
 
 Keep project-specific configuration separate from app-wide preferences. StackForge currently persists recent project locations on the server and keeps language, templates, and creation preferences in the browser. Theme, notification, and broader integration settings remain product candidates.
@@ -195,11 +197,11 @@ Separate persisted settings and records, live state, discovery observations, and
 
 ## 8. Frontend architecture
 
-The web app has five main entry points. `/` is **Create project**, including templates and creation task history. `/dashboard` is the workspace overview. `/projects` is **Projects**, including import, clone, and project details. `/tasks` shows active work and recent task outcomes across projects. `/environment` checks local tools, versions and executable paths. Dependencies, startup, Git status, checks, and database controls are presented in the selected project. File previews describe generated output on the creation page.
+The web app has six main entry points. The launcher opens `/dashboard`, the workspace overview. `/` is **Create project**, including templates and creation task history. `/projects` is **Projects**, including import, clone, and project details. `/tasks` shows active work and recent task outcomes across projects. `/environment` checks local tools, versions and executable paths. `/integrations` shows Git, GitHub, Docker, and desktop integration status. Dependencies, startup, Git status, checks, and database controls are presented in the selected project. File previews describe generated output on the creation page.
 
 Render server capabilities and operation states with accurate labels. Keep runtime status, server reachability, database existence, connection status, and migration status distinct. Use structured results where available and localize their presentation. Preserve runtime English and Chinese switching, trusted custom commands, and exact-target confirmations.
 
-A standalone integrations view and broader app settings are product candidates.
+Broader app settings remain a product candidate.
 
 ## 9. Source layout
 

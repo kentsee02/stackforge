@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { run, throwIfCancelled } from '../../platform/process.mjs';
+import { dockerEndpointKind, pinDockerEndpointEnvironment, resolveDockerEndpoint } from '../../platform/docker-context.mjs';
+import { meetsToolMinimum } from '../../platform/tool-versions.mjs';
 import { portAvailable } from '../../platform/ports.mjs';
 import { resolveStartup } from '../../projects/project-startup.mjs';
 import { databasePortOpen } from '../adapters/local.mjs';
@@ -37,12 +39,6 @@ const validName = (name, engine) => typeof name === 'string' && /^[a-z][a-z\d_]{
   !(engine === 'sqlserver' && ['master', 'tempdb', 'msdb', 'model'].includes(name));
 const validPort = port => Number.isInteger(port) && port >= 1024 && port <= 65535;
 
-function localEndpoint(endpoint) {
-  if (typeof endpoint !== 'string') return false;
-  return process.platform === 'win32' ? /^npipe:\/\/\/\/\.\/pipe\/(?:docker_engine|dockerDesktopLinuxEngine)$/i.test(endpoint) :
-    /^unix:\/\/\/[^\r\n]+$/.test(endpoint);
-}
-
 async function mutate(cli, args, options) {
   try { return await cli(args, options); }
   catch (error) {
@@ -57,7 +53,7 @@ async function mutate(cli, args, options) {
 
 async function dockerSession(command, signal) {
   const base = { stdoutOnly: true, stdoutLimit: 32 * 1024, signal, timeout: 15000 };
-  const env = { ...process.env, LC_ALL: 'C' };
+  let env = { ...process.env, LC_ALL: 'C' };
   async function probe(args, message) {
     try { return await command('docker', args, { ...base, env }); }
     catch (error) {
@@ -68,16 +64,14 @@ async function dockerSession(command, signal) {
       throw new Error(message);
     }
   }
-  const context = env.DOCKER_CONTEXT || (!env.DOCKER_HOST && (await probe(['context', 'show'], localContext)).trim());
-  let endpoint = env.DOCKER_HOST;
-  if (context) {
-    const output = await probe(['context', 'inspect', '--format', '{{json .Endpoints.docker.Host}}', '--', context], localContext);
-    try { endpoint = JSON.parse(output); } catch { throw new Error(localContext); }
-  }
-  if (process.platform === 'win32' && typeof endpoint === 'string' &&
-      /^npipe:\/\/\/\/\.\/pipe\/dockerDesktopWindowsEngine$/i.test(endpoint)) throw new Error(linuxMode);
-  if (!localEndpoint(endpoint)) throw new Error(localContext);
-  for (const key of Object.keys(env)) if (/^DOCKER_(CONTEXT|HOST|TLS|TLS_VERIFY|CERT_PATH)$/i.test(key)) delete env[key];
+  const endpoint = await resolveDockerEndpoint(args => probe(args, localContext), env).catch(error => {
+    if (error instanceof SyntaxError) throw new Error(localContext);
+    throw error;
+  });
+  const kind = dockerEndpointKind(endpoint);
+  if (kind === 'windows') throw new Error(linuxMode);
+  if (kind !== 'local') throw new Error(localContext);
+  env = pinDockerEndpointEnvironment(env);
   const output = await probe(['--host', endpoint, 'info', '--format', '[{{json .ID}},{{json .ServerVersion}},{{json .OSType}}]'], engineOffline);
   let info;
   try { info = JSON.parse(output); } catch { throw new Error(engineUnverified); }
@@ -86,7 +80,7 @@ async function dockerSession(command, signal) {
   if (os === 'windows') throw new Error(linuxMode);
   const major = typeof version === 'string' && /^(\d+)\./.exec(version);
   if (typeof daemon !== 'string' || !daemon || os !== 'linux' || !major) throw new Error(engineUnverified);
-  if (Number(major[1]) < 28) throw new Error('Update the local Docker Engine to version 28 or newer, then retry.');
+  if (!meetsToolMinimum('docker-engine', version)) throw new Error('Update the local Docker Engine to version 28 or newer, then retry.');
   const cli = (args, { extraEnv, signal: operationSignal = signal, ...options } = {}) =>
     command('docker', ['--host', endpoint, ...args], {
       ...base, ...options, signal: operationSignal, env: { ...env, ...extraEnv }
