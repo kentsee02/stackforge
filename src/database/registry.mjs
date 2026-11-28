@@ -172,13 +172,19 @@ export class DatabaseRegistry {
     const addresses = new Set(['localhost', '127.0.0.1', '::1', hostname().toLowerCase(),
       ...Object.values(networkInterfaces()).flatMap(interfaces => (interfaces ?? []).map(item => item.address.toLowerCase()))]);
     const wildcard = ['0.0.0.0', '::'].includes(host);
-    return Object.values(this.value.bindings).some(binding => {
+    const eligible = id => id !== projectId && (!activeIds || activeIds.has(id));
+    const matches = (target, catalog) => target?.engine === engine && target.port === port &&
+      (!name || !catalog || (engine === 'sqlserver' ? catalog.toLowerCase() === name.toLowerCase() : catalog === name)) &&
+      (target.host === host || localTarget(host) && localTarget(target.host) || wildcard && addresses.has(target.host));
+    const bound = Object.values(this.value.bindings).some(binding => {
       const instance = this.value.instances[binding.instanceId];
       const server = this.value.servers[instance?.serverId];
-      return binding.projectId !== projectId && (!activeIds || activeIds.has(binding.projectId)) && server?.engine === engine && server.port === port &&
-        (!name || !instance.name || instance.name === name) &&
-        (server.host === host || localTarget(host) && localTarget(server.host) || wildcard && addresses.has(server.host));
+      return eligible(binding.projectId) && matches(server, instance?.name);
     });
+    // A placeholder credential does not invalidate a literal SQL Server address for shared-use protection.
+    return bound || engine === 'sqlserver' && Object.entries(this.value.requirements).some(([id, requirements]) =>
+      eligible(id) && Array.isArray(requirements) && requirements.some(item =>
+        item?.status === 'placeholder' && item.host && item.name && matches(item, item.name)));
   }
 
   migration(projectId, instanceId, digest, status) {

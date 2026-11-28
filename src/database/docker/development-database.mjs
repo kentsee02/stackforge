@@ -332,6 +332,7 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
     const engine = engineOf(record);
     const { cli: runDocker, daemon } = await dockerSession(command, signal);
     let writing = false;
+    // Finish catalog verification and ownership updates even if the browser disconnects during the write.
     const cli = (args, options) => runDocker(args, writing ? { ...options, signal: null } : options);
     async function verify() {
       await resolveStartup(project, []);
@@ -351,6 +352,7 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
         identity: databaseKey(daemon, record.container, record.created, record.sqlDatabase),
         beginWrite: () => { writing = true; },
         updateIdentity: async sqlDatabase => {
+          if (sqlDatabase === record.sqlDatabase) return;
           const next = { ...record, sqlDatabase };
           await persist(project, next);
           record = next;

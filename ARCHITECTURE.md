@@ -129,7 +129,7 @@ Backup archives describe the engine, source version, and checksum. PostgreSQL su
 
 Project-owned SQL Server uses a checksummed, copy-only full backup inside a StackForge archive. Preview restores to an isolated container using the owned instance's image and verifies database integrity. Live restore requires an empty owned catalog, matching confirmation, stopped project services, and exclusive database access. It rechecks container, volume and catalog identity, then records the post-restore catalog GUID. SQL Server 2022 archives are limited to 64 MiB, one data file and one log file with at most 1 GiB of restored file allocation, and a target build at least as recent as the source.
 
-Project-owned PostgreSQL and MySQL expose the archive controls directly in the project database panel.
+Project-owned PostgreSQL, MySQL, and SQL Server expose the archive controls directly in the project database panel.
 
 Restore checks compatibility and integrity, previews the exact target, and checks ownership or access and shared use before writing. SQL restore requires an empty verified database. SQLite restore requires a missing destination file. Verify the result after writing. The current UI does not offer a restore that replaces an existing populated database.
 

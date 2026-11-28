@@ -342,9 +342,12 @@ export async function discoverDatabases(project, { includeConnections = false, i
             const address = engine === 'sqlserver' ? endpoint.replace(/^tcp:/i, '') : endpoint;
             const [host, explicitPort] = address.toLowerCase().split(',');
             const port = boundedPort(fields.port ?? explicitPort ?? ports[engine]);
+            const knownSqlServerEndpoint = engine === 'sqlserver' && !localdb && validHost(host) &&
+              name && databaseName.test(name) && !placeholder.test(name) && port;
             const status = localdb ? 'unverified' : placeholder.test(value) ? 'placeholder' : !name ? 'missing'
               : validHost(host) && databaseName.test(name) && port ? 'configured' : 'ambiguous';
-            const id = add(directory, file, key, { engine, status, ...(status === 'configured' && { host, name, port }) });
+            const id = add(directory, file, key, { engine, status,
+              ...((status === 'configured' || status === 'placeholder' && knownSqlServerEndpoint) && { host, name, port }) });
             if (includeConnections && id && engine === 'sqlserver' && status === 'configured' && !/[{}"'\r\n]/.test(value)) {
               connections.set(id, { sqlServerAuth: { user: fields['user id'] ?? fields.uid ?? fields.user,
                 password: fields.password ?? fields.pwd, integrated: /^(?:true|yes|sspi)$/i.test(fields['integrated security'] ?? fields.trusted_connection ?? '') } });
