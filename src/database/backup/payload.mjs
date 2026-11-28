@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { open } from 'node:fs/promises';
 
 export const postgresBackupLimit = 512 * 1024 * 1024;
+export const sqlServerBackupSignature = Buffer.from('STACKFORGE-MSSQL\0');
 export const isBackupFile = data => !Buffer.isBuffer(data);
 
 export function streamBackupFile({ path, offset, bytes }, signal) {

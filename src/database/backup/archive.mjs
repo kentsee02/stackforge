@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { backupLimit } from './docker-transfer.mjs';
-import { backupPrefix, postgresBackupLimit, streamBackupFile } from './payload.mjs';
+import { backupPrefix, postgresBackupLimit, sqlServerBackupSignature, streamBackupFile } from './payload.mjs';
 
 const format = Buffer.from('STACKFORGE-DB-1\n');
 const checksum = value => createHash('sha256').update(value).digest('hex');
 const versions = /^\d{1,2}\.\d+(?:\.\d+)?$/;
 const signatures = {
-  postgres: Buffer.from('PGDMP'), mysql: Buffer.from('-- MySQL dump '), sqlite: Buffer.from('SQLite format 3\0'), sqlserver: Buffer.from('TAPE')
+  postgres: Buffer.from('PGDMP'), mysql: Buffer.from('-- MySQL dump '), sqlite: Buffer.from('SQLite format 3\0'), sqlserver: sqlServerBackupSignature
 };
 const extensions = { postgres: 'pg.dump', mysql: 'mysql.sql', sqlite: 'sqlite', sqlserver: 'sqlserver.bak' };
 const unreadable = 'The backup checksum, metadata, or database format is invalid.';

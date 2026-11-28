@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { throwIfCancelled } from '../../platform/process.mjs';
 import { sqlServerContainerQuery, sqlServerDatabaseGuid, sqlServerDevelopment } from '../docker/sql-server-development.mjs';
 import { backupLimit } from './docker-transfer.mjs';
+import { sqlServerBackupSignature } from './payload.mjs';
 
 const label = 'io.stackforge.sqlserver-restore-check';
 const invalidBackup = 'SQL Server backup verification requires a checksummed full backup with one data file and one log file.';
@@ -46,9 +47,10 @@ async function withBackupFile(cli, container, data, task) {
   const path = '/tmp/stackforge-' + randomBytes(16).toString('hex') + '.bak';
   try {
     if (data !== undefined) {
-      if (!Buffer.isBuffer(data)) throw new Error(invalidBackup);
+      if (!Buffer.isBuffer(data) || data.length <= sqlServerBackupSignature.length ||
+          !data.subarray(0, sqlServerBackupSignature.length).equals(sqlServerBackupSignature)) throw new Error(invalidBackup);
       await cli(['exec', '-i', container, 'sh', '-c', 'umask 077; set -C; cat > "$1"', 'stackforge', path],
-        { input: data, timeout: 90000 });
+        { input: data.subarray(sqlServerBackupSignature.length), timeout: 90000 });
     }
     return await task(path);
   } finally {
@@ -150,7 +152,9 @@ export async function sqlServerArchiveTarget({ cli, record, verify, identity, be
               OR (SELECT SUM(CONVERT(bigint,size))*8192 FROM sys.master_files WHERE database_id=DB_ID(${quote(record.name)}))>${limit}
               THROW 51000,'Unsupported database file layout or size.',1;
             BACKUP DATABASE ${database} TO DISK=${quote(path)} WITH COPY_ONLY, CHECKSUM, COMPRESSION, INIT;`, { timeout: 120000 });
-          return { data: await cli(['exec', container, 'cat', '--', path], { binaryLimit: backupLimit, timeout: 90000 }) };
+          const native = await cli(['exec', container, 'cat', '--', path],
+            { binaryLimit: backupLimit - sqlServerBackupSignature.length, timeout: 90000 });
+          return { data: Buffer.concat([sqlServerBackupSignature, native]) };
         } catch (error) {
           if (error.name === 'AbortError' || error.code === 'OUTPUT_LIMIT') throw error;
           throw new Error('Could not create the SQL Server backup. Check the project database and available disk space.');
