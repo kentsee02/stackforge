@@ -238,7 +238,7 @@ export function createDatabaseWorkflows({ stateDir, operations, databaseAdapters
         } else {
           const verify = target => verifyRestoreTarget(project, target, binding);
           const prepared = action === 'preview' && await resources.preparePreview(project, binding, ports, signal, verify);
-          const file = await receiveBackup();
+          const file = await receiveBackup(binding?.instance.engine);
           if (action === 'preview') result = await resources.preview(project, binding, ports, file, signal, verify, prepared);
           else result = await resources.restore(project, binding, ports, file, approval, confirmedTarget, signal, verify);
         }

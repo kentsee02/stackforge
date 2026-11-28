@@ -62,6 +62,7 @@ export function createDevelopmentPostgres({ $, request, post, state, renderPage,
     el('backup').hidden = el('restore').hidden = !info?.archive;
     el('backup').disabled = disabled || !info?.archive?.backup;
     el('restore').disabled = disabled || !info?.archive?.restore;
+    el('restore-hint').hidden = info?.engine !== 'sqlserver' || !info.archive || info.archive.restore;
     el('connect').hidden = !info?.connections?.length || offline;
     for (const name of ['choice', 'name', 'port', 'preview', 'start', 'stop', 'delete', 'save', 'requirement']) el(name).disabled = disabled;
     el('refresh').disabled = working;
@@ -187,7 +188,7 @@ export function createDevelopmentPostgres({ $, request, post, state, renderPage,
     void send('preview', { name: el('name').value, port: el('port').valueAsNumber, targetId: selectedOption()?.id });
   });
   for (const mode of ['start', 'stop']) el(mode).addEventListener('click', () => void send(mode));
-  for (const mode of ['backup', 'restore']) el(mode).addEventListener('click', () => archive(mode, view.info.archive.id));
+  for (const mode of ['backup', 'restore']) el(mode).addEventListener('click', () => archive(mode, view.info.archive.id, view.info.engine));
   el('delete').addEventListener('click', () => openConfirmation('delete', view.info));
   el('connect').addEventListener('submit', event => {
     event.preventDefault();

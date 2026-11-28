@@ -52,7 +52,8 @@ export function createDatabaseArchiveRoutes({ database, managedProjects, runtime
       staging = undefined;
       await rm(directory, { recursive: true, force: true }).catch(() => {});
     }
-    async function receiveBackup() {
+    async function receiveBackup(engine) {
+      if (engine === 'sqlserver' && size > archiveLimit) throw new Error('Choose a SQL Server StackForge backup up to 64 MiB.');
       let bytes = 0;
       async function* checked(source) {
         for await (const chunk of source) {

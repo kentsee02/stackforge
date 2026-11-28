@@ -51,7 +51,6 @@ jobs:
           npm run test:database-integration
           npm run test:development-postgres
           npm run test:development-mysql
-          npm run test:migration-sql-server
           npm run test:native-migrations
           npm run test:prisma-integration -- --large
       - if: runner.os == 'Windows'
@@ -68,6 +67,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL did not become ready' }
           $env:STACKFORGE_TEST_PG_PASSWORD = 'root'
           npm run test:database-integration -- --windows-native
+  sql-server-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm run test:migration-sql-server
   public-migration-repositories:
     runs-on: ubuntu-latest
     timeout-minutes: 6

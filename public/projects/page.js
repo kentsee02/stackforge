@@ -464,7 +464,7 @@ const tools = createProjectToolsPanel({ $, request, showMessage, renderOutput, s
 const activity = createActivityPanel({ $, request, showMessage });
 const developmentPostgres = createDevelopmentPostgres({ $, request, post, state, renderPage: render,
   reloadDiscovery: () => database.reloadDiscovery(), openExisting: action => database.openExisting(action),
-  archive: (mode, id) => database.developmentArchive(mode, id) });
+  archive: (mode, id, engine) => database.developmentArchive(mode, id, engine) });
 const database = createDatabasePanel({ $, request, post, showMessage, renderOutput, stackNames, diagnosticMessages, state,
   selectedId, selectedProject, renderPage: render, refresh, act, openDevelopment: developmentPostgres.open, refreshDevelopment: developmentPostgres.refresh });
 const preflight = createPreflightPanel({ $, request, selectedProject, start: async id => {

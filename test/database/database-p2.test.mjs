@@ -8,7 +8,20 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createApp } from '../../src/http/server.mjs';
-import { archiveBackup, inspectArchive } from '../../src/database/backup/archive.mjs';
+import { archiveBackup, inspectArchive, isLegacyBackup } from '../../src/database/backup/archive.mjs';
+
+test('SQL Server archive verifies signature, checksum and 2022 build direction, and rejects raw legacy uploads', () => {
+  const payload = Buffer.from('TAPEfixture');
+  const { data, filename } = archiveBackup({ data: payload, engine: 'sqlserver', version: '16.0.4200', project: 'fixture' });
+  assert.match(filename, /-sqlserver\.bak\.sfdb$/);
+  assert.deepEqual(inspectArchive(data, 'sqlserver', '16.0.4201').data, payload);
+  assert.throws(() => inspectArchive(data, 'sqlserver', '16.0.4199'), /incompatible/);
+  assert.throws(() => inspectArchive(data, 'sqlserver', '17.0.1000'), /incompatible/);
+  assert.equal(isLegacyBackup(payload, 'sqlserver'), false);
+  const corrupt = Buffer.from(data);
+  corrupt[corrupt.length - 1] ^= 1;
+  assert.throws(() => inspectArchive(corrupt, 'sqlserver', '16.0.4201'), /checksum/);
+});
 import { run } from '../../src/platform/process.mjs';
 import { databaseVault } from '../../src/database/security/vault.mjs';
 import { cloneGithub } from '../../src/projects/project-clone.mjs';

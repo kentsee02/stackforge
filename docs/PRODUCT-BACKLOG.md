@@ -4,7 +4,7 @@ The [architecture specification](../ARCHITECTURE.md) defines the product boundar
 
 ## Current priority
 
-Backup and restore for project-owned SQL Server is the next planned product task. SQL Server already supports managed Docker instances and reviewed EF Core migrations.
+Project-owned SQL Server backup and restore shipped in v0.65.0. Select the next product task from the candidates below.
 
 ### Open migration work
 
@@ -15,10 +15,6 @@ Backup and restore for project-owned SQL Server is the next planned product task
 - [ ] Review the undo source, licensed runtime, exact rollback range and verified database before approval. Reject shared or replaced targets and stale plans.
 - [ ] Verify the resulting schema and retained history on a disposable project database. Cover failure, cancellation and backup recovery where the engine can commit partial changes.
 - [ ] Document the pinned fixture, supported engines and runtime limits. Verify the preview and confirmation in both interface languages.
-
-## Next product work
-
-- **SQL Server backup and restore.** Start with project-owned Docker instances. Verify the target catalog and ownership, define compatibility and restore confirmation, and run recovery against a disposable SQL Server database.
 
 ## Product candidates
 

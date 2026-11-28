@@ -2,6 +2,12 @@
 
 This archive preserves release work and regression notes. Current priorities are in the [product backlog](PRODUCT-BACKLOG.md). Reproducible adapter cases are in the [migration test matrix](MIGRATION-TEST-CASES.md).
 
+## v0.65.0 Project-owned SQL Server backup and restore
+
+- Download a checksummed full SQL Server 2022 backup after restoring it in an isolated container and verifying integrity and the object inventory.
+- Preview a trusted archive and confirm an empty project catalog by name. Recheck shared use, archive identity, container and volume ownership, and catalog identity. Record the catalog GUID after recovery.
+- Exercise native recovery of table data, a stored procedure, and EF Core history in the SQL Server integration job.
+
 ## v0.64.0 Workspace settings
 
 - Switch the workspace between English and Chinese or between Light, Dark, and the operating system theme. Keep the existing default appearance and language.

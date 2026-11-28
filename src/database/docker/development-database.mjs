@@ -9,6 +9,7 @@ import { databaseKey, discoverDatabases } from '../discovery.mjs';
 import { mysqlEnvironmentOption, saveDatabaseEnvironment, saveMysqlEnvironment } from '../environment.mjs';
 import { developmentOptions } from '../development-setup.mjs';
 import { databaseReady, databaseTransferCapabilities } from '../backup/docker-transfer.mjs';
+import { sqlServerArchiveTarget, sqlServerRestoreAllowed } from '../backup/sql-server-transfer.mjs';
 import { mysqlMigrationScope } from './mysql-migration-scope.mjs';
 import { sqlServerDevelopment, sqlServerTerms } from './sql-server-development.mjs';
 
@@ -215,8 +216,9 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
     const target = await owned(cli, record);
     const accepting = await ready(cli, record, target);
     const options = accepting ? await connections(project, record.directory, engineOf(record)).catch(() => []) : [];
-    const capabilities = accepting && engineOf(record) !== 'sqlserver' && await databaseTransferCapabilities({ engine: engineOf(record), container: target.container,
-      command: (_, args, options) => cli(args, options), signal });
+    const capabilities = accepting && (engineOf(record) === 'sqlserver' ?
+      { backup: true, restore: await sqlServerRestoreAllowed(cli, target.container, record) } :
+      await databaseTransferCapabilities({ engine: engineOf(record), container: target.container, command: (_, args, options) => cli(args, options), signal }));
     return { ...summary(record, target, accepting), connections: options,
       ...(capabilities && { archive: { id: archiveId(project, record), ...capabilities } }) };
   }
@@ -325,21 +327,39 @@ export function developmentDatabase({ registry, verifyShared, command = run, pro
 
   async function archiveTarget(project, bindingId, signal) {
     await registry.ready;
-    const record = current(project);
+    let record = current(project);
     if (!record || bindingId !== archiveId(project, record)) throw new Error(changed);
     const engine = engineOf(record);
-    const { cli, daemon } = await dockerSession(command, signal);
+    const { cli: runDocker, daemon } = await dockerSession(command, signal);
+    let writing = false;
+    const cli = (args, options) => runDocker(args, writing ? { ...options, signal: null } : options);
     async function verify() {
       await resolveStartup(project, []);
       if (record !== current(project) || record.deleting) throw new Error(changed);
       valid(record, project, daemon);
       const target = await owned(cli, record);
       if (!record.container || target.container !== record.container || target.status !== 'running' || !target.publishedOnLoopback) throw new Error(changed);
+      if (engine === 'sqlserver') {
+        if (!record.sqlDatabase) throw new Error(changed);
+        await sqlServerDevelopment(cli, target.container, record).identity();
+      }
       return target;
+    }
+    const endpoints = [{ host, engine, port: record.port, name: record.name }];
+    if (engine === 'sqlserver') {
+      const adapter = await sqlServerArchiveTarget({ cli, record, verify, signal,
+        identity: databaseKey(daemon, record.container, record.created, record.sqlDatabase),
+        beginWrite: () => { writing = true; },
+        updateIdentity: async sqlDatabase => {
+          const next = { ...record, sqlDatabase };
+          await persist(project, next);
+          record = next;
+        } });
+      return { ...adapter, endpoints };
     }
     const checked = await verify();
     return { engine, name: record.name, container: { id: checked.container, status: checked.status },
-      endpoints: [{ host, engine, port: record.port, name: record.name }],
+      endpoints,
       async command(program, args, options) {
         const { container } = await verify();
         if (program !== 'docker' || args[0] !== 'exec' || args[args[1] === '-i' ? 2 : 1] !== container) throw new Error(changed);

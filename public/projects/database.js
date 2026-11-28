@@ -512,6 +512,9 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
     if (!project || state.pending) return;
     restoring = { project, binding };
     $('database-restore-form').reset();
+    const sqlServer = binding?.development && binding.engine === 'sqlserver';
+    $('database-restore-file').accept = sqlServer ? '.sfdb' : '.sfdb,.dump,.sql';
+    $('sql-server-restore-requirements').hidden = !sqlServer;
     $('database-restore-name').required = false;
     $('database-restore-confirm-field').hidden = true;
     showMessage($('database-restore-preview'), '');
@@ -525,7 +528,8 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
   });
   function validRestore() {
     const file = $('database-restore-file').files[0];
-    return file?.size > 0 && file.size <= 512 * 1024 * 1024 + 4096 && !state.pending &&
+    const limit = restoring?.binding?.development && restoring.binding.engine === 'sqlserver' ? 64 : 512;
+    return file?.size > 0 && file.size <= limit * 1024 * 1024 + 4096 && !state.pending &&
       (!restoring?.approval || $('database-restore-name').value === restoring.approval.name);
   }
   $('database-restore-file').addEventListener('change', () => {
@@ -638,8 +642,8 @@ export function createDatabasePanel({ $, request, post, showMessage, renderOutpu
 
   return {
     openExisting,
-    developmentArchive(mode, id) {
-      const binding = { id, development: true };
+    developmentArchive(mode, id, engine) {
+      const binding = { id, development: true, engine };
       if (mode === 'backup') void backupAction(selectedProject(), binding);
       else openRestore(binding);
     },

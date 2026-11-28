@@ -198,6 +198,7 @@
               <button id="development-postgres-delete" class="secondary danger" type="button" data-i18n="删除数据库数据卷">Delete database volume</button>
             </div>
             <p id="development-postgres-transfer-message" class="hint" role="status"></p>
+            <p id="development-postgres-restore-hint" class="hint" data-i18n="SQL Server 恢复需要一个已核验的空项目数据库。" hidden>SQL Server restore requires a verified empty project database.</p>
             <form id="development-postgres-connect" hidden>
               <label class="inline-field"><span data-i18n="要配置的连接设置">Connection settings to configure</span><select id="development-postgres-requirement" required></select></label>
               <button id="development-postgres-save" type="submit" class="secondary" data-i18n="保存连接设置">Save connection settings</button>
@@ -338,6 +339,7 @@
         <input id="database-restore-file" type="file" accept=".sfdb,.dump,.sql" required>
       </label>
       <p id="database-restore-preview" class="hint" role="status"></p>
+      <p id="sql-server-restore-requirements" class="hint" data-i18n="请选择不超过 64 MiB 的 SQL Server StackForge 备份。恢复需要空白的项目专属数据库。" hidden>Choose a SQL Server StackForge backup up to 64 MiB. Restore requires an empty project-owned database.</p>
       <label id="database-restore-confirm-field" class="inline-field project-trash-field" for="database-restore-name" hidden>
         <span data-i18n="输入下方目标名称以确认恢复。">Type the target name below to confirm restoration.</span>
         <strong id="database-restore-expected"></strong>

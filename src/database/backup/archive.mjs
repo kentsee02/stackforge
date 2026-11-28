@@ -6,9 +6,9 @@ const format = Buffer.from('STACKFORGE-DB-1\n');
 const checksum = value => createHash('sha256').update(value).digest('hex');
 const versions = /^\d{1,2}\.\d+(?:\.\d+)?$/;
 const signatures = {
-  postgres: Buffer.from('PGDMP'), mysql: Buffer.from('-- MySQL dump '), sqlite: Buffer.from('SQLite format 3\0')
+  postgres: Buffer.from('PGDMP'), mysql: Buffer.from('-- MySQL dump '), sqlite: Buffer.from('SQLite format 3\0'), sqlserver: Buffer.from('TAPE')
 };
-const extensions = { postgres: 'pg.dump', mysql: 'mysql.sql', sqlite: 'sqlite' };
+const extensions = { postgres: 'pg.dump', mysql: 'mysql.sql', sqlite: 'sqlite', sqlserver: 'sqlserver.bak' };
 const unreadable = 'The backup checksum, metadata, or database format is invalid.';
 export const archiveLimit = backupLimit + 4096;
 export const postgresArchiveLimit = postgresBackupLimit + 4096;
@@ -85,7 +85,7 @@ export async function isLegacyFileBackup(file, engine) {
 }
 
 export function isLegacyBackup(data, engine) {
-  return engine !== 'sqlite' && validPayload(data, engine);
+  return ['postgres', 'mysql'].includes(engine) && validPayload(data, engine);
 }
 
 export function inspectLegacyBackup(data, engine, version, targetVersion) {
@@ -98,7 +98,9 @@ function checkVersion(engine, version, targetVersion) {
   const source = version.split('.').map(Number);
   const target = targetVersion?.split('.').map(Number) ?? [];
   const compatible = versions.test(targetVersion ?? '') && (engine === 'postgres' ? source[0] <= target[0] :
-    engine === 'mysql' ? source[0] === target[0] && source[1] <= target[1] : source[0] === target[0]);
+    engine === 'mysql' ? source[0] === target[0] && source[1] <= target[1] :
+    engine === 'sqlserver' ? source[0] === 16 && target[0] === 16 && (source[1] < target[1] || source[1] === target[1] && source[2] <= target[2]) :
+    source[0] === target[0]);
   if (!compatible) throw new Error('The backup database version is incompatible with the restore target.');
 }
 

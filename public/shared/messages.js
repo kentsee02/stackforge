@@ -1,5 +1,12 @@
 // [Chinese source, English translation]. {name} slots preserve runtime values.
 export const messages = [
+  ['SQL Server 恢复需要一个已核验的空项目数据库。', 'SQL Server restore requires a verified empty project database.'],
+  ['请选择不超过 64 MiB 的 SQL Server StackForge 备份。恢复需要空白的项目专属数据库。', 'Choose a SQL Server StackForge backup up to 64 MiB. Restore requires an empty project-owned database.'],
+  ['请选择不超过 64 MiB 的 SQL Server StackForge 备份。', 'Choose a SQL Server StackForge backup up to 64 MiB.'],
+  ['SQL Server 验证需要带校验和的完整备份，仅支持一个数据文件和一个日志文件。', 'SQL Server backup verification requires a checksummed full backup with one data file and one log file.'],
+  ['无法在隔离容器中恢复并验证 SQL Server 备份。', 'The SQL Server backup could not be restored and verified in isolation.'],
+  ['无法创建 SQL Server 备份。请检查项目数据库和可用磁盘空间。', 'Could not create the SQL Server backup. Check the project database and available disk space.'],
+  ['SQL Server 无法完成恢复。请检查目标为空且没有活动连接，再查看数据库状态。', 'SQL Server could not finish the restore. Check that the target is empty and has no active connections, then review its state.'],
   ['设置', 'Settings'],
   ['StackForge · 设置', 'StackForge · Settings'],
   ['语言与外观', 'Language and appearance'],

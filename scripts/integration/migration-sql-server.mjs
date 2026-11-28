@@ -141,6 +141,47 @@ public class ${name} : Migration { }`);
   assert.equal((await execute(first, await prepare(first))).status, 'applied');
   assert.equal((await history({ targetId: ownedTarget.id })).status, 'pending');
   assert.match(await ownedQuery("SELECT name FROM sys.tables WHERE name='Reports';"), /Reports/);
+  await ownedQuery('INSERT dbo.Reports VALUES (371);');
+  await ownedQuery("EXEC(N'CREATE PROCEDURE dbo.ReportTotal AS SELECT SUM(Id) FROM dbo.Reports;');");
+  const archive = async (operation, body, headers = {}) => fetch(origin + '/api/projects/' + id + '/database-archive' +
+    (operation === 'backup' ? '' : '/' + operation), { method: 'POST', body, headers: {
+    'Content-Type': operation === 'backup' ? 'application/json' : 'application/octet-stream',
+    'X-StackForge-Token': token, 'X-StackForge-Binding': ready.archive.id, ...headers
+  } });
+  const download = await archive('backup', '{}');
+  const backup = Buffer.from(await download.arrayBuffer());
+  assert.equal(download.status, 200, backup.subarray(0, 500).toString());
+  assert.match(download.headers.get('content-disposition'), /-sqlserver\.bak\.sfdb/);
+  assert.match(backup.toString('utf8', 0, 240), /"engine":"sqlserver"/);
+  const occupied = await archive('preview', backup);
+  assert.equal(occupied.status, 409, await occupied.text());
+  await ownedQuery('DROP PROCEDURE dbo.ReportTotal; DROP TABLE dbo.Reports; DROP TABLE dbo.__EFMigrationsHistory;');
+  const bad = Buffer.from(backup);
+  bad[bad.length - 20] ^= 1;
+  const invalid = await archive('preview', bad);
+  assert.equal(invalid.status, 409, await invalid.text());
+  const previewResponse = await archive('preview', backup);
+  const archivePreview = await previewResponse.json();
+  assert.equal(previewResponse.status, 200, JSON.stringify(archivePreview));
+  assert.equal(archivePreview.name, name);
+  assert.ok(archivePreview.objects >= 3);
+  const restore = (confirmed, data = backup) => archive('restore', data, {
+    'X-StackForge-Preview': archivePreview.id, 'X-StackForge-Target': Buffer.from(confirmed).toString('base64')
+  });
+  const wrong = await restore(name + '_wrong');
+  assert.equal(wrong.status, 409, await wrong.text());
+  const tampered = await restore(name, bad);
+  assert.equal(tampered.status, 409, await tampered.text());
+  const recovered = await restore(name);
+  const result = await recovered.json();
+  assert.equal(recovered.status, 200, JSON.stringify(result));
+  assert.equal(result.restored, true);
+  assert.match(await ownedQuery('EXEC dbo.ReportTotal;'), /371/);
+  assert.equal((await history({ targetId: ownedTarget.id })).status, 'pending');
+  const consumed = await restore(name);
+  assert.equal(consumed.status, 409, await consumed.text());
+  await ownedQuery('DROP PROCEDURE dbo.ReportTotal;');
+  console.log('Verified native SQL Server backup, isolated preview, archive tampering, exact confirmation, and table, procedure and EF history recovery.');
   const down = { ...selected, operation: 'rollback', revision: 'base', scriptFile: 'down.sql' };
   await writeFile(join(root, 'down.sql'), "DROP TABLE [Reports];\nDELETE FROM [__EFMigrationsHistory] WHERE [MigrationId]=N'" + ids[0] + "';\nGO\n");
   assert.equal((await execute(down, await prepare(down))).status, 'rolled-back');

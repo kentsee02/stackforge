@@ -95,6 +95,7 @@ export function databaseResources({ registry, vault, directory, operations, comm
     if (provider !== 'development' && (provider !== 'docker' || binding && (!project.unmanaged || !binding.selection))) throw new Error(missing);
     const target = provider === 'development' ? await resolveDedicated(project, binding.id, signal) :
       await operations.databaseTarget(project, ports, signal, binding?.selection);
+    if (provider === 'development' && target.engine === 'sqlserver') return target;
     if (target.container?.status !== 'running') throw new Error('Start the project database before backing it up or restoring it.');
     const options = { engine: target.engine, container: target.container.id, config: target.config, command: target.command ?? operations.command, signal, project: project.name };
     const inventory = () => databaseInventory(options);
@@ -117,9 +118,9 @@ export function databaseResources({ registry, vault, directory, operations, comm
     const dump = await target.export(backupFile);
     const payload = { data: dump.data, engine: target.engine, version: target.version, project: project.name, signal };
     const archive = isBackupFile(dump.data) ? await archiveFile(payload) : archiveBackup(payload);
-    if (target.check) await target.check(dump.data);
-    else {
-      const restored = await verifyRestore({ engine: target.engine, version: target.version, data: dump.data, signal, prepared });
+    const restored = target.check ? await target.check(dump.data) :
+      await verifyRestore({ engine: target.engine, version: target.version, data: dump.data, signal, prepared });
+    if (target.engine !== 'sqlite') {
       const source = await target.inventory();
       if (databaseKey([...source.objects].sort()) !== databaseKey([...restored.objects].sort())) {
         throw new Error('The backup objects did not match the source database. Check privileges or retry after schema changes finish.');
@@ -131,7 +132,8 @@ export function databaseResources({ registry, vault, directory, operations, comm
 
   async function preparePreview(project, binding, ports, signal, verify) {
     const target = await adapter(project, binding, ports, signal);
-    if (!target.canRestore || !target.identity || (!verify && binding?.shared)) throw new Error('Choose a verified empty database or a missing SQLite file.');
+    if (!target.canRestore || !target.identity || (!verify && binding?.shared)) throw new Error(target.engine === 'sqlserver' ?
+      'SQL Server restore requires a verified empty project database.' : 'Choose a verified empty database or a missing SQLite file.');
     await verify?.(target);
     const prepared = !target.check && await preflight?.({ engine: target.engine, version: target.version, signal });
     return { target, prepared };
