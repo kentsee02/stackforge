@@ -31,13 +31,18 @@ const ownership = record => `EXISTS (SELECT 1 FROM master.sys.database_recovery_
   WHERE database_id=DB_ID(${quote(record.name)}) AND database_guid=${quote(record.sqlDatabase)}) AND
   EXISTS (SELECT 1 FROM ${ident(record.name)}.sys.extended_properties
   WHERE class=0 AND name=N'StackForgeOwner' AND CONVERT(nvarchar(32),value)=${quote(record.key)})`;
+const writable = name => `EXISTS (SELECT 1 FROM sys.databases WHERE database_id=DB_ID(${quote(name)})
+  AND state=0 AND user_access=0 AND is_read_only=0 AND is_auto_update_stats_async_on=0)`;
+const idle = name => `NOT EXISTS (SELECT 1 FROM sys.dm_exec_sessions WHERE database_id=DB_ID(${quote(name)}) AND session_id<>@@SPID)`;
 
 async function inventory(query) {
   const output = (await query(`SET NOCOUNT ON;
-    SELECT CONVERT(varchar(15),COUNT_BIG(*))+'|'+CONVERT(varchar(64),HASHBYTES('SHA2_256',
-      COALESCE(STRING_AGG(CONVERT(nvarchar(max),RTRIM(type)+schema_name+object_name),NCHAR(10))
-       WITHIN GROUP (ORDER BY type,schema_name COLLATE Latin1_General_100_BIN2,object_name COLLATE Latin1_General_100_BIN2),N'')),2)
-    FROM (${objects('')}) AS items;`)).trim();
+    DECLARE @inventory nvarchar(max)=(
+      SELECT type, schema_name, object_name FROM (${objects('')}) AS items
+      ORDER BY type COLLATE Latin1_General_100_BIN2, schema_name COLLATE Latin1_General_100_BIN2, object_name COLLATE Latin1_General_100_BIN2
+      FOR JSON PATH);
+    SELECT CONVERT(varchar(15),COUNT_BIG(*))+'|'+CONVERT(varchar(64),HASHBYTES('SHA2_256',COALESCE(@inventory,N'[]')),2)
+      FROM sys.objects WHERE is_ms_shipped=0;`)).trim();
   const result = /^(\d{1,12})\|([a-f\d]{64})$/i.exec(output);
   if (!result) throw new Error(changed);
   return { count: Number(result[1]), objects: [result[2]], limited: false };
@@ -121,7 +126,7 @@ async function isolatedRestore(cli, image, backup, signal) {
 
 export async function sqlServerRestoreAllowed(cli, container, record) {
   const result = await sqlServerContainerQuery(cli, container, 'master',
-    `SET NOCOUNT ON; SELECT CASE WHEN ${empty(ident(record.name) + '.')} THEN 1 ELSE 0 END;`);
+    `SET NOCOUNT ON; SELECT CASE WHEN ${writable(record.name)} AND ${empty(ident(record.name) + '.')} THEN 1 ELSE 0 END;`);
   return result.trim() === '1';
 }
 
@@ -146,7 +151,7 @@ export async function sqlServerArchiveTarget({ cli, record, verify, identity, be
       return withBackupFile(cli, container, undefined, async path => {
         try {
           await master(`SET NOCOUNT ON; IF NOT (${ownership(record)}) THROW 51000,'Database ownership changed.',1;
-            IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id=DB_ID(${quote(record.name)}) AND is_encrypted=1)
+            IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id=DB_ID(${quote(record.name)}) AND (is_encrypted=1 OR is_read_only=1))
               OR EXISTS (SELECT 1 FROM sys.master_files WHERE database_id=DB_ID(${quote(record.name)}) AND type NOT IN (0,1))
               OR (SELECT COUNT(*) FROM sys.master_files WHERE database_id=DB_ID(${quote(record.name)}))<>2
               OR (SELECT SUM(CONVERT(bigint,size))*8192 FROM sys.master_files WHERE database_id=DB_ID(${quote(record.name)}))>${limit}
@@ -177,10 +182,11 @@ export async function sqlServerArchiveTarget({ cli, record, verify, identity, be
         try {
           await master(`SET NOCOUNT ON; DECLARE @locked bit=0;
             BEGIN TRY
-              IF NOT (${ownership(record)}) OR NOT (${empty(prefix)}) THROW 51000,'Database target changed.',1;
+              IF NOT (${ownership(record)}) OR NOT (${writable(record.name)}) OR NOT (${idle(record.name)})
+                OR NOT (${empty(prefix)}) THROW 51000,'Database target changed.',1;
               ALTER DATABASE ${database} SET SINGLE_USER WITH NO_WAIT;
               SET @locked=1;
-              IF NOT (${ownership(record)}) OR NOT (${empty(prefix)}) THROW 51000,'Database target changed.',1;
+              IF NOT (${ownership(record)}) OR NOT (${idle(record.name)}) OR NOT (${empty(prefix)}) THROW 51000,'Database target changed.',1;
               ${restoreSql(record.name, path, files, dataPath, logPath, ', REPLACE, RESTRICTED_USER')}
               ALTER DATABASE ${database} SET TRUSTWORTHY OFF;
               ALTER DATABASE ${database} SET DB_CHAINING OFF;

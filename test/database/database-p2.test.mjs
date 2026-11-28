@@ -10,6 +10,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createApp } from '../../src/http/server.mjs';
 import { archiveBackup, inspectArchive, isLegacyBackup } from '../../src/database/backup/archive.mjs';
 import { sqlServerBackupSignature } from '../../src/database/backup/payload.mjs';
+import { run } from '../../src/platform/process.mjs';
+import { databaseVault } from '../../src/database/security/vault.mjs';
+import { cloneGithub } from '../../src/projects/project-clone.mjs';
 
 test('SQL Server archive verifies signature, checksum and 2022 build direction, and rejects raw legacy uploads', () => {
   const payload = Buffer.concat([sqlServerBackupSignature, Buffer.from('fixture')]);
@@ -24,10 +27,6 @@ test('SQL Server archive verifies signature, checksum and 2022 build direction, 
   corrupt[corrupt.length - 1] ^= 1;
   assert.throws(() => inspectArchive(corrupt, 'sqlserver', '16.0.4201'), /checksum/);
 });
-import { run } from '../../src/platform/process.mjs';
-import { databaseVault } from '../../src/database/security/vault.mjs';
-import { cloneGithub } from '../../src/projects/project-clone.mjs';
-
 const sqlite = await import('node:sqlite').catch(() => undefined);
 
 async function fixture(t, adapters, options) {

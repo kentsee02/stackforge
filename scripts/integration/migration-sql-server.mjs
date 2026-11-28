@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -167,6 +167,17 @@ public class ${name} : Migration { }`);
   const occupied = await archive('preview', backup);
   assert.equal(occupied.status, 409, await occupied.text());
   await ownedQuery('DROP PROCEDURE dbo.ReportTotal; DROP TABLE dbo.Reports; DROP TABLE dbo.__EFMigrationsHistory;');
+  const consumer = join(root, 'shared-consumer');
+  await mkdir(consumer);
+  await writeFile(join(consumer, 'Reports.csproj'), await readFile(join(root, 'Reports.csproj')));
+  await writeFile(join(consumer, 'appsettings.json'), JSON.stringify({ ConnectionStrings: {
+    Application: `Server=tcp:127.0.0.1,${available};Database=${name};User Id=sa;Password=placeholder-not-used;TrustServerCertificate=True;`
+  } }));
+  const registered = await api('import', { path: consumer }, 201);
+  const shared = await archive('preview', backup);
+  assert.equal(shared.status, 409);
+  assert.match(await shared.text(), /Another project uses this database/);
+  await api(registered.id + '/remove', { confirmName: registered.name });
   const bad = Buffer.from(backup);
   bad[bad.length - 20] ^= 1;
   const invalid = await archive('preview', bad);
