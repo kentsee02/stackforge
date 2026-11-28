@@ -132,10 +132,9 @@ export async function sqlServerArchiveTarget({ cli, record, verify, identity, be
   const database = ident(record.name);
   const prefix = database + '.';
   const image = (await cli(['container', 'inspect', '--format', '{{.Image}}', container])).trim();
-  const version = (await master(`SET NOCOUNT ON; SELECT CONCAT(SERVERPROPERTY('ProductMajorVersion'),'.',
-    PARSENAME(CONVERT(varchar(40),SERVERPROPERTY('ProductVersion')),3),'.',
-    PARSENAME(CONVERT(varchar(40),SERVERPROPERTY('ProductVersion')),2));`)).trim();
-  if (!/^sha256:[a-f\d]{64}$/.test(image) || !/^16\.\d+\.\d+$/.test(version)) throw new Error(changed);
+  const productVersion = (await master("SET NOCOUNT ON; SELECT CONVERT(varchar(40),SERVERPROPERTY('ProductVersion'));")).trim();
+  const version = /^(16\.\d+\.\d+)(?:\.\d+)?$/.exec(productVersion)?.[1];
+  if (!/^sha256:[a-f\d]{64}$/.test(image) || !version) throw new Error(changed);
   const canRestore = await sqlServerRestoreAllowed(cli, container, record);
   return { engine: 'sqlserver', name: record.name, version, identity, canRestore,
     check: data => isolatedRestore(cli, image, data, signal),
@@ -145,6 +144,11 @@ export async function sqlServerArchiveTarget({ cli, record, verify, identity, be
       return withBackupFile(cli, container, undefined, async path => {
         try {
           await master(`SET NOCOUNT ON; IF NOT (${ownership(record)}) THROW 51000,'Database ownership changed.',1;
+            IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id=DB_ID(${quote(record.name)}) AND is_encrypted=1)
+              OR EXISTS (SELECT 1 FROM sys.master_files WHERE database_id=DB_ID(${quote(record.name)}) AND type NOT IN (0,1))
+              OR (SELECT COUNT(*) FROM sys.master_files WHERE database_id=DB_ID(${quote(record.name)}))<>2
+              OR (SELECT SUM(CONVERT(bigint,size))*8192 FROM sys.master_files WHERE database_id=DB_ID(${quote(record.name)}))>${limit}
+              THROW 51000,'Unsupported database file layout or size.',1;
             BACKUP DATABASE ${database} TO DISK=${quote(path)} WITH COPY_ONLY, CHECKSUM, COMPRESSION, INIT;`, { timeout: 120000 });
           return { data: await cli(['exec', container, 'cat', '--', path], { binaryLimit: backupLimit, timeout: 90000 }) };
         } catch (error) {

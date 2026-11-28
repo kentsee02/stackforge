@@ -17,6 +17,7 @@ const cli = '/opt/mssql-tools18/bin/sqlcmd';
 const docker = (args, options = {}) => run('docker', args, { stdoutOnly: true, timeout: 30000, ...options });
 const stateDir = join(root, 'state', 'jobs');
 let app, containerId, port, dedicated;
+let archiveTest = false;
 try {
   containerId = (await docker(['run', '-d', '--name', container, '--publish', '127.0.0.1::1433',
     '--env', 'ACCEPT_EULA=Y', '--env', 'MSSQL_PID=Developer', '--env', 'MSSQL_SA_PASSWORD',
@@ -47,7 +48,16 @@ public class ${name} : Migration { }`);
     Application: `Server=tcp:127.0.0.1,${port};Database=${database};User Id=sa;Password=${password};TrustServerCertificate=True;`
   } }));
 
-  app = createApp({ stateDir, localDatabase: { async command(program, args, options) {
+  app = createApp({ stateDir, databaseAdapters: { developmentPostgres: { async command(program, args, options) {
+    try { return await run(program, args, options); }
+    catch (error) {
+      const input = options?.input?.toString();
+      if (archiveTest && (args.includes('sqlcmd') || args.some(arg => arg.includes('/bin/sqlcmd'))) && !input?.startsWith('SET NOCOUNT ON; SELECT 1;')) {
+        console.error(error.message.replaceAll(password, '[redacted]'));
+      }
+      throw error;
+    }
+  } } }, localDatabase: { async command(program, args, options) {
     assert.equal(program, 'sqlcmd');
     assert.equal(args.includes(password), false);
     const address = args.indexOf('-S') + 1;
@@ -148,6 +158,7 @@ public class ${name} : Migration { }`);
     'Content-Type': operation === 'backup' ? 'application/json' : 'application/octet-stream',
     'X-StackForge-Token': token, 'X-StackForge-Binding': ready.archive.id, ...headers
   } });
+  archiveTest = true;
   const download = await archive('backup', '{}');
   const backup = Buffer.from(await download.arrayBuffer());
   assert.equal(download.status, 200, backup.subarray(0, 500).toString());
@@ -181,6 +192,7 @@ public class ${name} : Migration { }`);
   const consumed = await restore(name);
   assert.equal(consumed.status, 409, await consumed.text());
   await ownedQuery('DROP PROCEDURE dbo.ReportTotal;');
+  archiveTest = false;
   console.log('Verified native SQL Server backup, isolated preview, archive tampering, exact confirmation, and table, procedure and EF history recovery.');
   const down = { ...selected, operation: 'rollback', revision: 'base', scriptFile: 'down.sql' };
   await writeFile(join(root, 'down.sql'), "DROP TABLE [Reports];\nDELETE FROM [__EFMigrationsHistory] WHERE [MigrationId]=N'" + ids[0] + "';\nGO\n");
