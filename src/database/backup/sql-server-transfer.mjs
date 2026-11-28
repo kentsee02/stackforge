@@ -170,7 +170,8 @@ export async function sqlServerArchiveTarget({ cli, record, verify, identity, be
       await verify();
       return withBackupFile(cli, container, data, async path => {
         const files = await filesIn(master, path);
-        const output = (await master(`SET NOCOUNT ON; SELECT CONVERT(varchar(240),type_desc+'|'+physical_name)
+        const output = (await master(`SET NOCOUNT ON; SELECT CONVERT(varchar(240),
+          CASE type WHEN 0 THEN 'ROWS|' WHEN 1 THEN 'LOG|' ELSE 'OTHER|' END + CONVERT(varchar(220),physical_name) COLLATE DATABASE_DEFAULT)
           FROM sys.master_files WHERE database_id=DB_ID(${quote(record.name)}) ORDER BY type;`)).trim();
         const [dataFile, logFile, ...other] = output.split(/\r?\n/);
         const dataPath = /^ROWS\|(\/var\/opt\/mssql\/data\/[\w.-]+\.mdf)$/.exec(dataFile)?.[1];
